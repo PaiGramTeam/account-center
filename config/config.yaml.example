@@ -1,0 +1,62 @@
+app:
+  name: "paigram"
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"
+
+database:
+  addr: "127.0.0.1:3306"
+  username: "paigram"
+  password: "paigram"
+  dbname: "paigram"
+  config: "charset=utf8mb4&parseTime=True&loc=Asia%2FShanghai"
+  migrations_dir: "initialize/migrate/sql"
+  max_idle_conns: 10
+  max_open_conns: 100
+  log_mode: "info"
+  log_zap: true
+  slow_threshold: 1000
+  auto_migrate: true
+
+auth:
+  access_token_ttl: 900
+  refresh_token_ttl: 604800
+  email_verification_ttl: 86400
+  oauth_state_ttl: 300
+  allowed_providers: ["github", "google"]
+  default_oauth_redirect_url: "http://localhost:8080/api/v1/auth/oauth/callback"
+  max_sessions_per_user: 10
+  pending_user_expiry: 2592000
+  password_reset_ttl: 3600
+  require_verified_email_login: true
+  oauth:
+    github:
+      client_id: "your_github_client_id"
+      client_secret: "your_github_client_secret"
+      redirect_url: "http://localhost:8080/api/v1/auth/oauth/callback"
+      auth_url: "https://github.com/login/oauth/authorize"
+      token_url: "https://github.com/login/oauth/access_token"
+      user_info_url: "https://api.github.com/user"
+      scopes: ["read:user", "user:email"]
+    google:
+      client_id: "your_google_client_id"
+      client_secret: "your_google_client_secret"
+      redirect_url: "http://localhost:8080/api/v1/auth/oauth/callback"
+      auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
+      token_url: "https://oauth2.googleapis.com/token"
+      user_info_url: "https://www.googleapis.com/oauth2/v3/userinfo"
+      scopes: ["openid", "email", "profile"]
+
+redis:
+  enabled: false
+  addr: "127.0.0.1:6379"
+  username: ""
+  password: ""
+  db: 0
+  prefix: "paigram"
+  dial_timeout: 5
+  read_timeout: 3
+  write_timeout: 3
+  pool_size: 20
+  min_idle_conns: 5
+  max_retries: 2

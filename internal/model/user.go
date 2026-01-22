@@ -121,3 +121,7 @@ type LoginAudit struct {
 	Message   string        `gorm:"size:512"`
 	CreatedAt time.Time
 }
+
+func (UserOAuthState) TableName() string {
+	return "user_oauth_states"
+}

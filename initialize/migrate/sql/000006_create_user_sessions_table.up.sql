@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT UNSIGNED NOT NULL,
+    access_token VARCHAR(255) NOT NULL,
+    refresh_token VARCHAR(255) NOT NULL,
+    access_expiry DATETIME(3) NOT NULL,
+    refresh_expiry DATETIME(3) NOT NULL,
+    user_agent VARCHAR(512) NULL,
+    client_ip VARCHAR(128) NULL,
+    revoked_at DATETIME(3) NULL,
+    revoked_reason VARCHAR(255) NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    UNIQUE KEY uniq_access_token (access_token),
+    UNIQUE KEY uniq_refresh_token (refresh_token),
+    KEY idx_user_sessions_user (user_id),
+    KEY idx_refresh_expiry (refresh_expiry),
+    KEY idx_access_expiry (access_expiry),
+    CONSTRAINT fk_user_sessions_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

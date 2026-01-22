@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS bots (
+    id VARCHAR(64) NOT NULL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    description TEXT NULL,
+    type VARCHAR(32) NOT NULL DEFAULT 'OTHER',
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    owner_user_id BIGINT UNSIGNED NOT NULL,
+    api_key VARCHAR(255) NOT NULL,
+    api_secret VARCHAR(512) NOT NULL,
+    scopes VARCHAR(1024) DEFAULT '[]',
+    last_active_at DATETIME(3) NULL,
+    created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    deleted_at DATETIME(3) NULL,
+    UNIQUE KEY uniq_api_key (api_key),
+    KEY idx_owner_user (owner_user_id),
+    KEY idx_status (status),
+    KEY idx_deleted_at (deleted_at),
+    CONSTRAINT fk_bots_owner FOREIGN KEY (owner_user_id) REFERENCES users (id) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -1,0 +1,38 @@
+package model
+
+import (
+	"database/sql"
+	"time"
+
+	"gorm.io/gorm"
+)
+
+// Bot represents a registered bot client
+type Bot struct {
+	ID           string       `gorm:"primaryKey;size:64"`
+	Name         string       `gorm:"size:255;not null"`
+	Description  string       `gorm:"type:text"`
+	Type         string       `gorm:"size:32;not null;default:'OTHER'"`
+	Status       string       `gorm:"size:32;not null;default:'ACTIVE';index"`
+	OwnerUserID  uint64       `gorm:"index;not null"`
+	APIKey       string       `gorm:"size:255;uniqueIndex;not null"`
+	APISecret    string       `gorm:"size:512;not null"` // Should be hashed
+	Scopes       string       `gorm:"size:1024"`         // JSON array of scopes
+	LastActiveAt sql.NullTime `gorm:"type:datetime(3)"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DeletedAt    gorm.DeletedAt `gorm:"index"`
+}
+
+// BotToken represents an active access token for a bot
+type BotToken struct {
+	ID           uint64    `gorm:"primaryKey"`
+	BotID        string    `gorm:"size:64;index;not null"`
+	AccessToken  string    `gorm:"size:512;uniqueIndex;not null"`
+	RefreshToken string    `gorm:"size:512;uniqueIndex"`
+	ExpiresAt    time.Time `gorm:"index;not null"`
+	CreatedAt    time.Time
+	RevokedAt    sql.NullTime `gorm:"type:datetime(3)"`
+
+	Bot Bot `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
+}

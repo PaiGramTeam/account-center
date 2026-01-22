@@ -14,6 +14,7 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	Auth     AuthConfig     `mapstructure:"auth"`
 	Redis    RedisConfig    `mapstructure:"redis"`
+	GRPC     GRPCConfig     `mapstructure:"grpc"`
 }
 
 // AppConfig holds HTTP server configuration.
@@ -80,6 +81,17 @@ type RedisConfig struct {
 	PoolSize     int    `mapstructure:"pool_size"`
 	MinIdleConns int    `mapstructure:"min_idle_conns"`
 	MaxRetries   int    `mapstructure:"max_retries"`
+}
+
+// GRPCConfig holds gRPC server configuration.
+type GRPCConfig struct {
+	Enabled               bool `mapstructure:"enabled"`
+	Port                  int  `mapstructure:"port"`
+	MaxConnectionIdle     int  `mapstructure:"max_connection_idle"`
+	MaxConnectionAge      int  `mapstructure:"max_connection_age"`
+	MaxConnectionAgeGrace int  `mapstructure:"max_connection_age_grace"`
+	KeepAliveTime         int  `mapstructure:"keepalive_time"`
+	KeepAliveTimeout      int  `mapstructure:"keepalive_timeout"`
 }
 
 var (

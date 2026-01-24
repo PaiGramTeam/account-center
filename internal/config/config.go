@@ -16,6 +16,7 @@ type Config struct {
 	Redis     RedisConfig     `mapstructure:"redis"`
 	GRPC      GRPCConfig      `mapstructure:"grpc"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
+	Email     EmailConfig     `mapstructure:"email"`
 }
 
 // AppConfig holds HTTP server configuration.
@@ -116,6 +117,22 @@ type RateLimitAuthConfig struct {
 type RateLimitAPIConfig struct {
 	Authenticated   string `mapstructure:"authenticated"`
 	Unauthenticated string `mapstructure:"unauthenticated"`
+}
+
+// EmailConfig holds email service configuration.
+type EmailConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	Provider      string `mapstructure:"provider"`      // smtp, sendgrid, mailgun, etc.
+	SMTPHost      string `mapstructure:"smtp_host"`     // e.g., smtp.gmail.com
+	SMTPPort      int    `mapstructure:"smtp_port"`     // e.g., 587
+	SMTPUsername  string `mapstructure:"smtp_username"` // e.g., user@example.com
+	SMTPPassword  string `mapstructure:"smtp_password"`
+	FromEmail     string `mapstructure:"from_email"`     // Sender email address
+	FromName      string `mapstructure:"from_name"`      // Sender name
+	UseTLS        bool   `mapstructure:"use_tls"`        // Use TLS
+	UseAsyncQueue bool   `mapstructure:"use_async"`      // Enable async sending queue
+	RetryAttempts int    `mapstructure:"retry_attempts"` // Number of retry attempts
+	RetryDelay    int    `mapstructure:"retry_delay"`    // Delay between retries in seconds
 }
 
 var (
@@ -229,4 +246,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rate_limit.auth.oauth", "10-M")
 	v.SetDefault("rate_limit.api.authenticated", "1000-H")
 	v.SetDefault("rate_limit.api.unauthenticated", "100-H")
+
+	v.SetDefault("email.enabled", false)
+	v.SetDefault("email.provider", "smtp")
+	v.SetDefault("email.smtp_host", "smtp.gmail.com")
+	v.SetDefault("email.smtp_port", 587)
+	v.SetDefault("email.from_email", "noreply@paigram.com")
+	v.SetDefault("email.from_name", "PaiGram")
+	v.SetDefault("email.use_tls", true)
+	v.SetDefault("email.use_async", true)
+	v.SetDefault("email.retry_attempts", 3)
+	v.SetDefault("email.retry_delay", 5)
 }

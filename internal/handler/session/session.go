@@ -1,0 +1,294 @@
+package session
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"gorm.io/gorm"
+
+	"paigram/internal/logging"
+	"paigram/internal/middleware"
+	"paigram/internal/model"
+	"paigram/internal/response"
+	"paigram/internal/sessioncache"
+)
+
+// Handler handles session management endpoints
+type Handler struct {
+	db           *gorm.DB
+	sessionCache sessioncache.Store
+}
+
+// NewHandler creates a new session handler
+func NewHandler(db *gorm.DB, cache sessioncache.Store) *Handler {
+	return &Handler{
+		db:           db,
+		sessionCache: cache,
+	}
+}
+
+// RegisterRoutes registers session management routes
+func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
+	rg.GET("", h.ListSessions)
+	rg.DELETE("/:id", h.RevokeSession)
+	rg.DELETE("", h.RevokeAllSessions)
+}
+
+// SessionResponse represents the API response for a session
+type SessionResponse struct {
+	ID            uint64    `json:"id"`
+	DeviceID      string    `json:"device_id"`
+	DeviceName    string    `json:"device_name,omitempty"`
+	DeviceType    string    `json:"device_type,omitempty"`
+	IP            string    `json:"ip,omitempty"`
+	Location      string    `json:"location,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	LastActiveAt  time.Time `json:"last_active_at,omitempty"`
+	AccessExpiry  time.Time `json:"access_expiry"`
+	RefreshExpiry time.Time `json:"refresh_expiry"`
+	IsCurrent     bool      `json:"is_current"`
+}
+
+// ListSessions returns all active sessions for the current user
+// @Summary List user sessions
+// @Description Get all active sessions for the current user
+// @Tags sessions
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
+// @Failure 500 {object} response.Response
+// @Router /api/v1/sessions [get]
+func (h *Handler) ListSessions(c *gin.Context) {
+	userID, exists := middleware.GetUserID(c)
+	if !exists {
+		response.UnauthorizedWithCode(c, "UNAUTHORIZED", "user not authenticated", nil)
+		return
+	}
+
+	// Get current session token if available (we'll compare by token instead of session ID)
+	authHeader := c.GetHeader("Authorization")
+	var currentToken string
+	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+		currentToken = authHeader[7:]
+	}
+
+	var sessions []model.UserSession
+	if err := h.db.Where("user_id = ? AND revoked_at IS NULL", userID).
+		Order("created_at DESC").
+		Find(&sessions).Error; err != nil {
+		logging.Error("failed to query user sessions",
+			zap.Error(err),
+			zap.Uint64("user_id", userID),
+		)
+		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
+		return
+	}
+
+	// Build response
+	responses := make([]SessionResponse, 0, len(sessions))
+	for _, session := range sessions {
+		isCurrent := session.AccessToken == currentToken
+
+		resp := SessionResponse{
+			ID:            session.ID,
+			IP:            session.ClientIP,
+			CreatedAt:     session.CreatedAt,
+			AccessExpiry:  session.AccessExpiry,
+			RefreshExpiry: session.RefreshExpiry,
+			IsCurrent:     isCurrent,
+		}
+
+		responses = append(responses, resp)
+	}
+
+	response.Success(c, responses)
+}
+
+// RevokeSession revokes a specific session
+// @Summary Revoke session
+// @Description Revoke a specific user session
+// @Tags sessions
+// @Accept json
+// @Produce json
+// @Param id path int true "Session ID"
+// @Security BearerAuth
+// @Success 200 {object} response.Response
+// @Failure 400 {object} response.Response
+// @Failure 401 {object} response.Response
+// @Failure 404 {object} response.Response
+// @Failure 500 {object} response.Response
+// @Router /api/v1/sessions/{id} [delete]
+func (h *Handler) RevokeSession(c *gin.Context) {
+	userID, exists := middleware.GetUserID(c)
+	if !exists {
+		response.UnauthorizedWithCode(c, "UNAUTHORIZED", "user not authenticated", nil)
+		return
+	}
+
+	sessionID := c.Param("id")
+	if sessionID == "" {
+		response.BadRequestWithCode(c, "INVALID_ID", "session ID is required", nil)
+		return
+	}
+
+	var session model.UserSession
+	if err := h.db.Where("id = ? AND user_id = ?", sessionID, userID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.NotFoundWithCode(c, "NOT_FOUND", "session not found", nil)
+			return
+		}
+		logging.Error("failed to query session",
+			zap.Error(err),
+			zap.String("session_id", sessionID),
+		)
+		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
+		return
+	}
+
+	if session.RevokedAt.Valid {
+		response.Success(c, gin.H{
+			"message": "session already revoked",
+		})
+		return
+	}
+
+	// Revoke session
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		updates := map[string]interface{}{
+			"revoked_at":     sql.NullTime{Time: now, Valid: true},
+			"revoked_reason": "revoked by user",
+		}
+
+		return tx.Model(&session).Updates(updates).Error
+	})
+
+	if err != nil {
+		logging.Error("failed to revoke session",
+			zap.Error(err),
+			zap.Uint64("session_id", session.ID),
+		)
+		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
+		return
+	}
+
+	// Remove from cache
+	if h.sessionCache != nil {
+		ctx := context.Background()
+		if err := h.sessionCache.RemoveTokens(ctx, session.AccessToken, session.RefreshToken); err != nil {
+			logging.Warn("failed to remove session from cache",
+				zap.Error(err),
+				zap.Uint64("session_id", session.ID),
+			)
+		}
+	}
+
+	response.Success(c, gin.H{
+		"message": "session revoked successfully",
+	})
+}
+
+// RevokeAllSessions revokes all sessions except the current one
+// @Summary Revoke all sessions
+// @Description Revoke all user sessions except the current one
+// @Tags sessions
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Success 200 {object} response.Response
+// @Failure 401 {object} response.Response
+// @Failure 500 {object} response.Response
+// @Router /api/v1/sessions [delete]
+func (h *Handler) RevokeAllSessions(c *gin.Context) {
+	userID, exists := middleware.GetUserID(c)
+	if !exists {
+		response.UnauthorizedWithCode(c, "UNAUTHORIZED", "user not authenticated", nil)
+		return
+	}
+
+	// Get current token to exclude it
+	authHeader := c.GetHeader("Authorization")
+	var currentToken string
+	var hasCurrentToken bool
+	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+		currentToken = authHeader[7:]
+		hasCurrentToken = true
+	}
+
+	var sessions []model.UserSession
+	query := h.db.Where("user_id = ? AND revoked_at IS NULL", userID)
+
+	if hasCurrentToken {
+		query = query.Where("access_token != ?", currentToken)
+	}
+
+	if err := query.Find(&sessions).Error; err != nil {
+		logging.Error("failed to query sessions",
+			zap.Error(err),
+			zap.Uint64("user_id", userID),
+		)
+		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
+		return
+	}
+
+	if len(sessions) == 0 {
+		response.Success(c, gin.H{
+			"message":        "no other sessions to revoke",
+			"revoked_count":  0,
+			"current_active": hasCurrentToken,
+		})
+		return
+	}
+
+	// Revoke all sessions in transaction
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now()
+		updates := map[string]interface{}{
+			"revoked_at":     sql.NullTime{Time: now, Valid: true},
+			"revoked_reason": "revoke all sessions",
+		}
+
+		revokeQuery := tx.Model(&model.UserSession{}).
+			Where("user_id = ? AND revoked_at IS NULL", userID)
+
+		if hasCurrentToken {
+			revokeQuery = revokeQuery.Where("access_token != ?", currentToken)
+		}
+
+		return revokeQuery.Updates(updates).Error
+	})
+
+	if err != nil {
+		logging.Error("failed to revoke sessions",
+			zap.Error(err),
+			zap.Uint64("user_id", userID),
+		)
+		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
+		return
+	}
+
+	// Remove from cache
+	if h.sessionCache != nil {
+		ctx := context.Background()
+		for _, session := range sessions {
+			if err := h.sessionCache.RemoveTokens(ctx, session.AccessToken, session.RefreshToken); err != nil {
+				logging.Warn("failed to remove session from cache",
+					zap.Error(err),
+					zap.Uint64("session_id", session.ID),
+				)
+			}
+		}
+	}
+
+	response.Success(c, gin.H{
+		"message":        "all other sessions revoked successfully",
+		"revoked_count":  len(sessions),
+		"current_active": hasCurrentToken,
+	})
+}

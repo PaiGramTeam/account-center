@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verify Your Email - Custom Design</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+    <table width="100%" cellpadding="0" cellspacing="0" style="padding: 40px 20px;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); overflow: hidden;">
+                    <!-- Header with Logo -->
+                    <tr>
+                        <td style="padding: 50px 30px; text-align: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                            <div style="margin-bottom: 20px;">
+                                <!-- Add your logo here -->
+                                <div style="width: 80px; height: 80px; margin: 0 auto; background-color: #ffffff; border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                    <span style="font-size: 48px; color: #667eea;">✉️</span>
+                                </div>
+                            </div>
+                            <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700;">欢迎加入 PaiGram!</h1>
+                            <p style="margin: 10px 0 0; color: #e0e7ff; font-size: 16px;">感谢您的注册</p>
+                        </td>
+                    </tr>
+
+                    <!-- Content -->
+                    <tr>
+                        <td style="padding: 50px 40px;">
+                            <h2 style="margin: 0 0 20px; color: #1a202c; font-size: 24px; font-weight: 600;">验证您的邮箱地址</h2>
+                            
+                            <p style="margin: 0 0 30px; color: #4a5568; font-size: 16px; line-height: 1.8;">
+                                为了确保账户安全，请点击下方按钮完成邮箱验证：
+                            </p>
+
+                            <!-- Verify Button -->
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td align="center" style="padding: 10px 0 30px;">
+                                        <a href="{{.VerifyURL}}" style="display: inline-block; padding: 16px 48px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 18px; font-weight: 600; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);">
+                                            立即验证邮箱
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- Divider -->
+                            <div style="border-top: 1px solid #e2e8f0; margin: 30px 0;"></div>
+
+                            <!-- Alternative Method -->
+                            <p style="margin: 0 0 15px; color: #4a5568; font-size: 14px;">
+                                如果按钮无法点击，您也可以使用以下验证码：
+                            </p>
+                            <div style="padding: 20px; background-color: #f7fafc; border-radius: 8px; text-align: center; border-left: 4px solid #667eea;">
+                                <code style="font-size: 24px; font-weight: 700; color: #667eea; letter-spacing: 2px; font-family: 'Courier New', monospace;">{{.Token}}</code>
+                            </div>
+
+                            <!-- Expiry Notice -->
+                            <div style="margin-top: 30px; padding: 15px; background-color: #fff5f5; border-radius: 8px; border-left: 4px solid #f56565;">
+                                <p style="margin: 0; color: #c53030; font-size: 14px;">
+                                    ⏰ 此链接将在 <strong>24 小时</strong>后失效
+                                </p>
+                            </div>
+
+                            <!-- Security Notice -->
+                            <p style="margin: 30px 0 0; color: #718096; font-size: 13px; line-height: 1.6;">
+                                <strong>安全提示：</strong>如果您没有注册 PaiGram 账户，请忽略此邮件。您的邮箱地址可能被误填。
+                            </p>
+                        </td>
+                    </tr>
+
+                    <!-- Footer -->
+                    <tr>
+                        <td style="padding: 30px 40px; background-color: #f7fafc; border-top: 1px solid #e2e8f0;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="text-align: center; padding-bottom: 15px;">
+                                        <p style="margin: 0; color: #a0aec0; font-size: 12px;">
+                                            PaiGram - 您的智能助手平台
+                                        </p>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="text-align: center;">
+                                        <a href="#" style="color: #667eea; text-decoration: none; font-size: 12px; margin: 0 10px;">帮助中心</a>
+                                        <span style="color: #cbd5e0;">|</span>
+                                        <a href="#" style="color: #667eea; text-decoration: none; font-size: 12px; margin: 0 10px;">隐私政策</a>
+                                        <span style="color: #cbd5e0;">|</span>
+                                        <a href="#" style="color: #667eea; text-decoration: none; font-size: 12px; margin: 0 10px;">联系我们</a>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="text-align: center; padding-top: 15px;">
+                                        <p style="margin: 0; color: #a0aec0; font-size: 11px;">
+                                            © 2024 PaiGram. All rights reserved.
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+
+                <!-- Bottom Spacing -->
+                <p style="text-align: center; margin: 20px 0 0; color: #e0e7ff; font-size: 12px;">
+                    此邮件由系统自动发送，请勿直接回复
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

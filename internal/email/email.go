@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"html/template"
 	"time"
 
 	"go.uber.org/zap"
@@ -15,9 +14,11 @@ import (
 
 // Service handles email sending functionality
 type Service struct {
-	cfg    config.EmailConfig
-	sender Sender
-	queue  Queue
+	cfg             config.EmailConfig
+	sender          Sender
+	queue           Queue
+	rateLimiter     RateLimiter
+	templateManager *TemplateManager
 }
 
 // Sender defines the interface for sending emails
@@ -41,7 +42,18 @@ type Message struct {
 	TextBody    string
 	HTMLBody    string
 	Attachments []Attachment
+	Priority    Priority // Email priority
 }
+
+// Priority defines email priority levels
+type Priority int
+
+const (
+	PriorityLow Priority = iota
+	PriorityNormal
+	PriorityHigh
+	PriorityCritical
+)
 
 // Attachment represents an email attachment
 type Attachment struct {
@@ -52,16 +64,23 @@ type Attachment struct {
 
 // NewService creates a new email service
 func NewService(cfg config.EmailConfig) (*Service, error) {
+	// Initialize template manager
+	templateManager, err := NewTemplateManager(cfg.TemplateDir)
+	if err != nil {
+		return nil, fmt.Errorf("create template manager: %w", err)
+	}
+
 	if !cfg.Enabled {
 		return &Service{
-			cfg:    cfg,
-			sender: &NoopSender{},
-			queue:  &NoopQueue{},
+			cfg:             cfg,
+			sender:          &NoopSender{},
+			queue:           &NoopQueue{},
+			rateLimiter:     &NoopRateLimiter{},
+			templateManager: templateManager,
 		}, nil
 	}
 
 	var sender Sender
-	var err error
 
 	switch cfg.Provider {
 	case "smtp":
@@ -80,10 +99,15 @@ func NewService(cfg config.EmailConfig) (*Service, error) {
 		queue = &NoopQueue{}
 	}
 
+	// Create rate limiter: 10 emails per second per recipient, burst of 20
+	rateLimiter := NewTokenBucketLimiter(10.0, 20)
+
 	return &Service{
-		cfg:    cfg,
-		sender: sender,
-		queue:  queue,
+		cfg:             cfg,
+		sender:          sender,
+		queue:           queue,
+		rateLimiter:     rateLimiter,
+		templateManager: templateManager,
 	}, nil
 }
 
@@ -97,7 +121,19 @@ func (s *Service) Send(ctx context.Context, msg *Message) error {
 		return nil
 	}
 
-	return s.sender.Send(ctx, msg)
+	start := time.Now()
+	err := s.sender.Send(ctx, msg)
+	duration := time.Since(start).Seconds()
+
+	// Record metrics
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	EmailsSentTotal.WithLabelValues(status, priorityString(msg.Priority)).Inc()
+	EmailSendDuration.WithLabelValues(status).Observe(duration)
+
+	return err
 }
 
 // SendAsync sends an email asynchronously via queue
@@ -108,6 +144,14 @@ func (s *Service) SendAsync(ctx context.Context, msg *Message) error {
 			zap.String("subject", msg.Subject),
 		)
 		return nil
+	}
+
+	// Check rate limit for each recipient
+	for _, recipient := range msg.To {
+		if !s.rateLimiter.Allow(recipient) {
+			EmailRateLimitExceeded.WithLabelValues(recipient).Inc()
+			return fmt.Errorf("rate limit exceeded for recipient: %s", recipient)
+		}
 	}
 
 	if !s.cfg.UseAsyncQueue {
@@ -138,10 +182,16 @@ func (s *Service) StopQueue() error {
 func (s *Service) SendVerificationEmail(ctx context.Context, to, token, baseURL string) error {
 	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", baseURL, token)
 
-	htmlBody, err := renderTemplate("email_verification", map[string]interface{}{
-		"VerifyURL": verifyURL,
-		"Token":     token,
-	})
+	data := &EmailVerificationData{
+		VerifyURL: verifyURL,
+		Token:     token,
+	}
+
+	if err := data.Validate(); err != nil {
+		return fmt.Errorf("validate template data: %w", err)
+	}
+
+	htmlBody, err := s.renderTemplate("email_verification", data)
 	if err != nil {
 		return fmt.Errorf("render template: %w", err)
 	}
@@ -164,6 +214,7 @@ If you did not create an account, please ignore this email.
 		Subject:  "Verify Your Email Address",
 		TextBody: textBody,
 		HTMLBody: htmlBody,
+		Priority: PriorityHigh, // Verification emails are high priority
 	}
 
 	return s.SendAsync(ctx, msg)
@@ -173,9 +224,15 @@ If you did not create an account, please ignore this email.
 func (s *Service) SendPasswordResetEmail(ctx context.Context, to, token, baseURL string) error {
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, token)
 
-	htmlBody, err := renderTemplate("password_reset", map[string]interface{}{
-		"ResetURL": resetURL,
-	})
+	data := &PasswordResetData{
+		ResetURL: resetURL,
+	}
+
+	if err := data.Validate(); err != nil {
+		return fmt.Errorf("validate template data: %w", err)
+	}
+
+	htmlBody, err := s.renderTemplate("password_reset", data)
 	if err != nil {
 		return fmt.Errorf("render template: %w", err)
 	}
@@ -196,6 +253,7 @@ If you did not request a password reset, please ignore this email or contact sup
 		Subject:  "Reset Your Password",
 		TextBody: textBody,
 		HTMLBody: htmlBody,
+		Priority: PriorityHigh, // Password reset is high priority
 	}
 
 	return s.SendAsync(ctx, msg)
@@ -203,9 +261,15 @@ If you did not request a password reset, please ignore this email or contact sup
 
 // SendPasswordChangedEmail sends a notification when password is changed
 func (s *Service) SendPasswordChangedEmail(ctx context.Context, to string) error {
-	htmlBody, err := renderTemplate("password_changed", map[string]interface{}{
-		"Timestamp": time.Now().Format("2006-01-02 15:04:05 MST"),
-	})
+	data := &PasswordChangedData{
+		Timestamp: time.Now().Format("2006-01-02 15:04:05 MST"),
+	}
+
+	if err := data.Validate(); err != nil {
+		return fmt.Errorf("validate template data: %w", err)
+	}
+
+	htmlBody, err := s.renderTemplate("password_changed", data)
 	if err != nil {
 		return fmt.Errorf("render template: %w", err)
 	}
@@ -223,6 +287,7 @@ If you did not make this change, please contact support immediately.
 		Subject:  "Your Password Has Been Changed",
 		TextBody: textBody,
 		HTMLBody: htmlBody,
+		Priority: PriorityNormal,
 	}
 
 	return s.SendAsync(ctx, msg)
@@ -230,12 +295,18 @@ If you did not make this change, please contact support immediately.
 
 // SendNewDeviceLoginEmail sends a notification for new device login
 func (s *Service) SendNewDeviceLoginEmail(ctx context.Context, to, deviceName, location, ip string) error {
-	htmlBody, err := renderTemplate("new_device_login", map[string]interface{}{
-		"DeviceName": deviceName,
-		"Location":   location,
-		"IP":         ip,
-		"Timestamp":  time.Now().Format("2006-01-02 15:04:05 MST"),
-	})
+	data := &NewDeviceLoginData{
+		DeviceName: deviceName,
+		Location:   location,
+		IP:         ip,
+		Timestamp:  time.Now().Format("2006-01-02 15:04:05 MST"),
+	}
+
+	if err := data.Validate(); err != nil {
+		return fmt.Errorf("validate template data: %w", err)
+	}
+
+	htmlBody, err := s.renderTemplate("new_device_login", data)
 	if err != nil {
 		return fmt.Errorf("render template: %w", err)
 	}
@@ -251,13 +322,14 @@ IP Address: %s
 Time: %s
 
 If this was not you, please change your password immediately and contact support.
-`, deviceName, location, ip, time.Now().Format("2006-01-02 15:04:05 MST"))
+`, deviceName, location, ip, data.Timestamp)
 
 	msg := &Message{
 		To:       []string{to},
 		Subject:  "New Device Login Alert",
 		TextBody: textBody,
 		HTMLBody: htmlBody,
+		Priority: PriorityHigh, // Security alerts are high priority
 	}
 
 	return s.SendAsync(ctx, msg)
@@ -265,9 +337,15 @@ If this was not you, please change your password immediately and contact support
 
 // SendTwoFactorBackupCodesEmail sends 2FA backup codes
 func (s *Service) SendTwoFactorBackupCodesEmail(ctx context.Context, to string, codes []string) error {
-	htmlBody, err := renderTemplate("2fa_backup_codes", map[string]interface{}{
-		"BackupCodes": codes,
-	})
+	data := &TwoFactorBackupCodesData{
+		BackupCodes: codes,
+	}
+
+	if err := data.Validate(); err != nil {
+		return fmt.Errorf("validate template data: %w", err)
+	}
+
+	htmlBody, err := s.renderTemplate("2fa_backup_codes", data)
 	if err != nil {
 		return fmt.Errorf("render template: %w", err)
 	}
@@ -287,6 +365,7 @@ Keep these codes safe and do not share them with anyone.
 		Subject:  "Your 2FA Backup Codes",
 		TextBody: textBody,
 		HTMLBody: htmlBody,
+		Priority: PriorityHigh, // Security-related emails are high priority
 	}
 
 	return s.SendAsync(ctx, msg)
@@ -302,10 +381,16 @@ func formatBackupCodes(codes []string) string {
 }
 
 // renderTemplate renders an email template
-func renderTemplate(name string, data interface{}) (string, error) {
-	tmpl, ok := templates[name]
-	if !ok {
-		return "", fmt.Errorf("template not found: %s", name)
+func (s *Service) renderTemplate(name string, data interface{}) (string, error) {
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start).Seconds()
+		EmailTemplateRenderDuration.WithLabelValues(name).Observe(duration)
+	}()
+
+	tmpl, err := s.templateManager.GetTemplate(name)
+	if err != nil {
+		return "", err
 	}
 
 	var buf bytes.Buffer
@@ -316,11 +401,12 @@ func renderTemplate(name string, data interface{}) (string, error) {
 	return buf.String(), nil
 }
 
-// templates holds pre-compiled email templates
-var templates = map[string]*template.Template{
-	"email_verification": template.Must(template.New("email_verification").Parse(emailVerificationTemplate)),
-	"password_reset":     template.Must(template.New("password_reset").Parse(passwordResetTemplate)),
-	"password_changed":   template.Must(template.New("password_changed").Parse(passwordChangedTemplate)),
-	"new_device_login":   template.Must(template.New("new_device_login").Parse(newDeviceLoginTemplate)),
-	"2fa_backup_codes":   template.Must(template.New("2fa_backup_codes").Parse(twoFactorBackupCodesTemplate)),
+// ReloadTemplates reloads templates from files (for development)
+func (s *Service) ReloadTemplates() error {
+	return s.templateManager.Reload()
+}
+
+// ExportTemplates exports embedded templates to files
+func (s *Service) ExportTemplates(outputDir string) error {
+	return s.templateManager.ExportTemplates(outputDir)
 }

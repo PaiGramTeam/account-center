@@ -131,8 +131,11 @@ type EmailConfig struct {
 	FromName      string `mapstructure:"from_name"`      // Sender name
 	UseTLS        bool   `mapstructure:"use_tls"`        // Use TLS
 	UseAsyncQueue bool   `mapstructure:"use_async"`      // Enable async sending queue
+	QueueSize     int    `mapstructure:"queue_size"`     // Queue size for async sending
+	Timeout       int    `mapstructure:"timeout"`        // SMTP timeout in seconds
 	RetryAttempts int    `mapstructure:"retry_attempts"` // Number of retry attempts
 	RetryDelay    int    `mapstructure:"retry_delay"`    // Delay between retries in seconds
+	TemplateDir   string `mapstructure:"template_dir"`   // Directory for email templates (optional, uses embedded if empty)
 }
 
 var (

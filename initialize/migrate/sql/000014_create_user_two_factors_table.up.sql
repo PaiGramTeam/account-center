@@ -10,8 +10,6 @@ CREATE TABLE IF NOT EXISTS user_two_factors (
     updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
     
     UNIQUE KEY uk_user_id (user_id),
+    KEY idx_two_factor_enabled_at (enabled_at),
     CONSTRAINT fk_user_two_factor_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- Create indexes
-CREATE INDEX idx_two_factor_enabled_at ON user_two_factors(enabled_at);

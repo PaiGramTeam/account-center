@@ -94,9 +94,13 @@ cp config/config.example.yaml config/config.yaml
 go mod download
 ```
 
-4. **运行数据库迁移**
+4. **初始化数据库**
 ```bash
+# 运行数据库迁移
 go run main.go migrate up
+
+# 创建种子数据和管理员账号
+go run main.go seed all --with-admin
 ```
 
 5. **启动服务**
@@ -108,6 +112,35 @@ go run main.go
 go build -tags release -o paigram main.go
 ./paigram
 ```
+
+### 使用 CLI
+
+Paigram 提供了完整的命令行界面（CLI）来管理服务器和数据库。
+
+```bash
+# 查看所有可用命令
+go run main.go help
+
+# 管理员账号管理
+go run main.go admin create              # 创建管理员
+go run main.go admin list                # 列出管理员
+go run main.go admin remove user@email   # 移除管理员
+
+# 种子数据管理
+go run main.go seed all --with-admin     # 运行所有种子数据
+go run main.go seed permissions          # 创建权限
+go run main.go seed roles                # 创建角色
+go run main.go seed admin                # 创建默认管理员
+
+# 数据库迁移
+go run main.go migrate up                # 执行迁移
+go run main.go migrate status            # 查看迁移状态
+
+# 启动服务器
+go run main.go serve                     # 启动服务（默认命令）
+```
+
+详细的 CLI 使用说明请查看 [CLI 使用指南](./docs/cli-guide.md)。
 
 ## API 文档
 

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/model"
+	"paigram/internal/response"
 )
 
 // TelegramAuthData represents the data received from Telegram OAuth
@@ -30,11 +30,34 @@ type TelegramAuthData struct {
 	Hash      string `json:"hash" form:"hash"`
 }
 
+// swagger:route POST /api/v1/auth/oauth/telegram auth handleTelegramAuth
+//
+// Authenticate with Telegram.
+//
+// Handles Telegram OAuth authentication using data from Telegram Login Widget.
+// Verifies the authentication data and creates or updates user account.
+//
+// Consumes:
+//   - application/json
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - none
+//
+// Responses:
+//
+//	200: telegramAuthResponse
+//	400: authErrorResponse
+//	401: authErrorResponse
+//	500: authErrorResponse
+//
 // HandleTelegramAuth handles Telegram OAuth authentication
 func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 	var authData TelegramAuthData
 	if err := c.ShouldBindJSON(&authData); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request data"})
+		response.BadRequest(c, "invalid request data")
 		return
 	}
 
@@ -42,14 +65,14 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 	// For now, we'll expect it to be passed in the request header for security
 	botToken := c.GetHeader("X-Telegram-Bot-Token")
 	if botToken == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "missing bot token"})
+		response.BadRequest(c, "missing bot token")
 		return
 	}
 
 	// Verify Telegram auth data
 	checker := NewTelegramAuthChecker(botToken)
 	if err := checker.VerifyTelegramAuth(&authData); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid telegram auth data: " + err.Error()})
+		response.Unauthorized(c, "invalid telegram auth data: "+err.Error())
 		return
 	}
 
@@ -64,7 +87,7 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 	user, err := h.findOrCreateTelegramUser(tx, &authData)
 	if err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process user"})
+		response.InternalServerError(c, "failed to process user")
 		return
 	}
 
@@ -72,7 +95,7 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 	session, err := h.issueSession(tx, user.ID, c.ClientIP(), c.GetHeader("User-Agent"))
 	if err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
+		response.InternalServerError(c, "failed to create session")
 		return
 	}
 
@@ -80,7 +103,7 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 	now := time.Now()
 	if err := tx.Model(&user).Update("last_login_at", now).Error; err != nil {
 		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
+		response.InternalServerError(c, "failed to update user")
 		return
 	}
 
@@ -100,7 +123,7 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 	}
 
 	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to complete login"})
+		response.InternalServerError(c, "failed to complete login")
 		return
 	}
 
@@ -113,8 +136,8 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"user": gin.H{
+	responseData := map[string]interface{}{
+		"user": map[string]interface{}{
 			"id":           user.ID,
 			"status":       user.Status,
 			"display_name": user.Profile.DisplayName,
@@ -125,7 +148,8 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 		"refresh_token": session.RefreshToken,
 		"token_type":    "Bearer",
 		"expires_in":    h.cfg.AccessTokenTTLSeconds,
-	})
+	}
+	response.Success(c, responseData)
 }
 
 // findOrCreateTelegramUser finds existing user or creates new one from Telegram data

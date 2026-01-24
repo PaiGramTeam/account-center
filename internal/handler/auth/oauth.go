@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -16,37 +15,57 @@ import (
 	"paigram/internal/config"
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
+	"paigram/internal/response"
 )
 
 type initiateOAuthRequest struct {
 	RedirectTo string `json:"redirect_to"`
 }
 
+// swagger:route POST /api/v1/auth/oauth/{provider}/init auth initiateOAuth
+//
+// Initiate OAuth authentication flow.
+//
+// Generates OAuth state and nonce tokens, then returns the provider's
+// authorization URL for the user to complete authentication.
+//
+// Consumes:
+//   - application/json
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	200: initiateOAuthResponse
+//	400: authErrorResponse
+//	500: authErrorResponse
+//
 // InitiateOAuth prepares an OAuth login by issuing a state token.
 func (h *Handler) InitiateOAuth(c *gin.Context) {
 	provider := strings.ToLower(c.Param("provider"))
 	providerCfg, ok := h.resolveProvider(provider)
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported provider"})
+		response.BadRequest(c, "unsupported provider")
 		return
 	}
 
 	var req initiateOAuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if !errors.Is(err, io.EOF) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			response.BadRequest(c, err.Error())
 			return
 		}
 	}
 
 	state, err := randomToken(32)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate state"})
+		response.InternalServerError(c, "failed to generate state")
 		return
 	}
 	nonce, err := randomToken(24)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate nonce"})
+		response.InternalServerError(c, "failed to generate nonce")
 		return
 	}
 
@@ -72,24 +91,22 @@ func (h *Handler) InitiateOAuth(c *gin.Context) {
 		ExpiresAt:  expiry,
 	}
 	if err := h.db.Create(&stateRecord).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to persist oauth state"})
+		response.InternalServerError(c, "failed to persist oauth state")
 		return
 	}
 
 	authURL, err := buildAuthURL(providerCfg, redirectURL, state, nonce)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to build auth url"})
+		response.InternalServerError(c, "failed to build auth url")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"state":      state,
-			"nonce":      nonce,
-			"expires_at": expiry.Format(time.RFC3339),
-			"auth_url":   authURL,
-		},
-	})
+	responseData := map[string]interface{}{
+		"auth_url":   authURL,
+		"state":      state,
+		"expires_at": expiry.Format(time.RFC3339),
+	}
+	response.Success(c, responseData)
 }
 
 type oauthCallbackRequest struct {
@@ -105,18 +122,43 @@ type oauthCallbackRequest struct {
 	Scope             string `json:"scope"`
 }
 
+// swagger:route POST /api/v1/auth/oauth/{provider}/callback auth handleOAuthCallback
+//
+// Handle OAuth provider callback.
+//
+// Processes the OAuth callback after user authorization at the provider.
+// Creates or updates the user account and returns JWT tokens.
+//
+// Consumes:
+//   - application/json
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - none
+//
+// Responses:
+//
+//	200: loginResponse
+//	400: authErrorResponse
+//	401: authErrorResponse
+//	404: authErrorResponse
+//	409: authErrorResponse
+//	500: authErrorResponse
+//
 // HandleOAuthCallback processes the OAuth callback and issues a local session.
 func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	provider := strings.ToLower(c.Param("provider"))
 	_, ok := h.resolveProvider(provider)
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported provider"})
+		response.BadRequest(c, "unsupported provider")
 		return
 	}
 
 	var req oauthCallbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -280,20 +322,19 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	})
 
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"user_id":        user.ID,
-			"access_token":   session.AccessToken,
-			"refresh_token":  session.RefreshToken,
-			"access_expiry":  session.AccessExpiry.Format(time.RFC3339),
-			"refresh_expiry": session.RefreshExpiry.Format(time.RFC3339),
-			"email":          emailValue(emailRecord),
-		},
-	})
+	responseData := map[string]interface{}{
+		"user_id":        user.ID,
+		"access_token":   session.AccessToken,
+		"refresh_token":  session.RefreshToken,
+		"access_expiry":  session.AccessExpiry.Format(time.RFC3339),
+		"refresh_expiry": session.RefreshExpiry.Format(time.RFC3339),
+		"email":          emailValue(emailRecord),
+	}
+	response.Success(c, responseData)
 }
 
 func (h *Handler) resolveProvider(provider string) (config.OAuthProviderConfig, bool) {

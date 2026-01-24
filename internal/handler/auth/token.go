@@ -2,8 +2,11 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -45,6 +48,62 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 
 	if err := tx.Create(session).Error; err != nil {
 		return nil, err
+	}
+
+	// Create or update device record
+	deviceID := generateDeviceID(userAgent, clientIP)
+	deviceType, os, browser := parseUserAgent(userAgent)
+	deviceName := browser + " / " + os
+
+	var device model.UserDevice
+	err = tx.Where("device_id = ?", deviceID).First(&device).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Create new device record
+			device = model.UserDevice{
+				UserID:       userID,
+				DeviceID:     deviceID,
+				DeviceName:   deviceName,
+				DeviceType:   deviceType,
+				OS:           os,
+				Browser:      browser,
+				IP:           clientIP,
+				Location:     "", // Could be populated using IP geolocation service
+				LastActiveAt: now,
+			}
+			if err := tx.Create(&device).Error; err != nil {
+				log.Printf("failed to create device record: %v", err)
+			}
+		} else {
+			log.Printf("failed to query device: %v", err)
+		}
+	} else {
+		// Update existing device
+		updates := map[string]interface{}{
+			"last_active_at": now,
+			"ip":             clientIP,
+			"device_name":    deviceName,
+			"os":             os,
+			"browser":        browser,
+		}
+		if err := tx.Model(&model.UserDevice{}).Where("id = ?", device.ID).Updates(updates).Error; err != nil {
+			log.Printf("failed to update device record: %v", err)
+		}
+	}
+
+	// Log successful login
+	loginLog := model.LoginLog{
+		UserID:    userID,
+		LoginType: model.LoginTypeEmail, // This will be set by the caller
+		IP:        clientIP,
+		UserAgent: userAgent,
+		Device:    deviceName,
+		Location:  "", // Could be populated using IP geolocation service
+		Status:    "success",
+		CreatedAt: now,
+	}
+	if err := tx.Create(&loginLog).Error; err != nil {
+		log.Printf("failed to create login log: %v", err)
 	}
 
 	h.cacheStoreSession(session)
@@ -132,4 +191,59 @@ func (h *Handler) cacheRevokeSessionTokens(session *model.UserSession) {
 
 func errorsIsRedisNil(err error) bool {
 	return err == nil || errors.Is(err, redis.Nil)
+}
+
+// generateDeviceID creates a unique device identifier from user agent and IP
+func generateDeviceID(userAgent, clientIP string) string {
+	data := userAgent + clientIP
+	hash := sha256.Sum256([]byte(data))
+	return base64.URLEncoding.EncodeToString(hash[:])[:22]
+}
+
+// parseUserAgent extracts device info from user agent string
+func parseUserAgent(userAgent string) (deviceType, os, browser string) {
+	ua := strings.ToLower(userAgent)
+
+	// Detect device type
+	if strings.Contains(ua, "mobile") || strings.Contains(ua, "android") || strings.Contains(ua, "iphone") {
+		deviceType = "mobile"
+	} else if strings.Contains(ua, "tablet") || strings.Contains(ua, "ipad") {
+		deviceType = "tablet"
+	} else {
+		deviceType = "desktop"
+	}
+
+	// Detect OS
+	switch {
+	case strings.Contains(ua, "windows"):
+		os = "Windows"
+	case strings.Contains(ua, "mac"):
+		os = "macOS"
+	case strings.Contains(ua, "linux"):
+		os = "Linux"
+	case strings.Contains(ua, "android"):
+		os = "Android"
+	case strings.Contains(ua, "iphone") || strings.Contains(ua, "ipad"):
+		os = "iOS"
+	default:
+		os = "Unknown"
+	}
+
+	// Detect browser
+	switch {
+	case strings.Contains(ua, "chrome") && !strings.Contains(ua, "edge"):
+		browser = "Chrome"
+	case strings.Contains(ua, "firefox"):
+		browser = "Firefox"
+	case strings.Contains(ua, "safari") && !strings.Contains(ua, "chrome"):
+		browser = "Safari"
+	case strings.Contains(ua, "edge"):
+		browser = "Edge"
+	case strings.Contains(ua, "opera"):
+		browser = "Opera"
+	default:
+		browser = "Unknown"
+	}
+
+	return
 }

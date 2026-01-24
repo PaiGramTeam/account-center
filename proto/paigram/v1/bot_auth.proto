@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package paigram.v1;
+
+option go_package = "paigram/internal/grpc/pb/v1;pb";
+
+import "google/protobuf/timestamp.proto";
+
+// Bot 认证服务
+service BotAuthService {
+  // Bot 注册
+  rpc RegisterBot(RegisterBotRequest) returns (RegisterBotResponse);
+  
+  // Bot 登录（获取访问令牌）
+  rpc BotLogin(BotLoginRequest) returns (BotLoginResponse);
+  
+  // 刷新访问令牌
+  rpc RefreshBotToken(RefreshBotTokenRequest) returns (RefreshBotTokenResponse);
+  
+  // 验证 Bot 令牌
+  rpc ValidateBotToken(ValidateBotTokenRequest) returns (ValidateBotTokenResponse);
+  
+  // 撤销 Bot 令牌
+  rpc RevokeBotToken(RevokeBotTokenRequest) returns (RevokeBotTokenResponse);
+  
+  // 获取 Bot 信息
+  rpc GetBotInfo(GetBotInfoRequest) returns (GetBotInfoResponse);
+}
+
+// Bot 类型
+enum BotType {
+  BOT_TYPE_UNSPECIFIED = 0;
+  BOT_TYPE_TELEGRAM = 1;
+  BOT_TYPE_DISCORD = 2;
+  BOT_TYPE_QQ = 3;
+  BOT_TYPE_WECHAT = 4;
+  BOT_TYPE_OTHER = 99;
+}
+
+// Bot 状态
+enum BotStatus {
+  BOT_STATUS_UNSPECIFIED = 0;
+  BOT_STATUS_ACTIVE = 1;
+  BOT_STATUS_INACTIVE = 2;
+  BOT_STATUS_SUSPENDED = 3;
+  BOT_STATUS_REVOKED = 4;
+}
+
+// Bot 信息
+message Bot {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  BotType type = 4;
+  BotStatus status = 5;
+  repeated string scopes = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  google.protobuf.Timestamp last_active_at = 9;
+}
+
+// Bot 注册请求
+message RegisterBotRequest {
+  string name = 1;
+  string description = 2;
+  BotType type = 3;
+  repeated string scopes = 4;
+  string owner_email = 5;
+}
+
+// Bot 注册响应
+message RegisterBotResponse {
+  Bot bot = 1;
+  string api_key = 2;
+  string api_secret = 3;
+}
+
+// Bot 登录请求
+message BotLoginRequest {
+  string api_key = 1;
+  string api_secret = 2;
+}
+
+// Bot 登录响应
+message BotLoginResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;
+  string token_type = 4;
+  Bot bot = 5;
+}
+
+// 刷新令牌请求
+message RefreshBotTokenRequest {
+  string refresh_token = 1;
+}
+
+// 刷新令牌响应
+message RefreshBotTokenResponse {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3;
+  string token_type = 4;
+}
+
+// 验证令牌请求
+message ValidateBotTokenRequest {
+  string access_token = 1;
+}
+
+// 验证令牌响应
+message ValidateBotTokenResponse {
+  bool valid = 1;
+  Bot bot = 2;
+  repeated string scopes = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+// 撤销令牌请求
+message RevokeBotTokenRequest {
+  string access_token = 1;
+}
+
+// 撤销令牌响应
+message RevokeBotTokenResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// 获取 Bot 信息请求
+message GetBotInfoRequest {
+  string bot_id = 1;
+}
+
+// 获取 Bot 信息响应
+message GetBotInfoResponse {
+  Bot bot = 1;
+}

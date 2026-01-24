@@ -46,6 +46,11 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	h.emailHandler.RegisterEmailRoutes(rg)
 }
 
+// RegisterEmailRoutes binds email management endpoints beneath the given route group.
+func (h *Handler) RegisterEmailRoutes(rg *gin.RouterGroup) {
+	h.emailHandler.RegisterEmailRoutes(rg)
+}
+
 // swagger:route GET /api/v1/profiles/{id} profile getProfile
 //
 // Get user profile.

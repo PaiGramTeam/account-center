@@ -10,11 +10,12 @@ import (
 
 // Config aggregates application configuration sections.
 type Config struct {
-	App      AppConfig      `mapstructure:"app"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Auth     AuthConfig     `mapstructure:"auth"`
-	Redis    RedisConfig    `mapstructure:"redis"`
-	GRPC     GRPCConfig     `mapstructure:"grpc"`
+	App       AppConfig       `mapstructure:"app"`
+	Database  DatabaseConfig  `mapstructure:"database"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	Redis     RedisConfig     `mapstructure:"redis"`
+	GRPC      GRPCConfig      `mapstructure:"grpc"`
+	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 }
 
 // AppConfig holds HTTP server configuration.
@@ -93,6 +94,28 @@ type GRPCConfig struct {
 	MaxConnectionAgeGrace int  `mapstructure:"max_connection_age_grace"`
 	KeepAliveTime         int  `mapstructure:"keepalive_time"`
 	KeepAliveTimeout      int  `mapstructure:"keepalive_timeout"`
+}
+
+// RateLimitConfig holds rate limiting configuration.
+type RateLimitConfig struct {
+	Enabled bool                `mapstructure:"enabled"`
+	Auth    RateLimitAuthConfig `mapstructure:"auth"`
+	API     RateLimitAPIConfig  `mapstructure:"api"`
+}
+
+// RateLimitAuthConfig holds rate limits for authentication endpoints.
+type RateLimitAuthConfig struct {
+	Login        string `mapstructure:"login"`
+	Register     string `mapstructure:"register"`
+	VerifyEmail  string `mapstructure:"verify_email"`
+	RefreshToken string `mapstructure:"refresh_token"`
+	OAuth        string `mapstructure:"oauth"`
+}
+
+// RateLimitAPIConfig holds rate limits for API endpoints.
+type RateLimitAPIConfig struct {
+	Authenticated   string `mapstructure:"authenticated"`
+	Unauthenticated string `mapstructure:"unauthenticated"`
 }
 
 var (
@@ -197,4 +220,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("redis.pool_size", 20)
 	v.SetDefault("redis.min_idle_conns", 5)
 	v.SetDefault("redis.max_retries", 2)
+
+	v.SetDefault("rate_limit.enabled", true)
+	v.SetDefault("rate_limit.auth.login", "5-M")
+	v.SetDefault("rate_limit.auth.register", "3-H")
+	v.SetDefault("rate_limit.auth.verify_email", "10-H")
+	v.SetDefault("rate_limit.auth.refresh_token", "10-M")
+	v.SetDefault("rate_limit.auth.oauth", "10-M")
+	v.SetDefault("rate_limit.api.authenticated", "1000-H")
+	v.SetDefault("rate_limit.api.unauthenticated", "100-H")
 }

@@ -100,3 +100,33 @@ const (
 func BuildPermissionName(resource, action string) string {
 	return resource + ":" + action
 }
+
+// Predefined permission constants
+const (
+	// User permissions
+	PermUserRead   = "user:read"
+	PermUserWrite  = "user:write"
+	PermUserDelete = "user:delete"
+	PermUserManage = "user:manage"
+
+	// Role permissions
+	PermRoleRead   = "role:read"
+	PermRoleWrite  = "role:write"
+	PermRoleDelete = "role:delete"
+	PermRoleManage = "role:manage"
+
+	// Permission management
+	PermPermissionRead   = "permission:read"
+	PermPermissionWrite  = "permission:write"
+	PermPermissionDelete = "permission:delete"
+	PermPermissionManage = "permission:manage"
+
+	// Bot permissions
+	PermBotRead   = "bot:read"
+	PermBotWrite  = "bot:write"
+	PermBotDelete = "bot:delete"
+	PermBotManage = "bot:manage"
+
+	// Audit permissions
+	PermAuditRead = "audit:read"
+)

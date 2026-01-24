@@ -74,3 +74,59 @@ grpc:
   max_connection_age_grace: 30   # seconds
   keepalive_time: 600           # seconds
   keepalive_timeout: 20         # seconds
+
+email:
+  enabled: true
+  provider: smtp  # Currently only SMTP is supported
+  
+  # SMTP Configuration
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  smtp_username: your-email@gmail.com
+  smtp_password: your-app-password
+  
+  # Sender Information
+  from_email: noreply@example.com
+  from_name: PaiGram
+  
+  # Security
+  use_tls: true  # Use TLS/STARTTLS
+  
+  # Async Queue Settings
+  use_async: true        # Enable async email sending
+  queue_size: 1000       # Maximum queue size (default: 1000)
+  
+  # Timeout Settings
+  timeout: 30  # SMTP connection timeout in seconds (default: 30)
+  
+  # Retry Settings
+  retry_attempts: 3  # Number of retry attempts (default: 3)
+  retry_delay: 5     # Base delay between retries in seconds (default: 5)
+                     # Uses exponential backoff: delay * 2^(attempt-1)
+  
+  # Template Settings
+  template_dir: ""  # Directory for email templates
+                    # If empty or not set: uses embedded templates
+                    # If set: loads templates from specified directory
+                    # Example: "templates/email" or "./config/email-templates"
+
+# How to use external email templates:
+# 1. Export default templates:
+#    go run ./cmd/export-templates/main.go ./templates/email
+#
+# 2. Set email.template_dir above to the output directory
+#
+# 3. Edit the HTML files in that directory
+#
+# 4. Restart service or call ReloadTemplates() in development
+
+# Email Features:
+# - Template Functions: add, sub, mul, div
+# - MIME Support: Proper multipart handling with random boundaries
+# - Attachment Support: Send files with base64 encoding
+# - Priority Queue: Critical > High > Normal > Low
+# - Rate Limiting: 10 emails/second per recipient, burst of 20
+# - Exponential Backoff: Retry with increasing delays (capped at 5 min)
+# - TLS Security: MinVersion TLS 1.2, certificate verification enabled
+# - Prometheus Metrics: emails_sent_total, email_send_duration_seconds, etc.
+# - Template Management: Load from files or use embedded templates with hot reload

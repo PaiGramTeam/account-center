@@ -43,3 +43,39 @@ type zapWriter struct {
 func (w *zapWriter) Printf(format string, args ...interface{}) {
 	w.sugar.Infof(format, args...)
 }
+
+// Info logs an info level message
+func Info(msg string, fields ...zap.Field) {
+	log, err := getZapLogger()
+	if err != nil {
+		return
+	}
+	log.Info(msg, fields...)
+}
+
+// Error logs an error level message
+func Error(msg string, fields ...zap.Field) {
+	log, err := getZapLogger()
+	if err != nil {
+		return
+	}
+	log.Error(msg, fields...)
+}
+
+// Debug logs a debug level message
+func Debug(msg string, fields ...zap.Field) {
+	log, err := getZapLogger()
+	if err != nil {
+		return
+	}
+	log.Debug(msg, fields...)
+}
+
+// Warn logs a warning level message
+func Warn(msg string, fields ...zap.Field) {
+	log, err := getZapLogger()
+	if err != nil {
+		return
+	}
+	log.Warn(msg, fields...)
+}

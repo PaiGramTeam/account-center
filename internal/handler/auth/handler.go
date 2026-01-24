@@ -12,17 +12,19 @@ import (
 type Handler struct {
 	db           *gorm.DB
 	cfg          config.AuthConfig
+	emailCfg     config.EmailConfig
 	sessionCache sessioncache.Store
 }
 
 // NewHandler constructs an auth Handler.
-func NewHandler(db *gorm.DB, cfg config.AuthConfig, cache sessioncache.Store) *Handler {
+func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailCfg config.EmailConfig, cache sessioncache.Store) *Handler {
 	if cache == nil {
 		cache = sessioncache.NewNoopStore()
 	}
 	return &Handler{
 		db:           db,
 		cfg:          cfg,
+		emailCfg:     emailCfg,
 		sessionCache: cache,
 	}
 }
@@ -34,6 +36,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/refresh", h.RefreshToken)
 	rg.POST("/logout", h.Logout)
 	rg.POST("/verify-email", h.VerifyEmail)
+	rg.POST("/forgot-password", h.ForgotPassword)
+	rg.POST("/reset-password", h.ResetPassword)
 
 	oauth := rg.Group("/oauth")
 	oauth.POST("/telegram", h.HandleTelegramAuth)

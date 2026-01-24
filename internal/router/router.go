@@ -56,7 +56,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	v1 := api.Group("/v1")
 
 	// Public routes - no authentication required
-	authHandler := authhandler.NewHandler(db, authCfg, cache)
+	authHandler := authhandler.NewHandler(db, authCfg, cfg.Email, cache)
 	authGroup := v1.Group("/auth")
 	{
 		// Apply rate limiting to auth endpoints if enabled

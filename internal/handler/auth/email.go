@@ -127,6 +127,25 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 			return err
 		}
 
+		// Assign default "user" role
+		var userRole model.Role
+		if err := tx.Where("name = ?", model.RoleUser).First(&userRole).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return fmt.Errorf("query default role: %w", err)
+			}
+			// If default role doesn't exist, log warning but don't fail registration
+			log.Printf("[auth] default role '%s' not found, skipping role assignment", model.RoleUser)
+		} else {
+			// Assign role to user
+			userRoleAssignment := model.UserRole{
+				UserID: user.ID,
+				RoleID: userRole.ID,
+			}
+			if err := tx.Create(&userRoleAssignment).Error; err != nil {
+				return fmt.Errorf("assign default role: %w", err)
+			}
+		}
+
 		return nil
 	})
 

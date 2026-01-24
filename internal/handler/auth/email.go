@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pquerna/otp/totp"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"paigram/internal/handler/shared"
@@ -145,6 +148,7 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 type loginEmailRequest struct {
 	Email    string `json:"email" binding:"required,email"`
 	Password string `json:"password" binding:"required"`
+	TOTPCode string `json:"totp_code" binding:"omitempty,len=6"` // Optional 2FA code
 }
 
 // swagger:route POST /api/v1/auth/login auth loginEmail
@@ -225,6 +229,91 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 	if h.cfg.RequireEmailVerificationLogin && emailRecord.VerifiedAt.Time.IsZero() {
 		response.Forbidden(c, "email not verified")
 		return
+	}
+
+	// Check if 2FA is enabled for this user
+	var twoFactor model.UserTwoFactor
+	err = h.db.Where("user_id = ?", user.ID).First(&twoFactor).Error
+	has2FA := err == nil
+
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		response.InternalServerError(c, "failed to check 2FA status")
+		return
+	}
+
+	// If 2FA is enabled, verify TOTP code or backup code
+	if has2FA {
+		// Check if TOTP code was provided
+		if req.TOTPCode == "" {
+			// No code provided - return 2FA challenge response
+			response.Success(c, map[string]interface{}{
+				"requires_totp": true,
+				"message":       "2FA code required",
+			})
+			return
+		}
+
+		// Validate TOTP code first
+		totpValid := verifyTOTP(req.TOTPCode, twoFactor.Secret)
+		backupCodeValid := false
+		var usedBackupCode string
+
+		if !totpValid {
+			// Try backup codes if TOTP fails
+			var err error
+			backupCodeValid, usedBackupCode, err = verifyBackupCode(req.TOTPCode, twoFactor.BackupCodes)
+			if err != nil {
+				log.Printf("[auth] error verifying backup code for user_id=%d: %v", user.ID, err)
+			}
+		}
+
+		// If both TOTP and backup code fail, deny access
+		if !totpValid && !backupCodeValid {
+			// Log failed 2FA attempt
+			err = h.db.Transaction(func(tx *gorm.DB) error {
+				return h.logTwoFactorAudit(tx, user.ID, false, "totp_or_backup", c.ClientIP(), c.GetHeader("User-Agent"))
+			})
+			if err != nil {
+				log.Printf("[auth] failed to log 2FA audit: %v", err)
+			}
+
+			response.Unauthorized(c, "invalid 2FA code")
+			return
+		}
+
+		// 2FA verification successful
+		// Update LastUsedAt and remove backup code if used
+		err = h.db.Transaction(func(tx *gorm.DB) error {
+			updates := map[string]interface{}{
+				"last_used_at": shared.MakeNullTime(time.Now().UTC()),
+			}
+
+			// Remove used backup code
+			if backupCodeValid && usedBackupCode != "" {
+				updatedBackupCodes, err := removeBackupCode(twoFactor.BackupCodes, usedBackupCode)
+				if err != nil {
+					log.Printf("[auth] failed to remove backup code: %v", err)
+				} else {
+					updates["backup_codes"] = updatedBackupCodes
+				}
+			}
+
+			if err := tx.Model(&model.UserTwoFactor{}).Where("id = ?", twoFactor.ID).Updates(updates).Error; err != nil {
+				return fmt.Errorf("update 2FA record: %w", err)
+			}
+
+			// Log successful 2FA verification
+			method := "totp"
+			if backupCodeValid {
+				method = "backup_code"
+			}
+			return h.logTwoFactorAudit(tx, user.ID, true, method, c.ClientIP(), c.GetHeader("User-Agent"))
+		})
+
+		if err != nil {
+			log.Printf("[auth] failed to update 2FA record: %v", err)
+			// Don't fail login if we can't update the record, but log it
+		}
 	}
 
 	// Create session
@@ -545,4 +634,80 @@ func defaultLocale(input string) string {
 		return "en_US"
 	}
 	return trimmed
+}
+
+// verifyTOTP validates a TOTP code against the secret
+func verifyTOTP(code, secret string) bool {
+	return totp.Validate(code, secret)
+}
+
+// verifyBackupCode checks if the provided code matches any backup code
+// Returns true and the matched code if found
+func verifyBackupCode(code, backupCodesJSON string) (bool, string, error) {
+	if backupCodesJSON == "" {
+		return false, "", nil
+	}
+
+	var backupCodes []string
+	if err := json.Unmarshal([]byte(backupCodesJSON), &backupCodes); err != nil {
+		return false, "", fmt.Errorf("unmarshal backup codes: %w", err)
+	}
+
+	// Check each backup code (they are stored as bcrypt hashes)
+	for _, hashedCode := range backupCodes {
+		if err := bcrypt.CompareHashAndPassword([]byte(hashedCode), []byte(code)); err == nil {
+			return true, hashedCode, nil
+		}
+	}
+
+	return false, "", nil
+}
+
+// removeBackupCode removes a used backup code from the list
+func removeBackupCode(backupCodesJSON, usedCode string) (string, error) {
+	var backupCodes []string
+	if err := json.Unmarshal([]byte(backupCodesJSON), &backupCodes); err != nil {
+		return "", fmt.Errorf("unmarshal backup codes: %w", err)
+	}
+
+	// Filter out the used code
+	filteredCodes := make([]string, 0, len(backupCodes)-1)
+	for _, code := range backupCodes {
+		if code != usedCode {
+			filteredCodes = append(filteredCodes, code)
+		}
+	}
+
+	updatedJSON, err := json.Marshal(filteredCodes)
+	if err != nil {
+		return "", fmt.Errorf("marshal backup codes: %w", err)
+	}
+
+	return string(updatedJSON), nil
+}
+
+// logTwoFactorAudit creates an audit log for 2FA verification attempts
+func (h *Handler) logTwoFactorAudit(tx *gorm.DB, userID uint64, success bool, method, ip, userAgent string) error {
+	message := "2FA verification success"
+	if !success {
+		message = "2FA verification failed"
+	}
+
+	auditLog := model.AuditLog{
+		UserID:    userID,
+		Action:    "2fa_verification",
+		Resource:  "user_two_factor",
+		IP:        ip,
+		UserAgent: userAgent,
+		Details:   fmt.Sprintf(`{"method": "%s", "success": %t}`, method, success),
+		CreatedAt: time.Now().UTC(),
+	}
+
+	if err := tx.Create(&auditLog).Error; err != nil {
+		log.Printf("[auth] failed to create 2FA audit log: %v", err)
+		// Don't fail the request if audit logging fails
+	}
+
+	log.Printf("[auth] %s for user_id=%d method=%s", message, userID, method)
+	return nil
 }

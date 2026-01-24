@@ -121,6 +121,11 @@ func InternalServerErrorWithCode(c *gin.Context, errCode string, message string,
 	ErrorWithCode(c, http.StatusInternalServerError, errCode, message, details)
 }
 
+// TooManyRequestsWithCode 返回 429 错误（带错误代码）
+func TooManyRequestsWithCode(c *gin.Context, errCode string, message string, details interface{}) {
+	ErrorWithCode(c, http.StatusTooManyRequests, errCode, message, details)
+}
+
 // BadRequest 返回 400 错误
 func BadRequest(c *gin.Context, message string) {
 	Error(c, http.StatusBadRequest, message)
@@ -149,6 +154,11 @@ func Conflict(c *gin.Context, message string) {
 // InternalServerError 返回 500 错误
 func InternalServerError(c *gin.Context, message string) {
 	Error(c, http.StatusInternalServerError, message)
+}
+
+// TooManyRequests 返回 429 错误
+func TooManyRequests(c *gin.Context, message string) {
+	Error(c, http.StatusTooManyRequests, message)
 }
 
 // NoContent 返回 204 无内容响应

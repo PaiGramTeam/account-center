@@ -143,3 +143,72 @@ func GetUserID(c *gin.Context) (uint64, bool) {
 	userID, ok := val.(uint64)
 	return userID, ok
 }
+
+// SelfOrPermission creates middleware that allows users to operate on their own resources
+// OR have the specified permission.
+func SelfOrPermission(permMgr *permission.Manager, perm string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		currentUserID, exists := GetUserID(c)
+		if !exists {
+			response.UnauthorizedWithCode(c, "UNAUTHORIZED", "user not authenticated", nil)
+			c.Abort()
+			return
+		}
+
+		targetUserID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			response.BadRequestWithCode(c, "INVALID_USER_ID", "invalid user ID", nil)
+			c.Abort()
+			return
+		}
+
+		// If operating on self, allow
+		if currentUserID == targetUserID {
+			c.Next()
+			return
+		}
+
+		// Otherwise check permission
+		hasPermission, err := permMgr.HasPermission(currentUserID, perm)
+		if err != nil {
+			response.InternalServerErrorWithCode(c, "PERMISSION_CHECK_FAILED", "failed to check permission", nil)
+			c.Abort()
+			return
+		}
+
+		if !hasPermission {
+			response.ForbiddenWithCode(c, "FORBIDDEN", "insufficient permissions", nil)
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}
+
+// RequireSelf creates middleware that only allows users to operate on their own resources.
+func RequireSelf() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		currentUserID, exists := GetUserID(c)
+		if !exists {
+			response.UnauthorizedWithCode(c, "UNAUTHORIZED", "user not authenticated", nil)
+			c.Abort()
+			return
+		}
+
+		targetUserID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+		if err != nil {
+			response.BadRequestWithCode(c, "INVALID_USER_ID", "invalid user ID", nil)
+			c.Abort()
+			return
+		}
+
+		if currentUserID != targetUserID {
+			response.ForbiddenWithCode(c, "FORBIDDEN", "can only manage your own resources", nil)
+			c.Abort()
+			return
+		}
+
+		c.Next()
+	}
+}

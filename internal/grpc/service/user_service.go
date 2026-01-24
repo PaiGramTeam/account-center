@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+
+	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -115,9 +117,22 @@ func (s *UserService) VerifyUser(ctx context.Context, req *VerifyUserRequest) (*
 		}, nil
 	}
 
-	// TODO: Verify password hash
-	// This would normally use bcrypt or similar to compare the password
-	// For now, we'll return a placeholder response
+	// Verify password hash using bcrypt
+	if err := bcrypt.CompareHashAndPassword([]byte(credential.PasswordHash), []byte(req.Password)); err != nil {
+		// Password doesn't match
+		return &VerifyUserResponse{
+			Valid:   false,
+			Message: "invalid email or password",
+		}, nil
+	}
+
+	// Check if user is active
+	if user.Status != model.UserStatusActive {
+		return &VerifyUserResponse{
+			Valid:   false,
+			Message: "account is not active",
+		}, nil
+	}
 
 	return &VerifyUserResponse{
 		Valid:   true,

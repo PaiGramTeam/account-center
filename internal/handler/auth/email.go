@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
+	"paigram/internal/response"
 	"paigram/internal/sessioncache"
 )
 
@@ -25,11 +25,28 @@ type registerEmailRequest struct {
 	Locale      string `json:"locale"`
 }
 
+// swagger:route POST /api/v1/auth/register auth registerEmail
+//
+// Register a new user with email and password.
+//
+// This endpoint creates a new user account with email/password authentication.
+// An email verification token is returned if email verification is enabled.
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	201: registerEmailResponse
+//	400: authErrorResponse
+//	409: authErrorResponse
+//	500: authErrorResponse
+//
 // RegisterEmail handles registration via email + password.
 func (h *Handler) RegisterEmail(c *gin.Context) {
 	var req registerEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -41,22 +58,22 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 
 	var existing model.UserEmail
 	if err := h.db.Where("email = ?", email).First(&existing).Error; err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "email already in use"})
+		response.Conflict(c, "email already in use")
 		return
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check email uniqueness"})
+		response.InternalServerError(c, "failed to check email uniqueness")
 		return
 	}
 
 	passwordHash, err := hashPassword(req.Password)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to hash password"})
+		response.InternalServerError(c, "failed to hash password")
 		return
 	}
 
 	verificationToken, err := randomToken(48)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate verification token"})
+		response.InternalServerError(c, "failed to generate verification token")
 		return
 	}
 
@@ -111,19 +128,18 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 	})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register user"})
+		response.InternalServerError(c, "failed to register user")
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"data": gin.H{
-			"user_id":                     user.ID,
-			"email":                       email,
-			"verification_token":          verificationToken,
-			"verification_expires_at":     verificationExpiry.Format(time.RFC3339),
-			"requires_email_verification": h.cfg.RequireEmailVerificationLogin,
-		},
-	})
+	responseData := map[string]interface{}{
+		"user_id":                     user.ID,
+		"email":                       email,
+		"verification_token":          verificationToken,
+		"verification_expires_at":     verificationExpiry.Format(time.RFC3339),
+		"requires_email_verification": h.cfg.RequireEmailVerificationLogin,
+	}
+	response.Created(c, responseData)
 }
 
 type loginEmailRequest struct {
@@ -131,75 +147,95 @@ type loginEmailRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
+// swagger:route POST /api/v1/auth/login auth loginEmail
+//
+// Login with email and password.
+//
+// Authenticates a user using email and password credentials.
+// Returns JWT access and refresh tokens on successful authentication.
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	200: loginResponse
+//	400: authErrorResponse
+//	401: authErrorResponse
+//	403: authErrorResponse
+//	500: authErrorResponse
+//
 // LoginWithEmail authenticates a user via email/password.
 func (h *Handler) LoginWithEmail(c *gin.Context) {
 	var req loginEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 
 	var emailRecord model.UserEmail
-	if err := h.db.Where("email = ?", email).First(&emailRecord).Error; err != nil {
+	err := h.db.
+		Where("email = ?", email).
+		First(&emailRecord).Error
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+			response.Unauthorized(c, "invalid credentials")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load credentials"})
+		response.InternalServerError(c, "failed to load credentials")
 		return
 	}
 
 	var user model.User
-	if err := h.db.First(&user, emailRecord.UserID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+	err = h.db.
+		Preload("Profile").
+		First(&user, emailRecord.UserID).Error
+	if err != nil {
+		response.InternalServerError(c, "failed to load user")
 		return
 	}
 
-	if user.Status == model.UserStatusSuspended || user.Status == model.UserStatusDeleted {
-		_ = h.recordLoginAudit(h.db, model.LoginAudit{
-			UserID:   sql.NullInt64{Int64: int64(user.ID), Valid: true},
-			Provider: string(model.LoginTypeEmail),
-			Success:  false,
-			ClientIP: c.ClientIP(),
-			Message:  fmt.Sprintf("user status %s not allowed to login", user.Status),
-		})
-		c.JSON(http.StatusForbidden, gin.H{"error": "account is not allowed to login"})
+	// Check if user is allowed to login
+	if user.Status != model.UserStatusActive && user.Status != model.UserStatusPending {
+		response.Forbidden(c, "account is not allowed to login")
 		return
 	}
 
+	// Load user credentials
 	var credential model.UserCredential
-	if err := h.db.Where("user_id = ? AND provider = ? AND provider_account_id = ?", user.ID, string(model.LoginTypeEmail), email).
-		First(&credential).Error; err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+	if err := h.db.Where("user_id = ? AND provider = ?", user.ID, string(model.LoginTypeEmail)).First(&credential).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.Unauthorized(c, "invalid credentials")
+			return
+		}
+		response.InternalServerError(c, "failed to load credentials")
 		return
 	}
 
+	// Verify password
 	if err := comparePassword(credential.PasswordHash, req.Password); err != nil {
-		_ = h.recordLoginAudit(h.db, model.LoginAudit{
-			UserID:   sql.NullInt64{Int64: int64(user.ID), Valid: true},
-			Provider: string(model.LoginTypeEmail),
-			Success:  false,
-			ClientIP: c.ClientIP(),
-			Message:  "password mismatch",
-		})
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
+		log.Printf("[auth] password verification failed for email=%s: %v", email, err)
+		response.Unauthorized(c, "invalid credentials")
 		return
 	}
 
-	if h.cfg.RequireEmailVerificationLogin && (!emailRecord.VerifiedAt.Valid || emailRecord.VerifiedAt.Time.IsZero()) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "email not verified"})
+	// Check email verification
+	if h.cfg.RequireEmailVerificationLogin && emailRecord.VerifiedAt.Time.IsZero() {
+		response.Forbidden(c, "email not verified")
 		return
 	}
 
+	// Create session
 	var session *model.UserSession
 	now := time.Now().UTC()
-	err := h.db.Transaction(func(tx *gorm.DB) error {
+	err = h.db.Transaction(func(tx *gorm.DB) error {
+		// Update last login time and activate pending users
 		updates := map[string]interface{}{
 			"last_login_at": shared.MakeNullTime(now),
 		}
-		if user.Status == model.UserStatusPending && (!h.cfg.RequireEmailVerificationLogin || emailRecord.VerifiedAt.Valid) {
+		if user.Status == model.UserStatusPending && (!h.cfg.RequireEmailVerificationLogin || !emailRecord.VerifiedAt.Time.IsZero()) {
 			updates["status"] = model.UserStatusActive
 		}
 
@@ -224,30 +260,45 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 	})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create session"})
+		response.InternalServerError(c, "failed to create session")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"user_id":        user.ID,
-			"access_token":   session.AccessToken,
-			"refresh_token":  session.RefreshToken,
-			"access_expiry":  session.AccessExpiry.Format(time.RFC3339),
-			"refresh_expiry": session.RefreshExpiry.Format(time.RFC3339),
-		},
-	})
+	responseData := map[string]interface{}{
+		"user_id":        user.ID,
+		"access_token":   session.AccessToken,
+		"refresh_token":  session.RefreshToken,
+		"access_expiry":  session.AccessExpiry.Format(time.RFC3339),
+		"refresh_expiry": session.RefreshExpiry.Format(time.RFC3339),
+	}
+	response.Success(c, responseData)
 }
 
 type refreshTokenRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
+// swagger:route POST /api/v1/auth/refresh auth refreshToken
+//
+// Refresh access token.
+//
+// Exchange a valid refresh token for a new access/refresh token pair.
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	200: loginResponse
+//	400: authErrorResponse
+//	401: authErrorResponse
+//	500: authErrorResponse
+//
 // RefreshToken exchanges a refresh token for a new pair.
 func (h *Handler) RefreshToken(c *gin.Context) {
 	var req refreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -255,7 +306,7 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	if revoked, err := h.sessionCache.IsRevoked(ctx, sessioncache.TokenTypeRefresh, req.RefreshToken); err != nil && !errorsIsRedisNil(err) {
 		log.Printf("failed to query refresh token revocation: %v", err)
 	} else if revoked {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "token revoked"})
+		response.Unauthorized(c, "token revoked")
 		return
 	}
 
@@ -278,27 +329,27 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	}
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
+			response.Unauthorized(c, "invalid refresh token")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load session"})
+		response.InternalServerError(c, "failed to load session")
 		return
 	}
 
 	if session.RevokedAt.Valid {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "token revoked"})
+		response.Unauthorized(c, "token revoked")
 		return
 	}
 
 	now := time.Now().UTC()
 	if now.After(session.RefreshExpiry) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "refresh token expired"})
+		response.Unauthorized(c, "refresh token expired")
 		return
 	}
 
 	var user model.User
 	if err := h.db.First(&user, session.UserID).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load user"})
+		response.InternalServerError(c, "failed to load user")
 		return
 	}
 
@@ -342,33 +393,47 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	})
 
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh token"})
+		response.InternalServerError(c, "failed to refresh token")
 		return
 	}
 
 	h.cacheRevokeSessionTokens(&prevSession)
 	h.cacheStoreSession(&newSession)
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{
-			"user_id":        newSession.UserID,
-			"access_token":   newSession.AccessToken,
-			"refresh_token":  newSession.RefreshToken,
-			"access_expiry":  newSession.AccessExpiry.Format(time.RFC3339),
-			"refresh_expiry": newSession.RefreshExpiry.Format(time.RFC3339),
-		},
-	})
+	responseData := map[string]interface{}{
+		"user_id":        newSession.UserID,
+		"access_token":   newSession.AccessToken,
+		"refresh_token":  newSession.RefreshToken,
+		"access_expiry":  newSession.AccessExpiry.Format(time.RFC3339),
+		"refresh_expiry": newSession.RefreshExpiry.Format(time.RFC3339),
+	}
+	response.Success(c, responseData)
 }
 
 type logoutRequest struct {
 	Token string `json:"token" binding:"required"`
 }
 
+// swagger:route POST /api/v1/auth/logout auth logout
+//
+// Logout and revoke token.
+//
+// Revokes an access or refresh token, preventing further use.
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	200: logoutResponse
+//	400: authErrorResponse
+//	500: authErrorResponse
+//
 // Logout revokes an access or refresh token.
 func (h *Handler) Logout(c *gin.Context) {
 	var req logoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -385,18 +450,16 @@ func (h *Handler) Logout(c *gin.Context) {
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusOK, gin.H{"data": gin.H{"message": "already logged out"}})
+			response.SuccessWithMessage(c, response.NewMessageData("already logged out"), "already logged out")
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to logout"})
+		response.InternalServerError(c, "failed to logout")
 		return
 	}
 
 	h.cacheRevokeSessionTokens(&session)
 
-	c.JSON(http.StatusOK, gin.H{
-		"data": gin.H{"message": "logout successful"},
-	})
+	response.SuccessWithMessage(c, response.NewMessageData("logout successful"), "logout successful")
 }
 
 type verifyEmailRequest struct {
@@ -404,11 +467,26 @@ type verifyEmailRequest struct {
 	Token string `json:"token" binding:"required"`
 }
 
+// swagger:route POST /api/v1/auth/verify-email auth verifyEmail
+//
+// Verify email address.
+//
+// Verifies a user's email address using the verification token sent during registration.
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	200: verifyEmailResponse
+//	400: authErrorResponse
+//	404: authErrorResponse
+//
 // VerifyEmail handles email verification.
 func (h *Handler) VerifyEmail(c *gin.Context) {
 	var req verifyEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -451,14 +529,14 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "email not found"})
+			response.NotFound(c, "email not found")
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"data": gin.H{"message": "email verified"}})
+	response.SuccessWithMessage(c, response.NewMessageData("email verified"), "email verified")
 }
 
 func defaultLocale(input string) string {

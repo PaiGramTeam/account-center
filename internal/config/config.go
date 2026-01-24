@@ -39,6 +39,7 @@ type DatabaseConfig struct {
 	LogZap        bool   `mapstructure:"log_zap"`
 	SlowThreshold int    `mapstructure:"slow_threshold"`
 	AutoMigrate   bool   `mapstructure:"auto_migrate"`
+	AutoSeed      bool   `mapstructure:"auto_seed"`
 }
 
 // AuthConfig holds configuration for authentication flows.
@@ -173,6 +174,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.log_zap", true)
 	v.SetDefault("database.slow_threshold", 1000)
 	v.SetDefault("database.auto_migrate", true)
+	v.SetDefault("database.auto_seed", true)
 
 	v.SetDefault("auth.access_token_ttl", 900)
 	v.SetDefault("auth.refresh_token_ttl", 604800)

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"database/sql"
 	"fmt"
 	"log"
 	"os"
@@ -8,10 +9,12 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"paigram/initialize"
 	initmigrate "paigram/initialize/migrate"
 	"paigram/internal/config"
 	"paigram/internal/logging"
@@ -61,10 +64,32 @@ func Connect(cfg config.DatabaseConfig) (*gorm.DB, error) {
 			sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
 		}
 
-		if cfg.AutoMigrate {
-			if migrateErr := initmigrate.Run(sqlDB, cfg); migrateErr != nil {
-				initErr = fmt.Errorf("run migrations: %w", migrateErr)
-				return
+		if cfg.AutoMigrate || cfg.AutoSeed {
+			// Run initialization in a separate connection to avoid connection closing issues
+			if cfg.AutoMigrate {
+				log.Println("Running database migrations...")
+				// Create a separate connection for migrations
+				migrationDB, err := sql.Open("mysql", dsn)
+				if err != nil {
+					initErr = fmt.Errorf("open migration database: %w", err)
+					return
+				}
+				defer migrationDB.Close()
+
+				if err := initmigrate.Run(migrationDB, cfg); err != nil {
+					initErr = fmt.Errorf("run migrations: %w", err)
+					return
+				}
+				log.Println("Database migrations completed successfully")
+			}
+
+			if cfg.AutoSeed {
+				// Use the GORM connection for seeding
+				initializer := initialize.NewInitializer(db, nil, cfg)
+				if err := initializer.Run(); err != nil {
+					initErr = fmt.Errorf("run seed data: %w", err)
+					return
+				}
 			}
 		}
 	})

@@ -50,10 +50,15 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/:id/2fa/enable", h.Enable2FA)
 	rg.POST("/:id/2fa/confirm", h.Confirm2FA)
 	rg.POST("/:id/2fa/disable", h.Disable2FA)
+	rg.POST("/:id/2fa/regenerate-backup-codes", h.RegenerateBackupCodes)
 
 	// Device management
 	rg.GET("/:id/devices", h.GetDevices)
 	rg.DELETE("/:id/devices/:device_id", h.RemoveDevice)
+}
+
+type enable2FARequest struct {
+	Password string `json:"password" binding:"required"`
 }
 
 type changePasswordRequest struct {
@@ -203,6 +208,31 @@ func (h *Handler) Enable2FA(c *gin.Context) {
 	currentUserID, exists := middleware.GetUserID(c)
 	if !exists || currentUserID != userID {
 		response.ForbiddenWithCode(c, "FORBIDDEN", "can only enable 2FA for your own account", nil)
+		return
+	}
+
+	// Parse and validate request
+	var req enable2FARequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequestWithCode(c, "INVALID_REQUEST", err.Error(), nil)
+		return
+	}
+
+	// Verify user's password before enabling 2FA
+	var cred model.UserCredential
+	err = h.db.Where("user_id = ? AND provider = ?", userID, "email").First(&cred).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFoundWithCode(c, "NO_PASSWORD", "user does not have password authentication", nil)
+			return
+		}
+		response.InternalServerErrorWithCode(c, "DB_ERROR", "failed to load credentials", nil)
+		return
+	}
+
+	// Verify password
+	if err := bcrypt.CompareHashAndPassword([]byte(cred.PasswordHash), []byte(req.Password)); err != nil {
+		response.UnauthorizedWithCode(c, "INVALID_PASSWORD", "incorrect password", nil)
 		return
 	}
 
@@ -575,6 +605,136 @@ func (h *Handler) Disable2FA(c *gin.Context) {
 
 	response.Success(c, gin.H{
 		"message": "2FA disabled successfully",
+	})
+}
+
+type regenerateBackupCodesRequest struct {
+	Password string `json:"password" binding:"required"`
+}
+
+// RegenerateBackupCodes generates new backup codes for 2FA
+// swagger:route POST /api/v1/profiles/{id}/2fa/regenerate-backup-codes security regenerateBackupCodes
+//
+// Regenerate 2FA backup codes.
+//
+// Generates new backup codes and invalidates old ones. Requires password verification.
+//
+// Consumes:
+//   - application/json
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	200: regenerateBackupCodesResponse
+//	400: securityErrorResponse
+//	401: securityErrorResponse
+//	403: securityErrorResponse
+//	404: securityErrorResponse
+//	500: securityErrorResponse
+func (h *Handler) RegenerateBackupCodes(c *gin.Context) {
+	userID, err := parseUintID(c.Param("id"))
+	if err != nil {
+		response.BadRequestWithCode(c, "INVALID_USER_ID", "invalid user id", nil)
+		return
+	}
+
+	// Check if the current user is regenerating their own codes
+	currentUserID, exists := middleware.GetUserID(c)
+	if !exists || currentUserID != userID {
+		response.ForbiddenWithCode(c, "FORBIDDEN", "can only regenerate your own backup codes", nil)
+		return
+	}
+
+	var req regenerateBackupCodesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequestWithCode(c, "INVALID_REQUEST", err.Error(), nil)
+		return
+	}
+
+	// Verify password
+	var cred model.UserCredential
+	err = h.db.Where("user_id = ? AND provider = ?", userID, "email").First(&cred).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFoundWithCode(c, "NO_PASSWORD", "user does not have password authentication", nil)
+			return
+		}
+		response.InternalServerErrorWithCode(c, "DB_ERROR", "failed to load credentials", nil)
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(cred.PasswordHash), []byte(req.Password)); err != nil {
+		response.UnauthorizedWithCode(c, "INVALID_PASSWORD", "incorrect password", nil)
+		return
+	}
+
+	// Check if 2FA is enabled
+	var twoFactor model.UserTwoFactor
+	if err := h.db.Where("user_id = ?", userID).First(&twoFactor).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFoundWithCode(c, "2FA_NOT_ENABLED", "2FA is not enabled", nil)
+			return
+		}
+		response.InternalServerErrorWithCode(c, "DB_ERROR", "failed to load 2FA configuration", nil)
+		return
+	}
+
+	// Generate new backup codes (10 codes, 10 digits each)
+	backupCodes := make([]string, 10)
+	for i := range backupCodes {
+		code := make([]byte, 5) // 5 bytes for 10-digit code
+		if _, err := rand.Read(code); err != nil {
+			response.InternalServerErrorWithCode(c, "RANDOM_ERROR", "failed to generate backup codes", nil)
+			return
+		}
+		backupCodes[i] = fmt.Sprintf("%010d",
+			int(code[0])<<32|int(code[1])<<24|int(code[2])<<16|int(code[3])<<8|int(code[4]))
+	}
+
+	// Hash backup codes
+	hashedCodes := make([]string, len(backupCodes))
+	for i, code := range backupCodes {
+		hashed, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+		if err != nil {
+			response.InternalServerErrorWithCode(c, "HASH_ERROR", "failed to hash backup codes", nil)
+			return
+		}
+		hashedCodes[i] = string(hashed)
+	}
+
+	backupCodesJSON, _ := json.Marshal(hashedCodes)
+
+	// Update backup codes in database
+	err = h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&twoFactor).Update("backup_codes", string(backupCodesJSON)).Error; err != nil {
+			return err
+		}
+
+		// Log the action
+		auditLog := model.AuditLog{
+			UserID:     userID,
+			Action:     "2fa_backup_codes_regenerated",
+			Resource:   "user_two_factor",
+			ResourceID: twoFactor.ID,
+			IP:         c.ClientIP(),
+			UserAgent:  c.GetHeader("User-Agent"),
+			Details:    `{"codes_count": 10}`,
+			CreatedAt:  time.Now(),
+		}
+
+		return tx.Create(&auditLog).Error
+	})
+
+	if err != nil {
+		response.InternalServerErrorWithCode(c, "UPDATE_FAILED", "failed to regenerate backup codes", nil)
+		return
+	}
+
+	response.Success(c, gin.H{
+		"message":      "backup codes regenerated successfully",
+		"backup_codes": backupCodes, // Return unhashed codes to user (only this time)
 	})
 }
 

@@ -61,4 +61,12 @@ var (
 		},
 		[]string{"template"},
 	)
+
+	// EmailDLQSize tracks dead letter queue size
+	EmailDLQSize = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "email_dlq_size",
+			Help: "Current number of emails in dead letter queue",
+		},
+	)
 )

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
 	"paigram/internal/config"
@@ -19,6 +20,7 @@ type Service struct {
 	queue           Queue
 	rateLimiter     RateLimiter
 	templateManager *TemplateManager
+	redisClient     *redis.Client // Redis client for queue (optional)
 }
 
 // Sender defines the interface for sending emails
@@ -62,8 +64,14 @@ type Attachment struct {
 	MimeType string
 }
 
-// NewService creates a new email service
+// NewService creates a new email service without Redis queue support
+// For Redis queue support, use NewServiceWithRedis
 func NewService(cfg config.EmailConfig) (*Service, error) {
+	return NewServiceWithRedis(cfg, nil)
+}
+
+// NewServiceWithRedis creates a new email service with optional Redis queue support
+func NewServiceWithRedis(cfg config.EmailConfig, redisClient *redis.Client) (*Service, error) {
 	// Initialize template manager
 	templateManager, err := NewTemplateManager(cfg.TemplateDir)
 	if err != nil {
@@ -77,6 +85,7 @@ func NewService(cfg config.EmailConfig) (*Service, error) {
 			queue:           &NoopQueue{},
 			rateLimiter:     &NoopRateLimiter{},
 			templateManager: templateManager,
+			redisClient:     redisClient,
 		}, nil
 	}
 
@@ -94,7 +103,25 @@ func NewService(cfg config.EmailConfig) (*Service, error) {
 
 	var queue Queue
 	if cfg.UseAsyncQueue {
-		queue = NewMemoryQueue(sender, cfg)
+		// Determine queue backend
+		queueBackend := cfg.QueueBackend
+		if queueBackend == "" {
+			queueBackend = "memory" // Default to memory for backward compatibility
+		}
+
+		switch queueBackend {
+		case "redis":
+			if redisClient == nil {
+				return nil, fmt.Errorf("redis queue backend requires redis client")
+			}
+			queue = NewRedisQueue(redisClient, sender, cfg)
+			logging.Info("using redis queue backend for emails")
+		case "memory":
+			queue = NewMemoryQueue(sender, cfg)
+			logging.Info("using memory queue backend for emails")
+		default:
+			return nil, fmt.Errorf("unsupported queue backend: %s (supported: memory, redis)", queueBackend)
+		}
 	} else {
 		queue = &NoopQueue{}
 	}
@@ -108,6 +135,7 @@ func NewService(cfg config.EmailConfig) (*Service, error) {
 		queue:           queue,
 		rateLimiter:     rateLimiter,
 		templateManager: templateManager,
+		redisClient:     redisClient,
 	}, nil
 }
 
@@ -176,6 +204,11 @@ func (s *Service) StopQueue() error {
 		return nil
 	}
 	return s.queue.Stop()
+}
+
+// Close gracefully shuts down the email service
+func (s *Service) Close() error {
+	return s.StopQueue()
 }
 
 // SendVerificationEmail sends an email verification email

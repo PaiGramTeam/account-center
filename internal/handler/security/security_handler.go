@@ -70,8 +70,9 @@ type enable2FARequest struct {
 }
 
 type changePasswordRequest struct {
-	OldPassword string `json:"old_password" binding:"required"`
-	NewPassword string `json:"new_password" binding:"required,min=8,max=72"`
+	OldPassword         string `json:"old_password" binding:"required"`
+	NewPassword         string `json:"new_password" binding:"required,min=8,max=72"`
+	RevokeOtherSessions bool   `json:"revoke_other_sessions"` // Optional: revoke all other sessions (default: false)
 }
 
 // ChangePassword allows users to change their password
@@ -156,22 +157,24 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 			ResourceID: cred.ID,
 			IP:         c.ClientIP(),
 			UserAgent:  c.GetHeader("User-Agent"),
-			Details:    `{"reason": "user_requested"}`,
+			Details:    fmt.Sprintf(`{"reason": "user_requested", "revoke_other_sessions": %t}`, req.RevokeOtherSessions),
 			CreatedAt:  time.Now(),
 		}
 		if err := tx.Create(&auditLog).Error; err != nil {
 			return err
 		}
 
-		// Optionally revoke all sessions except current one
-		// This is a security measure to log out from all other devices
-		currentToken := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-		if currentToken != "" {
-			if err := tx.Model(&model.UserSession{}).
-				Where("user_id = ? AND access_token != ?", userID, currentToken).
-				Update("revoked_at", gorm.Expr("NOW()")).
-				Update("revoked_reason", "password_changed").Error; err != nil {
-				return err
+		// Revoke all other sessions if requested (optional security measure)
+		// This logs the user out from all other devices
+		if req.RevokeOtherSessions {
+			currentToken := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
+			if currentToken != "" {
+				if err := tx.Model(&model.UserSession{}).
+					Where("user_id = ? AND access_token != ?", userID, currentToken).
+					Update("revoked_at", gorm.Expr("NOW()")).
+					Update("revoked_reason", "password_changed").Error; err != nil {
+					return err
+				}
 			}
 		}
 

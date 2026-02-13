@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -126,28 +127,35 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// Send password reset email (async)
-	emailService, err := email.NewService(h.emailCfg)
-	if err != nil {
-		logging.Error("failed to create email service",
-			zap.Error(err),
-		)
-		// Continue without sending email
-	} else {
-		baseURL := c.Request.Header.Get("Origin")
-		if baseURL == "" {
-			baseURL = fmt.Sprintf("http://%s", c.Request.Host)
+	// Send password reset email asynchronously to prevent timing attacks
+	// By using a goroutine, the response time is consistent regardless of whether
+	// the email exists or not, preventing attackers from determining valid emails
+	// based on response time differences
+	go func(userEmail string, userID uint64, token string, origin string) {
+		emailService, err := email.NewService(h.emailCfg)
+		if err != nil {
+			logging.Error("failed to create email service",
+				zap.Error(err),
+			)
+			return
 		}
 
-		if err := emailService.SendPasswordResetEmail(c.Request.Context(), userEmail.Email, token, baseURL); err != nil {
+		baseURL := origin
+		if baseURL == "" {
+			baseURL = "http://localhost:8080" // Fallback, should be configured
+		}
+
+		// Use background context since the HTTP request is already complete
+		ctx := context.Background()
+		if err := emailService.SendPasswordResetEmail(ctx, userEmail, token, baseURL); err != nil {
 			logging.Error("failed to send password reset email",
 				zap.Error(err),
-				zap.Uint64("user_id", user.ID),
+				zap.Uint64("user_id", userID),
 			)
-			// Continue anyway
 		}
-	}
+	}(userEmail.Email, user.ID, token, c.Request.Header.Get("Origin"))
 
+	// Return immediately with consistent timing to prevent timing attacks
 	response.Success(c, gin.H{
 		"message": "if the email exists, a password reset link has been sent",
 	})
@@ -249,33 +257,39 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	// Send password changed notification email
-	emailService, err := email.NewService(h.emailCfg)
-	if err != nil {
-		logging.Error("failed to create email service",
-			zap.Error(err),
-		)
-		// Continue without sending email
-	} else {
+	// Send password changed notification email asynchronously
+	// This prevents response time variations and doesn't block the success response
+	go func(userID uint64) {
+		emailService, err := email.NewService(h.emailCfg)
+		if err != nil {
+			logging.Error("failed to create email service",
+				zap.Error(err),
+			)
+			return
+		}
+
 		// Get primary email
 		var userEmail model.UserEmail
-		if err := h.db.Where("user_id = ? AND is_primary = ?", user.ID, true).
+		if err := h.db.Where("user_id = ? AND is_primary = ?", userID, true).
 			First(&userEmail).Error; err != nil {
 			logging.Warn("failed to get user primary email",
 				zap.Error(err),
-				zap.Uint64("user_id", user.ID),
+				zap.Uint64("user_id", userID),
 			)
-		} else {
-			if err := emailService.SendPasswordChangedEmail(c.Request.Context(), userEmail.Email); err != nil {
-				logging.Error("failed to send password changed email",
-					zap.Error(err),
-					zap.Uint64("user_id", user.ID),
-				)
-				// Continue anyway
-			}
+			return
 		}
-	}
 
+		// Use background context since the HTTP request is already complete
+		ctx := context.Background()
+		if err := emailService.SendPasswordChangedEmail(ctx, userEmail.Email); err != nil {
+			logging.Error("failed to send password changed email",
+				zap.Error(err),
+				zap.Uint64("user_id", userID),
+			)
+		}
+	}(user.ID)
+
+	// Return success response immediately
 	response.Success(c, gin.H{
 		"message": "password has been reset successfully",
 	})

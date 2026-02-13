@@ -24,6 +24,7 @@ const (
 // Store declares the behaviour supported by all session caches.
 type Store interface {
 	SaveSession(ctx context.Context, session *model.UserSession) error
+	SaveSessionWithTokens(ctx context.Context, session *model.UserSession, accessToken, refreshToken string) error
 	RemoveTokens(ctx context.Context, accessToken, refreshToken string) error
 	GetSessionID(ctx context.Context, tokenType TokenType, token string) (uint64, error)
 	MarkRevoked(ctx context.Context, tokenType TokenType, token string, ttl time.Duration) error
@@ -56,8 +57,18 @@ type tokenPayload struct {
 }
 
 func (s *RedisStore) SaveSession(ctx context.Context, session *model.UserSession) error {
+	// This method is deprecated, kept for backward compatibility
+	// SaveSessionWithTokens should be used instead
+	return fmt.Errorf("SaveSession is deprecated, use SaveSessionWithTokens")
+}
+
+// SaveSessionWithTokens stores session data in cache using the original (unhashed) tokens as keys
+func (s *RedisStore) SaveSessionWithTokens(ctx context.Context, session *model.UserSession, accessToken, refreshToken string) error {
 	if session == nil {
 		return fmt.Errorf("session cannot be nil")
+	}
+	if accessToken == "" || refreshToken == "" {
+		return fmt.Errorf("tokens cannot be empty")
 	}
 
 	payload := tokenPayload{
@@ -79,8 +90,8 @@ func (s *RedisStore) SaveSession(ctx context.Context, session *model.UserSession
 	}
 
 	pipe := s.client.Pipeline()
-	pipe.Set(ctx, s.tokenKey(TokenTypeAccess, session.AccessToken), data, accessTTL)
-	pipe.Set(ctx, s.tokenKey(TokenTypeRefresh, session.RefreshToken), data, refreshTTL)
+	pipe.Set(ctx, s.tokenKey(TokenTypeAccess, accessToken), data, accessTTL)
+	pipe.Set(ctx, s.tokenKey(TokenTypeRefresh, refreshToken), data, refreshTTL)
 	_, err = pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("cache session tokens: %w", err)

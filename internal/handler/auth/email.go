@@ -414,7 +414,7 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 	}
 
 	// Create session
-	var session *model.UserSession
+	var sessionWithTokens *SessionWithTokens
 	now := time.Now().UTC()
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		// Update last login time and activate pending users
@@ -430,7 +430,7 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 		}
 
 		var err error
-		session, err = h.issueSession(tx, user.ID, c.ClientIP(), c.GetHeader("User-Agent"))
+		sessionWithTokens, err = h.issueSession(tx, user.ID, c.ClientIP(), c.GetHeader("User-Agent"))
 		if err != nil {
 			return err
 		}
@@ -452,10 +452,10 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 
 	responseData := map[string]interface{}{
 		"user_id":        user.ID,
-		"access_token":   session.AccessToken,
-		"refresh_token":  session.RefreshToken,
-		"access_expiry":  session.AccessExpiry.Format(time.RFC3339),
-		"refresh_expiry": session.RefreshExpiry.Format(time.RFC3339),
+		"access_token":   sessionWithTokens.AccessToken,
+		"refresh_token":  sessionWithTokens.RefreshToken,
+		"access_expiry":  sessionWithTokens.Session.AccessExpiry.Format(time.RFC3339),
+		"refresh_expiry": sessionWithTokens.Session.RefreshExpiry.Format(time.RFC3339),
 	}
 	response.Success(c, responseData)
 }
@@ -505,13 +505,14 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	}
 
 	var err error
+	refreshTokenHash := hashToken(req.RefreshToken)
 	if sessionID > 0 {
 		err = h.db.First(&session, sessionID).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			err = h.db.Where("refresh_token = ?", req.RefreshToken).First(&session).Error
+			err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
 		}
 	} else {
-		err = h.db.Where("refresh_token = ?", req.RefreshToken).First(&session).Error
+		err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
 	}
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -540,7 +541,7 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	}
 
 	prevSession := session
-	var newSession model.UserSession
+	var newAccessToken, newRefreshToken string
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		accessToken, err := randomToken(48)
 		if err != nil {
@@ -551,6 +552,10 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 			return err
 		}
 
+		// Store for later use
+		newAccessToken = accessToken
+		newRefreshToken = refreshToken
+
 		accessTTL := time.Duration(h.cfg.AccessTokenTTLSeconds) * time.Second
 		if accessTTL <= 0 {
 			accessTTL = 15 * time.Minute
@@ -560,18 +565,16 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 			refreshTTL = 7 * 24 * time.Hour
 		}
 
+		// Update session with hashed tokens
 		updates := map[string]interface{}{
-			"access_token":   accessToken,
-			"refresh_token":  refreshToken,
-			"access_expiry":  now.Add(accessTTL),
-			"refresh_expiry": now.Add(refreshTTL),
+			"access_token_hash":  hashToken(accessToken),
+			"refresh_token_hash": hashToken(refreshToken),
+			"access_expiry":      now.Add(accessTTL),
+			"refresh_expiry":     now.Add(refreshTTL),
+			"updated_at":         now,
 		}
 
 		if err := tx.Model(&model.UserSession{}).Where("id = ?", session.ID).Updates(updates).Error; err != nil {
-			return err
-		}
-
-		if err := tx.First(&newSession, session.ID).Error; err != nil {
 			return err
 		}
 
@@ -583,13 +586,23 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	h.cacheRevokeSessionTokens(&prevSession)
-	h.cacheStoreSession(&newSession)
+	// Revoke old tokens from cache
+	h.cacheRevokeSessionTokens(&prevSession, req.RefreshToken, "")
+
+	// Reload updated session
+	var newSession model.UserSession
+	if err := h.db.First(&newSession, session.ID).Error; err != nil {
+		response.InternalServerError(c, "failed to load updated session")
+		return
+	}
+
+	// Cache new tokens
+	h.cacheStoreSessionWithTokens(&newSession, newAccessToken, newRefreshToken)
 
 	responseData := map[string]interface{}{
 		"user_id":        newSession.UserID,
-		"access_token":   newSession.AccessToken,
-		"refresh_token":  newSession.RefreshToken,
+		"access_token":   newAccessToken,
+		"refresh_token":  newRefreshToken,
 		"access_expiry":  newSession.AccessExpiry.Format(time.RFC3339),
 		"refresh_expiry": newSession.RefreshExpiry.Format(time.RFC3339),
 	}
@@ -624,8 +637,9 @@ func (h *Handler) Logout(c *gin.Context) {
 	}
 
 	var session model.UserSession
+	tokenHash := hashToken(req.Token)
 	err := h.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("access_token = ? OR refresh_token = ?", req.Token, req.Token).First(&session).Error; err != nil {
+		if err := tx.Where("access_token_hash = ? OR refresh_token_hash = ?", tokenHash, tokenHash).First(&session).Error; err != nil {
 			return err
 		}
 		if session.RevokedAt.Valid {
@@ -643,7 +657,8 @@ func (h *Handler) Logout(c *gin.Context) {
 		return
 	}
 
-	h.cacheRevokeSessionTokens(&session)
+	// Revoke from cache (we have the original token from request)
+	h.cacheRevokeSessionTokens(&session, req.Token, req.Token)
 
 	response.SuccessWithMessage(c, response.NewMessageData("logout successful"), "logout successful")
 }

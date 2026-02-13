@@ -1,8 +1,9 @@
 package session
 
 import (
-	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -16,6 +17,15 @@ import (
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
 )
+
+// hashToken creates SHA-256 hash of token
+func hashToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
+}
 
 // Handler handles session management endpoints
 type Handler struct {
@@ -71,11 +81,12 @@ func (h *Handler) ListSessions(c *gin.Context) {
 		return
 	}
 
-	// Get current session token if available (we'll compare by token instead of session ID)
+	// Get current session token hash for comparison
 	authHeader := c.GetHeader("Authorization")
-	var currentToken string
+	var currentTokenHash string
 	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-		currentToken = authHeader[7:]
+		currentToken := authHeader[7:]
+		currentTokenHash = hashToken(currentToken)
 	}
 
 	var sessions []model.UserSession
@@ -93,7 +104,7 @@ func (h *Handler) ListSessions(c *gin.Context) {
 	// Build response
 	responses := make([]SessionResponse, 0, len(sessions))
 	for _, session := range sessions {
-		isCurrent := session.AccessToken == currentToken
+		isCurrent := session.AccessTokenHash == currentTokenHash
 
 		resp := SessionResponse{
 			ID:            session.ID,
@@ -178,16 +189,9 @@ func (h *Handler) RevokeSession(c *gin.Context) {
 		return
 	}
 
-	// Remove from cache
-	if h.sessionCache != nil {
-		ctx := context.Background()
-		if err := h.sessionCache.RemoveTokens(ctx, session.AccessToken, session.RefreshToken); err != nil {
-			logging.Warn("failed to remove session from cache",
-				zap.Error(err),
-				zap.Uint64("session_id", session.ID),
-			)
-		}
-	}
+	// Remove from cache is not possible without the original tokens
+	// The cache entries will naturally expire based on their TTL
+	// The revoked_at flag in the database will prevent any cached tokens from being used
 
 	response.Success(c, gin.H{
 		"message": "session revoked successfully",
@@ -273,18 +277,9 @@ func (h *Handler) RevokeAllSessions(c *gin.Context) {
 		return
 	}
 
-	// Remove from cache
-	if h.sessionCache != nil {
-		ctx := context.Background()
-		for _, session := range sessions {
-			if err := h.sessionCache.RemoveTokens(ctx, session.AccessToken, session.RefreshToken); err != nil {
-				logging.Warn("failed to remove session from cache",
-					zap.Error(err),
-					zap.Uint64("session_id", session.ID),
-				)
-			}
-		}
-	}
+	// Cache removal is not possible without the original tokens
+	// The cache entries will naturally expire based on their TTL
+	// The revoked_at flag in the database will prevent any cached tokens from being used
 
 	response.Success(c, gin.H{
 		"message":        "all other sessions revoked successfully",

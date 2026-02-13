@@ -96,18 +96,18 @@ type UserOAuthState struct {
 
 // UserSession represents an access/refresh token pair for a user.
 type UserSession struct {
-	ID            uint64    `gorm:"primaryKey"`
-	UserID        uint64    `gorm:"index;not null"`
-	AccessToken   string    `gorm:"size:255;uniqueIndex"`
-	RefreshToken  string    `gorm:"size:255;uniqueIndex"`
-	AccessExpiry  time.Time `gorm:"index"`
-	RefreshExpiry time.Time `gorm:"index"`
-	UserAgent     string    `gorm:"size:512"`
-	ClientIP      string    `gorm:"size:128"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	RevokedAt     sql.NullTime `gorm:"type:datetime(3)"`
-	RevokedReason string       `gorm:"size:255"`
+	ID               uint64    `gorm:"primaryKey"`
+	UserID           uint64    `gorm:"index;not null"`
+	AccessTokenHash  string    `gorm:"size:64;uniqueIndex;not null"` // SHA-256 hash of access token
+	RefreshTokenHash string    `gorm:"size:64;uniqueIndex;not null"` // SHA-256 hash of refresh token
+	AccessExpiry     time.Time `gorm:"index"`
+	RefreshExpiry    time.Time `gorm:"index"`
+	UserAgent        string    `gorm:"size:512"`
+	ClientIP         string    `gorm:"size:128"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	RevokedAt        sql.NullTime `gorm:"type:datetime(3)"`
+	RevokedReason    string       `gorm:"size:255"`
 }
 
 // LoginAudit captures login attempts for monitoring.

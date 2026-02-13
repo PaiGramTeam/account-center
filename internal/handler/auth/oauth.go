@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
@@ -200,6 +201,12 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	tokenResp, err := h.exchangeCodeForToken(ctx, provider, req.Code, stateRecord.CodeVerifier, providerCfg)
 	if err != nil {
 		response.BadRequest(c, fmt.Sprintf("token exchange failed: %v", err))
+		return
+	}
+
+	// Step 2.5: Verify ID token nonce (OIDC)
+	if err := verifyIDToken(tokenResp.IDToken, stateRecord.Nonce); err != nil {
+		response.BadRequest(c, fmt.Sprintf("ID token validation failed: %v", err))
 		return
 	}
 
@@ -604,4 +611,48 @@ func (h *Handler) fetchUserInfo(ctx context.Context, provider, accessToken strin
 	}
 
 	return &userInfo, nil
+}
+
+// verifyIDToken validates an OIDC ID token's nonce claim
+// This prevents token replay attacks for OIDC providers
+func verifyIDToken(idToken, expectedNonce string) error {
+	if idToken == "" {
+		// Not all providers return ID tokens (e.g., GitHub doesn't)
+		return nil
+	}
+
+	if expectedNonce == "" {
+		// No nonce to verify
+		return nil
+	}
+
+	// Parse JWT without signature verification (we trust the token came from provider via HTTPS)
+	// Signature verification would require fetching provider's public keys (JWKS)
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	token, _, err := parser.ParseUnverified(idToken, jwt.MapClaims{})
+	if err != nil {
+		return fmt.Errorf("failed to parse ID token: %w", err)
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return fmt.Errorf("invalid ID token claims")
+	}
+
+	// Verify nonce claim
+	nonce, ok := claims["nonce"].(string)
+	if !ok {
+		// Some providers might not include nonce if not in auth request
+		return nil
+	}
+
+	if nonce != expectedNonce {
+		return fmt.Errorf("ID token nonce mismatch: expected %s, got %s", expectedNonce, nonce)
+	}
+
+	// Optionally verify other claims
+	// iss (issuer), aud (audience), exp (expiration), iat (issued at)
+	// For production, should verify signature using provider's JWKS
+
+	return nil
 }

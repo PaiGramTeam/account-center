@@ -28,6 +28,7 @@ type AppConfig struct {
 	Mode           string   `mapstructure:"mode"`
 	TrustedProxies []string `mapstructure:"trusted_proxies"` // Trusted proxy CIDR ranges for X-Forwarded-For
 	RealIPHeader   string   `mapstructure:"real_ip_header"`  // Custom header for real IP (e.g., "CF-Connecting-IP")
+	IPv6Subnet     int      `mapstructure:"ipv6_subnet"`     // IPv6 subnet prefix length for rate limiting (default: 64)
 }
 
 // DatabaseConfig holds MySQL connection configuration.
@@ -230,6 +231,7 @@ func setDefaults(v *viper.Viper) {
 		"192.168.0.0/16", // private network
 	})
 	v.SetDefault("app.real_ip_header", "") // Empty means use X-Forwarded-For via TrustedProxies
+	v.SetDefault("app.ipv6_subnet", 64)    // /64 subnet (typical home/business allocation)
 
 	v.SetDefault("database.config", "charset=utf8mb4&parseTime=True&loc=Asia%2FShanghai")
 	v.SetDefault("database.migrations_dir", "initialize/migrate/sql")

@@ -8,6 +8,7 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
+	"paigram/internal/geolocation"
 	authhandler "paigram/internal/handler/auth"
 	profilehandler "paigram/internal/handler/profile"
 	securityhandler "paigram/internal/handler/security"
@@ -56,8 +57,11 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	api := engine.Group("/api")
 	v1 := api.Group("/v1")
 
+	// Initialize geolocation service
+	geoService := geolocation.NewService()
+
 	// Public routes - no authentication required
-	authHandler := authhandler.NewHandler(db, authCfg, cfg.Email, cache)
+	authHandler := authhandler.NewHandler(db, authCfg, cfg.Email, cache, geoService)
 	authGroup := v1.Group("/auth")
 	{
 		// Apply rate limiting to auth endpoints if enabled

@@ -64,6 +64,14 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 	deviceType, os, browser := parseUserAgent(userAgent)
 	deviceName := browser + " / " + os
 
+	// Resolve IP location (async to avoid blocking)
+	location := ""
+	if h.geoService != nil {
+		if loc, err := h.geoService.Lookup(clientIP); err == nil {
+			location = loc.String()
+		}
+	}
+
 	var device model.UserDevice
 	err = tx.Where("device_id = ?", deviceID).First(&device).Error
 	if err != nil {
@@ -77,7 +85,7 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 				OS:           os,
 				Browser:      browser,
 				IP:           clientIP,
-				Location:     "", // Could be populated using IP geolocation service
+				Location:     location,
 				LastActiveAt: now,
 			}
 			if err := tx.Create(&device).Error; err != nil {
@@ -94,6 +102,7 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 			"device_name":    deviceName,
 			"os":             os,
 			"browser":        browser,
+			"location":       location,
 		}
 		if err := tx.Model(&model.UserDevice{}).Where("id = ?", device.ID).Updates(updates).Error; err != nil {
 			log.Printf("failed to update device record: %v", err)
@@ -107,7 +116,7 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 		IP:        clientIP,
 		UserAgent: userAgent,
 		Device:    deviceName,
-		Location:  "", // Could be populated using IP geolocation service
+		Location:  location,
 		Status:    "success",
 		CreatedAt: now,
 	}

@@ -77,3 +77,21 @@ func (h *Handler) getBcryptCost() int {
 	}
 	return cost
 }
+
+// generatePKCE generates a PKCE code verifier and challenge
+// RFC 7636: Proof Key for Code Exchange
+// Returns: (codeVerifier, codeChallenge, error)
+func generatePKCE() (string, string, error) {
+	// Generate code verifier (43-128 characters, URL-safe base64)
+	verifierBytes := make([]byte, 32) // 32 bytes = 43 chars in base64
+	if _, err := rand.Read(verifierBytes); err != nil {
+		return "", "", err
+	}
+	verifier := base64.RawURLEncoding.EncodeToString(verifierBytes)
+
+	// Generate code challenge (SHA-256 hash of verifier, base64url encoded)
+	hash := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(hash[:])
+
+	return verifier, challenge, nil
+}

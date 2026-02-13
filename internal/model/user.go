@@ -89,13 +89,14 @@ type UserEmail struct {
 
 // UserOAuthState stores temporary OAuth states for CSRF protection.
 type UserOAuthState struct {
-	ID         uint64    `gorm:"primaryKey"`
-	Provider   string    `gorm:"size:64;index"`
-	State      string    `gorm:"size:255;uniqueIndex"`
-	RedirectTo string    `gorm:"size:512"`
-	Nonce      string    `gorm:"size:255"`
-	ExpiresAt  time.Time `gorm:"index"`
-	CreatedAt  time.Time
+	ID           uint64    `gorm:"primaryKey"`
+	Provider     string    `gorm:"size:64;index"`
+	State        string    `gorm:"size:255;uniqueIndex"`
+	RedirectTo   string    `gorm:"size:512"`
+	Nonce        string    `gorm:"size:255"`
+	CodeVerifier string    `gorm:"size:255;index"` // PKCE code verifier
+	ExpiresAt    time.Time `gorm:"index"`
+	CreatedAt    time.Time
 }
 
 // UserSession represents an access/refresh token pair for a user.

@@ -18,6 +18,7 @@ type Bot struct {
 	APIKey       string       `gorm:"size:255;uniqueIndex;not null"`
 	APISecret    string       `gorm:"size:512;not null"` // Should be hashed
 	Scopes       string       `gorm:"size:1024"`         // JSON array of scopes
+	Metadata     string       `gorm:"type:json"`         // Custom metadata (JSON)
 	LastActiveAt sql.NullTime `gorm:"type:datetime(3)"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
@@ -35,6 +36,7 @@ type BotToken struct {
 	RateLimitMax        *int         `gorm:"type:int"`    // Max requests within time window
 	RequestCount        int          `gorm:"default:0;not null"`
 	LastRequest         sql.NullTime `gorm:"type:datetime(3);index"`
+	Metadata            string       `gorm:"type:json"` // Custom metadata for this token (JSON)
 	ExpiresAt           time.Time    `gorm:"index;not null"`
 	CreatedAt           time.Time
 	RevokedAt           sql.NullTime `gorm:"type:datetime(3)"`

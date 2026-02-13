@@ -97,6 +97,7 @@ func (s *BotAuthService) RegisterBot(ctx context.Context, req *RegisterBotReques
 		APIKey:      apiKey,
 		APISecret:   string(hashedSecret),
 		Scopes:      s.encodeScopesJSON(req.Scopes),
+		Metadata:    req.Metadata, // Store metadata as-is (should be valid JSON)
 	}
 
 	if err := s.db.Create(bot).Error; err != nil {
@@ -588,6 +589,7 @@ func (s *BotAuthService) modelBotToProto(bot *model.Bot) *Bot {
 		Type:        s.convertStringToBotType(bot.Type),
 		Status:      s.convertStringToBotStatus(bot.Status),
 		Scopes:      s.decodeScopesJSON(bot.Scopes),
+		Metadata:    bot.Metadata,
 		CreatedAt:   timestamppb.New(bot.CreatedAt),
 		UpdatedAt:   timestamppb.New(bot.UpdatedAt),
 	}
@@ -655,6 +657,7 @@ type RegisterBotRequest struct {
 	Type        BotType
 	Scopes      []string
 	OwnerEmail  string
+	Metadata    string // JSON string
 }
 
 type RegisterBotResponse struct {
@@ -731,6 +734,7 @@ type Bot struct {
 	Type         BotType
 	Status       BotStatus
 	Scopes       []string
+	Metadata     string // JSON string
 	CreatedAt    *timestamppb.Timestamp
 	UpdatedAt    *timestamppb.Timestamp
 	LastActiveAt *timestamppb.Timestamp

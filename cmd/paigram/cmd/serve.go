@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"paigram/internal/config"
 	"paigram/internal/crypto"
 	"paigram/internal/database"
+	"paigram/internal/email"
 	"paigram/internal/geolocation"
 	"paigram/internal/grpc/server"
 	authhandler "paigram/internal/handler/auth"
@@ -79,6 +81,27 @@ func runServer() {
 		defer redisClient.Close()
 	}
 
+	// Initialize email service singleton
+	var emailService *email.Service
+	var err error
+	if redisClient != nil {
+		emailService, err = email.NewServiceWithRedis(cfg.Email, redisClient)
+	} else {
+		emailService, err = email.NewService(cfg.Email)
+	}
+	if err != nil {
+		log.Fatalf("email service initialization failed: %v", err)
+	}
+	defer emailService.Close()
+
+	// Start email queue if async is enabled
+	if cfg.Email.UseAsyncQueue {
+		if err := emailService.StartQueue(context.Background()); err != nil {
+			log.Fatalf("failed to start email queue: %v", err)
+		}
+		log.Printf("Email queue started (backend: %s)", cfg.Email.QueueBackend)
+	}
+
 	// Create wait group for graceful shutdown
 	var wg sync.WaitGroup
 
@@ -99,7 +122,7 @@ func runServer() {
 	if cfg.Redis.Enabled {
 		// Create auth handler for worker
 		geoService := geolocation.NewService()
-		authHandler := authhandler.NewHandler(db, cfg.Auth, cfg.Email, cfg.Security, sessionStore, geoService)
+		authHandler := authhandler.NewHandler(db, cfg.Auth, emailService, cfg.Security, sessionStore, geoService)
 
 		asynqServer, asynqScheduler, err := worker.StartAsynqServer(cfg, redisClient, db, authHandler)
 		if err != nil {
@@ -118,7 +141,7 @@ func runServer() {
 	}
 
 	// Start HTTP server
-	engine := router.New(cfg, sessionStore, db, rateLimitStore)
+	engine := router.New(cfg, sessionStore, db, rateLimitStore, emailService)
 	addr := fmt.Sprintf("%s:%d", cfg.App.Host, cfg.App.Port)
 
 	wg.Add(1)

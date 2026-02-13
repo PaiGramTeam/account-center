@@ -270,18 +270,35 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 			}
 
 			if email := strings.TrimSpace(strings.ToLower(userInfo.Email)); email != "" {
-				emailModel := model.UserEmail{
-					UserID:    user.ID,
-					Email:     email,
-					IsPrimary: true,
+				// Check if email already exists for another user
+				var existingEmail model.UserEmail
+				emailExists := tx.Where("email = ?", email).First(&existingEmail).Error == nil
+
+				if emailExists {
+					// Email belongs to another account
+					log.Printf("[OAuth] Email conflict: %s from %s provider already exists for user_id=%d",
+						email, provider, existingEmail.UserID)
+
+					// For now, skip email creation (user created without email)
+					// TODO: Implement account linking confirmation flow
+					// Option 1: Send email to user asking to confirm account merge
+					// Option 2: Create account without email, user must link manually
+					// Option 3: Fail authentication and show linking UI
+				} else {
+					// Email is available, create it
+					emailModel := model.UserEmail{
+						UserID:    user.ID,
+						Email:     email,
+						IsPrimary: true,
+					}
+					if userInfo.EmailVerified {
+						emailModel.VerifiedAt = shared.MakeNullTime(now)
+					}
+					if err := tx.Create(&emailModel).Error; err != nil {
+						return err
+					}
+					emailRecord = &emailModel
 				}
-				if userInfo.EmailVerified {
-					emailModel.VerifiedAt = shared.MakeNullTime(now)
-				}
-				if err := tx.Create(&emailModel).Error; err != nil {
-					return err
-				}
-				emailRecord = &emailModel
 			}
 
 			// Create credential with ENCRYPTED tokens
@@ -333,27 +350,43 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 				err := tx.Where("user_id = ? AND email = ?", user.ID, email).First(&userEmail).Error
 				if err != nil {
 					if errors.Is(err, gorm.ErrRecordNotFound) {
-						userEmail = model.UserEmail{
-							UserID:    user.ID,
-							Email:     email,
-							IsPrimary: false,
-						}
-						if userInfo.EmailVerified {
-							userEmail.VerifiedAt = shared.MakeNullTime(now)
-						}
-						if err := tx.Create(&userEmail).Error; err != nil {
-							return err
+						// Check if email exists for another user
+						var conflictEmail model.UserEmail
+						conflict := tx.Where("email = ?", email).First(&conflictEmail).Error == nil
+
+						if conflict {
+							// Email belongs to different user - skip adding
+							log.Printf("[OAuth] Email conflict on update: %s from %s provider already exists for user_id=%d (current user_id=%d)",
+								email, provider, conflictEmail.UserID, user.ID)
+							// Don't create email record for this user
+						} else {
+							// Email is available
+							userEmail = model.UserEmail{
+								UserID:    user.ID,
+								Email:     email,
+								IsPrimary: false,
+							}
+							if userInfo.EmailVerified {
+								userEmail.VerifiedAt = shared.MakeNullTime(now)
+							}
+							if err := tx.Create(&userEmail).Error; err != nil {
+								return err
+							}
+							emailRecord = &userEmail
 						}
 					} else {
 						return err
 					}
 				} else if userInfo.EmailVerified && !userEmail.VerifiedAt.Valid {
+					// Update verification status
 					userEmail.VerifiedAt = shared.MakeNullTime(now)
 					if err := tx.Save(&userEmail).Error; err != nil {
 						return err
 					}
+					emailRecord = &userEmail
+				} else {
+					emailRecord = &userEmail
 				}
-				emailRecord = &userEmail
 			}
 		}
 

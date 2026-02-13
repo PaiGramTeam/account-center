@@ -63,6 +63,7 @@ func (tm *TemplateManager) loadTemplatesFromFiles() error {
 		"password_changed":   "password_changed.html",
 		"new_device_login":   "new_device_login.html",
 		"2fa_backup_codes":   "2fa_backup_codes.html",
+		"suspicious_login":   "suspicious_login.html",
 	}
 
 	for name, filename := range templateFiles {
@@ -97,6 +98,7 @@ func (tm *TemplateManager) loadEmbeddedTemplates() {
 	tm.templates["password_changed"] = template.Must(template.New("password_changed").Funcs(templateFuncs).Parse(passwordChangedTemplate))
 	tm.templates["new_device_login"] = template.Must(template.New("new_device_login").Funcs(templateFuncs).Parse(newDeviceLoginTemplate))
 	tm.templates["2fa_backup_codes"] = template.Must(template.New("2fa_backup_codes").Funcs(templateFuncs).Parse(twoFactorBackupCodesTemplate))
+	tm.templates["suspicious_login"] = template.Must(template.New("suspicious_login").Funcs(templateFuncs).Parse(suspiciousLoginTemplate))
 
 	logging.Info("loaded embedded email templates", zap.Int("count", len(tm.templates)))
 }

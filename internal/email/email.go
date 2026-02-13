@@ -371,6 +371,70 @@ Keep these codes safe and do not share them with anyone.
 	return s.SendAsync(ctx, msg)
 }
 
+// SendSuspiciousLoginEmail sends a suspicious login alert
+func (s *Service) SendSuspiciousLoginEmail(ctx context.Context, to string, data *SuspiciousLoginData) error {
+	if err := data.Validate(); err != nil {
+		return fmt.Errorf("validate template data: %w", err)
+	}
+
+	htmlBody, err := s.renderTemplate("suspicious_login", data)
+	if err != nil {
+		return fmt.Errorf("render template: %w", err)
+	}
+
+	textBody := fmt.Sprintf(`
+SECURITY ALERT: Suspicious Login Detected
+
+We detected a suspicious login attempt to your account.
+
+Suspicion Level: %s
+Reason: %s
+
+Login Details:
+- Device: %s
+- Device Type: %s
+- Location: %s
+- IP Address: %s
+- Time: %s
+
+Was this you?
+
+If you recognize this login, you can safely ignore this email.
+
+If you did NOT authorize this login:
+1. Change your password immediately
+2. Review your recent account activity
+3. Enable Two-Factor Authentication (2FA) if not already enabled
+4. Contact our support team
+
+Secure your account: %s
+
+This is an automated security alert. We monitor login activity to protect your account from unauthorized access.
+
+Need help? Contact us at support@paigram.com
+© 2024 PaiGram. All rights reserved.
+`,
+		data.SuspicionLevel,
+		data.SuspicionReason,
+		data.DeviceName,
+		data.DeviceType,
+		data.Location,
+		data.IP,
+		data.Timestamp,
+		data.SecurityURL,
+	)
+
+	msg := &Message{
+		To:       []string{to},
+		Subject:  "🔒 Security Alert: Suspicious Login Detected",
+		TextBody: textBody,
+		HTMLBody: htmlBody,
+		Priority: PriorityCritical, // Suspicious login alerts are critical
+	}
+
+	return s.SendAsync(ctx, msg)
+}
+
 // formatBackupCodes formats backup codes for text display
 func formatBackupCodes(codes []string) string {
 	var buf bytes.Buffer

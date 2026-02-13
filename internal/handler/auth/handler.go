@@ -6,20 +6,23 @@ import (
 
 	"paigram/internal/config"
 	"paigram/internal/geolocation"
+	"paigram/internal/security"
 	"paigram/internal/sessioncache"
 )
 
 // Handler coordinates authentication-related endpoints (email + OAuth).
 type Handler struct {
-	db           *gorm.DB
-	cfg          config.AuthConfig
-	emailCfg     config.EmailConfig
-	sessionCache sessioncache.Store
-	geoService   *geolocation.Service
+	db               *gorm.DB
+	cfg              config.AuthConfig
+	emailCfg         config.EmailConfig
+	securityCfg      config.SecurityConfig
+	sessionCache     sessioncache.Store
+	geoService       *geolocation.Service
+	securityAnalyzer *security.Analyzer
 }
 
 // NewHandler constructs an auth Handler.
-func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailCfg config.EmailConfig, cache sessioncache.Store, geoService *geolocation.Service) *Handler {
+func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailCfg config.EmailConfig, securityCfg config.SecurityConfig, cache sessioncache.Store, geoService *geolocation.Service) *Handler {
 	if cache == nil {
 		cache = sessioncache.NewNoopStore()
 	}
@@ -27,11 +30,13 @@ func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailCfg config.EmailConfig,
 		geoService = geolocation.NewService()
 	}
 	return &Handler{
-		db:           db,
-		cfg:          cfg,
-		emailCfg:     emailCfg,
-		sessionCache: cache,
-		geoService:   geoService,
+		db:               db,
+		cfg:              cfg,
+		emailCfg:         emailCfg,
+		securityCfg:      securityCfg,
+		sessionCache:     cache,
+		geoService:       geoService,
+		securityAnalyzer: security.NewAnalyzer(db),
 	}
 }
 

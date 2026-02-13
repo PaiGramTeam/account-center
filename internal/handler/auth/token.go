@@ -12,7 +12,9 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
+	"paigram/internal/email"
 	"paigram/internal/model"
+	"paigram/internal/security"
 	"paigram/internal/sessioncache"
 )
 
@@ -124,6 +126,22 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 		log.Printf("failed to create login log: %v", err)
 	}
 
+	// Perform suspicious login detection
+	if h.securityCfg.SuspiciousLoginDetection && h.securityAnalyzer != nil {
+		analysis, err := h.securityAnalyzer.AnalyzeLogin(userID, deviceID, clientIP, location)
+		if err != nil {
+			log.Printf("failed to analyze login: %v", err)
+		} else if analysis.IsSuspicious() {
+			log.Printf("Suspicious login detected for user %d: level=%s, reasons=%v",
+				userID, analysis.Level, analysis.Reasons)
+
+			// Send email alert if enabled (async to avoid blocking login)
+			if h.securityCfg.SuspiciousLoginEmailAlert && h.emailCfg.Enabled {
+				go h.sendSuspiciousLoginAlert(userID, clientIP, deviceName, deviceType, location, analysis)
+			}
+		}
+	}
+
 	// Cache session with original tokens for verification
 	h.cacheStoreSessionWithTokens(session, accessToken, refreshToken)
 
@@ -173,6 +191,51 @@ func (h *Handler) revokeSession(tx *gorm.DB, session *model.UserSession, reason 
 		return err
 	}
 	return nil
+}
+
+// sendSuspiciousLoginAlert sends an email notification for suspicious login activity
+func (h *Handler) sendSuspiciousLoginAlert(userID uint64, ip, deviceName, deviceType, location string, analysis *security.LoginAnalysis) {
+	// Get user's primary email
+	var userEmail model.UserEmail
+	if err := h.db.Where("user_id = ? AND is_primary = ?", userID, true).First(&userEmail).Error; err != nil {
+		log.Printf("failed to get user email for suspicious login alert: %v", err)
+		return
+	}
+
+	// Build email service
+	emailService, err := email.NewService(h.emailCfg)
+	if err != nil {
+		log.Printf("failed to create email service for suspicious login alert: %v", err)
+		return
+	}
+
+	// Prepare email data
+	suspicionLevel := analysis.Level.String()
+	suspicionReason := strings.Join(analysis.Reasons, ", ")
+
+	// Capitalize first letter
+	if len(suspicionLevel) > 0 {
+		suspicionLevel = strings.ToUpper(suspicionLevel[:1]) + suspicionLevel[1:]
+	}
+
+	emailData := &email.SuspiciousLoginData{
+		DeviceName:      deviceName,
+		DeviceType:      deviceType,
+		Location:        location,
+		IP:              ip,
+		Timestamp:       time.Now().UTC().Format("2006-01-02 15:04:05 MST"),
+		SuspicionLevel:  suspicionLevel,
+		SuspicionReason: suspicionReason,
+		SecurityURL:     h.securityCfg.SecuritySettingsURL,
+	}
+
+	// Send email
+	ctx := context.Background()
+	if err := emailService.SendSuspiciousLoginEmail(ctx, userEmail.Email, emailData); err != nil {
+		log.Printf("failed to send suspicious login email: %v", err)
+	} else {
+		log.Printf("Sent suspicious login alert to user %d (%s)", userID, userEmail.Email)
+	}
 }
 
 func (h *Handler) recordLoginAudit(tx *gorm.DB, audit model.LoginAudit) error {

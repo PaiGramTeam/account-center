@@ -132,3 +132,21 @@ email:
 # - TLS Security: MinVersion TLS 1.2, certificate verification enabled
 # - Prometheus Metrics: emails_sent_total, email_send_duration_seconds, etc.
 # - Template Management: Load from files or use embedded templates with hot reload
+
+# Security Settings
+security:
+  # Suspicious Login Detection
+  suspicious_login_detection: true      # Enable analyzing logins for suspicious patterns
+  suspicious_login_email_alert: true    # Send email alerts when suspicious logins detected
+  security_settings_url: "http://localhost:8080/security"  # URL to account security page
+  
+  # Detection triggers:
+  # - Login from new device
+  # - Login from new IP address  
+  # - Login from new geographic location
+  # - Rapid logins from different locations (impossible travel)
+  #
+  # Suspicion levels:
+  # - Low: Single new factor (e.g., new device)
+  # - Medium: Two new factors (e.g., new device + new location)
+  # - High: Impossible travel or 3+ new factors

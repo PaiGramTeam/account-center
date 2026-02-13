@@ -70,7 +70,7 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 		return
 	}
 
-	passwordHash, err := hashPassword(req.Password)
+	passwordHash, err := hashPassword(req.Password, h.getBcryptCost())
 	if err != nil {
 		response.InternalServerError(c, "failed to hash password")
 		return

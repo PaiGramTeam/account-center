@@ -204,7 +204,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	profileHandler.RegisterEmailRoutes(emailGroup)
 
 	// Security routes (password change, 2FA) - only self + fresh session for sensitive ops
-	securityHandler := securityhandler.NewHandler(db, cache)
+	securityHandler := securityhandler.NewHandler(db, cache, cfg.Security)
 	security := protected.Group("/profiles/:id")
 	security.Use(middleware.RequireSelf())
 	{

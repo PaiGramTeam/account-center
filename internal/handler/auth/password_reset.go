@@ -217,7 +217,7 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	}
 
 	// Hash new password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), h.getBcryptCost())
 	if err != nil {
 		logging.Error("failed to hash password",
 			zap.Error(err),

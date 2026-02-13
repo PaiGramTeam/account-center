@@ -146,6 +146,7 @@ type SecurityConfig struct {
 	SuspiciousLoginDetection  bool   `mapstructure:"suspicious_login_detection"`   // Enable suspicious login detection
 	SuspiciousLoginEmailAlert bool   `mapstructure:"suspicious_login_email_alert"` // Send email alerts for suspicious logins
 	SecuritySettingsURL       string `mapstructure:"security_settings_url"`        // URL to account security settings page
+	BcryptCost                int    `mapstructure:"bcrypt_cost"`                  // Bcrypt hashing cost (default: 12, min: 10, max: 31)
 }
 
 var (
@@ -270,4 +271,21 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("email.use_async", true)
 	v.SetDefault("email.retry_attempts", 3)
 	v.SetDefault("email.retry_delay", 5)
+
+	v.SetDefault("security.bcrypt_cost", 12)
+	v.SetDefault("security.suspicious_login_detection", false)
+	v.SetDefault("security.suspicious_login_email_alert", false)
+}
+
+// GetBcryptCost returns the bcrypt cost with validation
+// Returns a safe value between 10 and 14 (default: 12)
+func (c *Config) GetBcryptCost() int {
+	cost := c.Security.BcryptCost
+	if cost < 10 {
+		return 12 // Default: OWASP recommended minimum
+	}
+	if cost > 14 {
+		return 14 // Cap at 14 to prevent DoS (14 takes ~1.5 seconds)
+	}
+	return cost
 }

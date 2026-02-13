@@ -13,6 +13,9 @@ import (
 
 const (
 	defaultTokenByteLength = 32
+	// DefaultBcryptCost is the fallback bcrypt cost if not configured
+	// OWASP recommends minimum 12 (takes ~300ms on modern hardware)
+	DefaultBcryptCost = 12
 )
 
 func randomToken(byteLen int) (string, error) {
@@ -27,11 +30,20 @@ func randomToken(byteLen int) (string, error) {
 	return strings.TrimRight(token, "="), nil
 }
 
-func hashPassword(password string) (string, error) {
+// hashPassword creates a bcrypt hash of the password
+// cost parameter should be between 10-14 (default: 12)
+func hashPassword(password string, cost int) (string, error) {
 	if len(password) == 0 {
 		return "", errors.New("password cannot be empty")
 	}
-	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	// Validate and sanitize cost
+	if cost < 10 {
+		cost = DefaultBcryptCost
+	}
+	if cost > 14 {
+		cost = 14 // Cap at 14 to prevent DoS attacks
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), cost)
 	if err != nil {
 		return "", err
 	}
@@ -52,4 +64,16 @@ func hashToken(token string) string {
 	}
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
+}
+
+// getBcryptCost returns the configured bcrypt cost from Handler
+func (h *Handler) getBcryptCost() int {
+	cost := h.securityCfg.BcryptCost
+	if cost < 10 {
+		return DefaultBcryptCost
+	}
+	if cost > 14 {
+		return 14
+	}
+	return cost
 }

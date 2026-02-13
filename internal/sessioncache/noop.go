@@ -36,3 +36,15 @@ func (*NoopStore) MarkRevoked(_ context.Context, _ TokenType, _ string, _ time.D
 func (*NoopStore) IsRevoked(_ context.Context, _ TokenType, _ string) (bool, error) {
 	return false, nil
 }
+
+func (*NoopStore) IncrementCounter(_ context.Context, _ string, _ time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (*NoopStore) GetTTL(_ context.Context, _ string) (time.Duration, error) {
+	return 0, nil
+}
+
+func (*NoopStore) Delete(_ context.Context, _ string) error {
+	return nil
+}

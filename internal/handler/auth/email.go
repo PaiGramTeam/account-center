@@ -264,6 +264,12 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 
 	// If 2FA is enabled, verify TOTP code or backup code
 	if has2FA {
+		// Check if user is temporarily locked out due to failed 2FA attempts
+		if locked, remaining := h.is2FALocked(c.Request.Context(), user.ID); locked {
+			response.TooManyRequests(c, fmt.Sprintf("too many failed 2FA attempts, try again in %d seconds", int(remaining.Seconds())))
+			return
+		}
+
 		// Check if TOTP code was provided
 		if req.TOTPCode == "" {
 			// No code provided - return 2FA challenge response
@@ -298,6 +304,11 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 
 		// If both TOTP and backup code fail, deny access
 		if !totpValid && !backupCodeValid {
+			// Track failed 2FA attempts to prevent brute force
+			if err := h.track2FAFailure(c.Request.Context(), user.ID); err != nil {
+				log.Printf("[auth] failed to track 2FA failure for user_id=%d: %v", user.ID, err)
+			}
+
 			// Log failed 2FA attempt
 			err = h.db.Transaction(func(tx *gorm.DB) error {
 				return h.logTwoFactorAudit(tx, user.ID, false, "totp_or_backup", c.ClientIP(), c.GetHeader("User-Agent"))
@@ -309,6 +320,9 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 			response.Unauthorized(c, "invalid 2FA code")
 			return
 		}
+
+		// 2FA verification successful - clear failed attempts counter
+		h.clear2FAFailures(c.Request.Context(), user.ID)
 
 		// 2FA verification successful
 		// Update LastUsedAt and remove backup code if used
@@ -753,4 +767,69 @@ func (h *Handler) logTwoFactorAudit(tx *gorm.DB, userID uint64, success bool, me
 
 	log.Printf("[auth] %s for user_id=%d method=%s", message, userID, method)
 	return nil
+}
+
+// is2FALocked checks if user is temporarily locked out due to failed 2FA attempts
+// Returns true and remaining time if locked, false otherwise
+func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Duration) {
+	// If Redis is not enabled, skip rate limiting
+	if h.sessionCache == nil {
+		return false, 0
+	}
+
+	key := fmt.Sprintf("2fa_fail:%d", userID)
+
+	// Get current failure count
+	failCount, err := h.sessionCache.IncrementCounter(ctx, key, 0)
+	if err != nil {
+		log.Printf("[auth] failed to check 2FA lock status: %v", err)
+		return false, 0
+	}
+
+	// Lock threshold: 5 failed attempts
+	const lockThreshold = 5
+	const lockDuration = 15 * time.Minute
+
+	if failCount >= lockThreshold {
+		// Get TTL to determine how long until unlock
+		ttl, err := h.sessionCache.GetTTL(ctx, key)
+		if err != nil || ttl <= 0 {
+			// If can't get TTL or already expired, not locked
+			return false, 0
+		}
+		return true, ttl
+	}
+
+	return false, 0
+}
+
+// track2FAFailure increments the failed 2FA attempt counter
+func (h *Handler) track2FAFailure(ctx context.Context, userID uint64) error {
+	if h.sessionCache == nil {
+		return nil
+	}
+
+	key := fmt.Sprintf("2fa_fail:%d", userID)
+	const lockDuration = 15 * time.Minute
+
+	// Increment counter with 15 minute expiry
+	count, err := h.sessionCache.IncrementCounter(ctx, key, lockDuration)
+	if err != nil {
+		return fmt.Errorf("increment 2FA failure count: %w", err)
+	}
+
+	log.Printf("[auth] 2FA failure count for user_id=%d: %d/5", userID, count)
+	return nil
+}
+
+// clear2FAFailures clears the failed attempt counter after successful 2FA
+func (h *Handler) clear2FAFailures(ctx context.Context, userID uint64) {
+	if h.sessionCache == nil {
+		return
+	}
+
+	key := fmt.Sprintf("2fa_fail:%d", userID)
+	if err := h.sessionCache.Delete(ctx, key); err != nil {
+		log.Printf("[auth] failed to clear 2FA failures for user_id=%d: %v", userID, err)
+	}
 }

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"time"
 
@@ -31,7 +32,18 @@ type RateLimitConfig struct {
 type KeyFunc func(*gin.Context) string
 
 // IPKeyFunc returns a KeyFunc that uses the client IP address as the rate limit key.
+// It respects custom IP headers (e.g., CF-Connecting-IP) if configured via REAL_IP_HEADER env var.
+// Otherwise, it uses Gin's ClientIP() which respects TrustedProxies configuration.
 func IPKeyFunc(c *gin.Context) string {
+	// Check for custom IP header (e.g., Cloudflare's CF-Connecting-IP)
+	if customHeader := os.Getenv("REAL_IP_HEADER"); customHeader != "" {
+		if ip := c.GetHeader(customHeader); ip != "" {
+			return ip
+		}
+	}
+
+	// Fallback to Gin's ClientIP which respects TrustedProxies
+	// SECURITY: Ensure TrustedProxies is configured in router to prevent IP spoofing
 	return c.ClientIP()
 }
 

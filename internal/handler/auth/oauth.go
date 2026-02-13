@@ -72,6 +72,13 @@ func (h *Handler) InitiateOAuth(c *gin.Context) {
 		return
 	}
 
+	// Generate PKCE code verifier and challenge
+	codeVerifier, codeChallenge, err := generatePKCE()
+	if err != nil {
+		response.InternalServerError(c, "failed to generate PKCE")
+		return
+	}
+
 	redirectURL := strings.TrimSpace(req.RedirectTo)
 	if redirectURL == "" {
 		redirectURL = providerCfg.RedirectURL
@@ -87,18 +94,19 @@ func (h *Handler) InitiateOAuth(c *gin.Context) {
 	expiry := time.Now().UTC().Add(stateTTL)
 
 	stateRecord := model.UserOAuthState{
-		Provider:   provider,
-		State:      state,
-		RedirectTo: redirectURL,
-		Nonce:      nonce,
-		ExpiresAt:  expiry,
+		Provider:     provider,
+		State:        state,
+		RedirectTo:   redirectURL,
+		Nonce:        nonce,
+		CodeVerifier: codeVerifier, // Store for later verification
+		ExpiresAt:    expiry,
 	}
 	if err := h.db.Create(&stateRecord).Error; err != nil {
 		response.InternalServerError(c, "failed to persist oauth state")
 		return
 	}
 
-	authURL, err := buildAuthURL(providerCfg, redirectURL, state, nonce)
+	authURL, err := buildAuthURL(providerCfg, redirectURL, state, nonce, codeChallenge)
 	if err != nil {
 		response.InternalServerError(c, "failed to build auth url")
 		return
@@ -185,11 +193,11 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// Step 2: Exchange authorization code for tokens (BACKEND ONLY)
+	// Step 2: Exchange authorization code for tokens (BACKEND ONLY) with PKCE
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	tokenResp, err := h.exchangeCodeForToken(ctx, provider, req.Code, providerCfg)
+	tokenResp, err := h.exchangeCodeForToken(ctx, provider, req.Code, stateRecord.CodeVerifier, providerCfg)
 	if err != nil {
 		response.BadRequest(c, fmt.Sprintf("token exchange failed: %v", err))
 		return
@@ -415,7 +423,7 @@ func (h *Handler) resolveProvider(provider string) (config.OAuthProviderConfig, 
 	return config.OAuthProviderConfig{}, false
 }
 
-func buildAuthURL(cfg config.OAuthProviderConfig, redirectURL, state, nonce string) (string, error) {
+func buildAuthURL(cfg config.OAuthProviderConfig, redirectURL, state, nonce, codeChallenge string) (string, error) {
 	if cfg.AuthURL == "" {
 		return "", fmt.Errorf("missing auth url for provider")
 	}
@@ -437,6 +445,11 @@ func buildAuthURL(cfg config.OAuthProviderConfig, redirectURL, state, nonce stri
 	query.Set("state", state)
 	if nonce != "" {
 		query.Set("nonce", nonce)
+	}
+	// Add PKCE parameters (RFC 7636)
+	if codeChallenge != "" {
+		query.Set("code_challenge", codeChallenge)
+		query.Set("code_challenge_method", "S256") // SHA-256
 	}
 	authURL.RawQuery = query.Encode()
 	return authURL.String(), nil
@@ -474,7 +487,8 @@ type oauthUserInfo struct {
 
 // exchangeCodeForToken exchanges an authorization code for OAuth tokens
 // This is the secure backend token exchange - keeps client_secret safe
-func (h *Handler) exchangeCodeForToken(ctx context.Context, provider, code string, cfg config.OAuthProviderConfig) (*oauthTokenResponse, error) {
+// Uses PKCE code_verifier for additional security
+func (h *Handler) exchangeCodeForToken(ctx context.Context, provider, code, codeVerifier string, cfg config.OAuthProviderConfig) (*oauthTokenResponse, error) {
 	if cfg.TokenURL == "" {
 		return nil, fmt.Errorf("token_url not configured for provider %s", provider)
 	}
@@ -489,6 +503,11 @@ func (h *Handler) exchangeCodeForToken(ctx context.Context, provider, code strin
 
 	if cfg.RedirectURL != "" {
 		data.Set("redirect_uri", cfg.RedirectURL)
+	}
+
+	// Add PKCE code_verifier
+	if codeVerifier != "" {
+		data.Set("code_verifier", codeVerifier)
 	}
 
 	// Create HTTP request

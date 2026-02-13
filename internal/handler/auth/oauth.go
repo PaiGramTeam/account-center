@@ -656,3 +656,100 @@ func verifyIDToken(idToken, expectedNonce string) error {
 
 	return nil
 }
+
+// refreshOAuthToken refreshes an expired OAuth access token using refresh token
+func (h *Handler) refreshOAuthToken(ctx context.Context, credential *model.UserCredential, cfg config.OAuthProviderConfig) error {
+	if cfg.TokenURL == "" {
+		return fmt.Errorf("token_url not configured for provider %s", credential.Provider)
+	}
+
+	// Decrypt refresh token
+	refreshToken, err := credential.GetRefreshToken()
+	if err != nil {
+		return fmt.Errorf("decrypt refresh token: %w", err)
+	}
+
+	if refreshToken == "" {
+		return fmt.Errorf("no refresh token available")
+	}
+
+	// Build token refresh request
+	data := url.Values{
+		"grant_type":    []string{"refresh_token"},
+		"refresh_token": []string{refreshToken},
+		"client_id":     []string{cfg.ClientID},
+		"client_secret": []string{cfg.ClientSecret},
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequestWithContext(ctx, "POST", cfg.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("create refresh request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	// Execute request
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("execute refresh request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read refresh response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("token refresh failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var tokenResp oauthTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return fmt.Errorf("parse refresh response: %w", err)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return fmt.Errorf("no access_token in refresh response")
+	}
+
+	// Update credential with new tokens (encrypted)
+	now := time.Now().UTC()
+
+	if err := credential.SetAccessToken(tokenResp.AccessToken); err != nil {
+		return fmt.Errorf("encrypt new access token: %w", err)
+	}
+
+	// Some providers issue new refresh token on refresh
+	if tokenResp.RefreshToken != "" {
+		if err := credential.SetRefreshToken(tokenResp.RefreshToken); err != nil {
+			return fmt.Errorf("encrypt new refresh token: %w", err)
+		}
+	}
+
+	// Update token expiry
+	if tokenResp.ExpiresIn > 0 {
+		credential.TokenExpiry = shared.MakeNullTime(now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second))
+	} else {
+		credential.TokenExpiry = shared.ClearNullTime()
+	}
+
+	credential.LastSyncAt = shared.MakeNullTime(now)
+
+	// Save to database
+	if err := h.db.Save(credential).Error; err != nil {
+		return fmt.Errorf("save refreshed credential: %w", err)
+	}
+
+	return nil
+}
+
+// RefreshOAuthTokenPublic is a public wrapper for refreshOAuthToken
+// Used by background workers to refresh expiring tokens
+func (h *Handler) RefreshOAuthTokenPublic(ctx context.Context, credential *model.UserCredential, cfg config.OAuthProviderConfig) error {
+	return h.refreshOAuthToken(ctx, credential, cfg)
+}

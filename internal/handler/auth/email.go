@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -665,8 +666,22 @@ func defaultLocale(input string) string {
 }
 
 // verifyTOTP validates a TOTP code against the secret
+// Accepts codes from ±1 time period (±30 seconds) to account for clock skew
 func verifyTOTP(code, secret string) bool {
-	return totp.Validate(code, secret)
+	// Use ValidateCustom to accept codes from previous and next time window
+	// This follows better-auth best practice of accepting ±1 period
+	valid, err := totp.ValidateCustom(
+		code,
+		secret,
+		time.Now(),
+		totp.ValidateOpts{
+			Period:    30,                // Standard 30-second period
+			Skew:      1,                 // Accept ±1 time window (±30 seconds)
+			Digits:    otp.DigitsSix,     // Standard 6-digit codes
+			Algorithm: otp.AlgorithmSHA1, // Standard SHA1 algorithm
+		},
+	)
+	return err == nil && valid
 }
 
 // verifyBackupCode checks if the provided code matches any backup code

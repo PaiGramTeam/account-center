@@ -136,7 +136,7 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 				userID, analysis.Level, analysis.Reasons)
 
 			// Send email alert if enabled (async to avoid blocking login)
-			if h.securityCfg.SuspiciousLoginEmailAlert && h.emailCfg.Enabled {
+			if h.securityCfg.SuspiciousLoginEmailAlert && h.emailService != nil {
 				go h.sendSuspiciousLoginAlert(userID, clientIP, deviceName, deviceType, location, analysis)
 			}
 		}
@@ -202,13 +202,6 @@ func (h *Handler) sendSuspiciousLoginAlert(userID uint64, ip, deviceName, device
 		return
 	}
 
-	// Build email service
-	emailService, err := email.NewService(h.emailCfg)
-	if err != nil {
-		log.Printf("failed to create email service for suspicious login alert: %v", err)
-		return
-	}
-
 	// Prepare email data
 	suspicionLevel := analysis.Level.String()
 	suspicionReason := strings.Join(analysis.Reasons, ", ")
@@ -229,9 +222,9 @@ func (h *Handler) sendSuspiciousLoginAlert(userID uint64, ip, deviceName, device
 		SecurityURL:     h.securityCfg.SecuritySettingsURL,
 	}
 
-	// Send email
+	// Send email using the singleton email service
 	ctx := context.Background()
-	if err := emailService.SendSuspiciousLoginEmail(ctx, userEmail.Email, emailData); err != nil {
+	if err := h.emailService.SendSuspiciousLoginEmail(ctx, userEmail.Email, emailData); err != nil {
 		log.Printf("failed to send suspicious login email: %v", err)
 	} else {
 		log.Printf("Sent suspicious login alert to user %d (%s)", userID, userEmail.Email)

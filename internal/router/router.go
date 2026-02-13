@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
+	"paigram/internal/email"
 	"paigram/internal/geolocation"
 	authhandler "paigram/internal/handler/auth"
 	profilehandler "paigram/internal/handler/profile"
@@ -23,7 +24,7 @@ import (
 )
 
 // New initialises the Gin router with application routes.
-func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitStore limiter.Store) *gin.Engine {
+func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitStore limiter.Store, emailService *email.Service) *gin.Engine {
 	appCfg := cfg.App
 	authCfg := cfg.Auth
 	rateLimitCfg := cfg.RateLimit
@@ -79,7 +80,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	geoService := geolocation.NewService()
 
 	// Public routes - no authentication required
-	authHandler := authhandler.NewHandler(db, authCfg, cfg.Email, cfg.Security, cache, geoService)
+	authHandler := authhandler.NewHandler(db, authCfg, emailService, cfg.Security, cache, geoService)
 	authGroup := v1.Group("/auth")
 	{
 		// Apply rate limiting to auth endpoints if enabled

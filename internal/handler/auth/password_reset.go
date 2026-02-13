@@ -14,7 +14,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"paigram/internal/email"
 	"paigram/internal/logging"
 	"paigram/internal/model"
 	"paigram/internal/response"
@@ -138,14 +137,6 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 	// the email exists or not, preventing attackers from determining valid emails
 	// based on response time differences
 	go func(userEmail string, userID uint64, token string, origin string) {
-		emailService, err := email.NewService(h.emailCfg)
-		if err != nil {
-			logging.Error("failed to create email service",
-				zap.Error(err),
-			)
-			return
-		}
-
 		baseURL := origin
 		if baseURL == "" {
 			baseURL = "http://localhost:8080" // Fallback, should be configured
@@ -153,7 +144,7 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 
 		// Use background context since the HTTP request is already complete
 		ctx := context.Background()
-		if err := emailService.SendPasswordResetEmail(ctx, userEmail, token, baseURL); err != nil {
+		if err := h.emailService.SendPasswordResetEmail(ctx, userEmail, token, baseURL); err != nil {
 			logging.Error("failed to send password reset email",
 				zap.Error(err),
 				zap.Uint64("user_id", userID),
@@ -266,14 +257,6 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	// Send password changed notification email asynchronously
 	// This prevents response time variations and doesn't block the success response
 	go func(userID uint64) {
-		emailService, err := email.NewService(h.emailCfg)
-		if err != nil {
-			logging.Error("failed to create email service",
-				zap.Error(err),
-			)
-			return
-		}
-
 		// Get primary email
 		var userEmail model.UserEmail
 		if err := h.db.Where("user_id = ? AND is_primary = ?", userID, true).
@@ -287,7 +270,7 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 
 		// Use background context since the HTTP request is already complete
 		ctx := context.Background()
-		if err := emailService.SendPasswordChangedEmail(ctx, userEmail.Email); err != nil {
+		if err := h.emailService.SendPasswordChangedEmail(ctx, userEmail.Email); err != nil {
 			logging.Error("failed to send password changed email",
 				zap.Error(err),
 				zap.Uint64("user_id", userID),

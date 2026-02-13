@@ -19,6 +19,9 @@ type Handler struct {
 	sessionCache     sessioncache.Store
 	geoService       *geolocation.Service
 	securityAnalyzer *security.Analyzer
+	// SECURITY: In-memory fallback for 2FA rate limiting when Redis is unavailable
+	// WARNING: Not suitable for multi-instance deployments (no cross-instance sync)
+	memory2FALimiter *memory2FARateLimiter
 }
 
 // NewHandler constructs an auth Handler.
@@ -37,6 +40,7 @@ func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailCfg config.EmailConfig,
 		sessionCache:     cache,
 		geoService:       geoService,
 		securityAnalyzer: security.NewAnalyzer(db),
+		memory2FALimiter: newMemory2FARateLimiter(), // Always create in-memory fallback
 	}
 }
 

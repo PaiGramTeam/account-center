@@ -879,64 +879,93 @@ func (h *Handler) logTwoFactorAudit(tx *gorm.DB, userID uint64, success bool, me
 // is2FALocked checks if user is temporarily locked out due to failed 2FA attempts
 // Returns true and remaining time if locked, false otherwise
 func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Duration) {
-	// If Redis is not enabled, skip rate limiting
-	if h.sessionCache == nil {
-		return false, 0
-	}
+	// Try Redis first (preferred for distributed systems)
+	if h.sessionCache != nil {
+		key := fmt.Sprintf("2fa_fail:%d", userID)
 
-	key := fmt.Sprintf("2fa_fail:%d", userID)
+		// Get current failure count
+		failCount, err := h.sessionCache.IncrementCounter(ctx, key, 0)
+		if err != nil {
+			// Redis failed - log warning and fall back to memory
+			log.Printf("[SECURITY WARNING] Redis unavailable for 2FA rate limiting (user_id=%d): %v", userID, err)
+			log.Printf("[SECURITY] Falling back to in-memory 2FA rate limiting")
+		} else {
+			// Redis is working - use it
+			const lockThreshold = 5
+			const lockDuration = 15 * time.Minute
 
-	// Get current failure count
-	failCount, err := h.sessionCache.IncrementCounter(ctx, key, 0)
-	if err != nil {
-		log.Printf("[auth] failed to check 2FA lock status: %v", err)
-		return false, 0
-	}
+			if failCount >= lockThreshold {
+				// Get TTL to determine how long until unlock
+				ttl, err := h.sessionCache.GetTTL(ctx, key)
+				if err != nil || ttl <= 0 {
+					// If can't get TTL or already expired, not locked
+					return false, 0
+				}
+				return true, ttl
+			}
 
-	// Lock threshold: 5 failed attempts
-	const lockThreshold = 5
-	const lockDuration = 15 * time.Minute
-
-	if failCount >= lockThreshold {
-		// Get TTL to determine how long until unlock
-		ttl, err := h.sessionCache.GetTTL(ctx, key)
-		if err != nil || ttl <= 0 {
-			// If can't get TTL or already expired, not locked
 			return false, 0
 		}
-		return true, ttl
 	}
 
+	// CRITICAL SECURITY: Use in-memory fallback when Redis is unavailable
+	// This prevents 2FA brute force attacks even when Redis fails
+	// WARNING: In multi-instance deployments, each instance has separate limits
+	if h.memory2FALimiter != nil {
+		locked, ttl := h.memory2FALimiter.isLocked(userID)
+		if locked {
+			log.Printf("[SECURITY] 2FA locked (in-memory) for user_id=%d, remaining: %v", userID, ttl)
+		}
+		return locked, ttl
+	}
+
+	// Both Redis and memory limiter unavailable - this should never happen
+	log.Printf("[SECURITY CRITICAL] No 2FA rate limiting available for user_id=%d!", userID)
 	return false, 0
 }
 
 // track2FAFailure increments the failed 2FA attempt counter
 func (h *Handler) track2FAFailure(ctx context.Context, userID uint64) error {
-	if h.sessionCache == nil {
+	const lockDuration = 15 * time.Minute
+
+	// Try Redis first
+	if h.sessionCache != nil {
+		key := fmt.Sprintf("2fa_fail:%d", userID)
+
+		// Increment counter with 15 minute expiry
+		count, err := h.sessionCache.IncrementCounter(ctx, key, lockDuration)
+		if err != nil {
+			log.Printf("[SECURITY WARNING] Redis unavailable for tracking 2FA failure (user_id=%d): %v", userID, err)
+			log.Printf("[SECURITY] Falling back to in-memory tracking")
+		} else {
+			log.Printf("[auth] 2FA failure count (Redis) for user_id=%d: %d/5", userID, count)
+			return nil
+		}
+	}
+
+	// Fallback to in-memory limiter
+	if h.memory2FALimiter != nil {
+		count := h.memory2FALimiter.trackFailure(userID)
+		log.Printf("[auth] 2FA failure count (in-memory) for user_id=%d: %d/5", userID, count)
 		return nil
 	}
 
-	key := fmt.Sprintf("2fa_fail:%d", userID)
-	const lockDuration = 15 * time.Minute
-
-	// Increment counter with 15 minute expiry
-	count, err := h.sessionCache.IncrementCounter(ctx, key, lockDuration)
-	if err != nil {
-		return fmt.Errorf("increment 2FA failure count: %w", err)
-	}
-
-	log.Printf("[auth] 2FA failure count for user_id=%d: %d/5", userID, count)
-	return nil
+	log.Printf("[SECURITY CRITICAL] Failed to track 2FA failure for user_id=%d - no storage available!", userID)
+	return fmt.Errorf("2FA rate limiting unavailable")
 }
 
 // clear2FAFailures clears the failed attempt counter after successful 2FA
 func (h *Handler) clear2FAFailures(ctx context.Context, userID uint64) {
-	if h.sessionCache == nil {
-		return
+	// Clear from Redis
+	if h.sessionCache != nil {
+		key := fmt.Sprintf("2fa_fail:%d", userID)
+		if err := h.sessionCache.Delete(ctx, key); err != nil {
+			log.Printf("[auth] failed to clear 2FA failures (Redis) for user_id=%d: %v", userID, err)
+		}
 	}
 
-	key := fmt.Sprintf("2fa_fail:%d", userID)
-	if err := h.sessionCache.Delete(ctx, key); err != nil {
-		log.Printf("[auth] failed to clear 2FA failures for user_id=%d: %v", userID, err)
+	// Also clear from in-memory limiter
+	if h.memory2FALimiter != nil {
+		h.memory2FALimiter.clearFailures(userID)
 	}
 }

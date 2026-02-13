@@ -28,6 +28,11 @@ type Store interface {
 	GetSessionID(ctx context.Context, tokenType TokenType, token string) (uint64, error)
 	MarkRevoked(ctx context.Context, tokenType TokenType, token string, ttl time.Duration) error
 	IsRevoked(ctx context.Context, tokenType TokenType, token string) (bool, error)
+
+	// Counter operations for rate limiting
+	IncrementCounter(ctx context.Context, key string, ttl time.Duration) (int64, error)
+	GetTTL(ctx context.Context, key string) (time.Duration, error)
+	Delete(ctx context.Context, key string) error
 }
 
 // RedisStore implements Store backed by Redis.
@@ -143,4 +148,43 @@ func (s *RedisStore) tokenKey(tokenType TokenType, token string) string {
 
 func (s *RedisStore) revokedKey(tokenType TokenType, token string) string {
 	return fmt.Sprintf("%s:session:revoked:%s:%s", s.prefix, tokenType, token)
+}
+
+// IncrementCounter increments a counter and sets expiry if not exists
+func (s *RedisStore) IncrementCounter(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	fullKey := fmt.Sprintf("%s:%s", s.prefix, key)
+
+	// Increment the counter
+	count, err := s.client.Incr(ctx, fullKey).Result()
+	if err != nil {
+		return 0, fmt.Errorf("increment counter: %w", err)
+	}
+
+	// Set expiry only if this is the first increment (count == 1)
+	if count == 1 && ttl > 0 {
+		if err := s.client.Expire(ctx, fullKey, ttl).Err(); err != nil {
+			return count, fmt.Errorf("set expiry: %w", err)
+		}
+	}
+
+	return count, nil
+}
+
+// GetTTL returns the remaining TTL for a key
+func (s *RedisStore) GetTTL(ctx context.Context, key string) (time.Duration, error) {
+	fullKey := fmt.Sprintf("%s:%s", s.prefix, key)
+	ttl, err := s.client.TTL(ctx, fullKey).Result()
+	if err != nil {
+		return 0, fmt.Errorf("get TTL: %w", err)
+	}
+	return ttl, nil
+}
+
+// Delete removes a key from Redis
+func (s *RedisStore) Delete(ctx context.Context, key string) error {
+	fullKey := fmt.Sprintf("%s:%s", s.prefix, key)
+	if err := s.client.Del(ctx, fullKey).Err(); err != nil {
+		return fmt.Errorf("delete key: %w", err)
+	}
+	return nil
 }

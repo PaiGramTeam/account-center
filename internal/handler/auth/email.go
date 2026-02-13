@@ -167,9 +167,10 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 }
 
 type loginEmailRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required"`
-	TOTPCode string `json:"totp_code" binding:"omitempty,len=6"` // Optional 2FA code
+	Email       string `json:"email" binding:"required,email"`
+	Password    string `json:"password" binding:"required"`
+	TOTPCode    string `json:"totp_code" binding:"omitempty,len=6"` // Optional 2FA code
+	TrustDevice bool   `json:"trust_device"`                        // Trust this device for 30 days
 }
 
 // swagger:route POST /api/v1/auth/login auth loginEmail
@@ -262,7 +263,24 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 		return
 	}
 
-	// If 2FA is enabled, verify TOTP code or backup code
+	// If 2FA is enabled, check if device is trusted
+	if has2FA {
+		deviceID := generateDeviceID(c.GetHeader("User-Agent"), c.ClientIP())
+
+		// Check if this device is trusted
+		var device model.UserDevice
+		err := h.db.Where("user_id = ? AND device_id = ?", user.ID, deviceID).First(&device).Error
+		if err == nil && device.TrustExpiry.Valid && time.Now().Before(device.TrustExpiry.Time) {
+			// Device is trusted and not expired, skip 2FA
+			log.Printf("[auth] trusted device login for user_id=%d device_id=%s", user.ID, deviceID)
+			has2FA = false // Skip 2FA verification
+
+			// Refresh trust expiry on successful login
+			h.db.Model(&device).Update("trust_expiry", time.Now().Add(30*24*time.Hour))
+		}
+	}
+
+	// If 2FA is enabled (and device not trusted), verify TOTP code or backup code
 	if has2FA {
 		// Check if user is temporarily locked out due to failed 2FA attempts
 		if locked, remaining := h.is2FALocked(c.Request.Context(), user.ID); locked {
@@ -323,6 +341,42 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 
 		// 2FA verification successful - clear failed attempts counter
 		h.clear2FAFailures(c.Request.Context(), user.ID)
+
+		// If user chose to trust this device, mark it as trusted
+		if req.TrustDevice {
+			deviceID := generateDeviceID(c.GetHeader("User-Agent"), c.ClientIP())
+			trustExpiry := time.Now().Add(30 * 24 * time.Hour) // 30 days
+
+			// Update or create device record with trust expiry
+			var device model.UserDevice
+			err := h.db.Where("user_id = ? AND device_id = ?", user.ID, deviceID).First(&device).Error
+			if err == gorm.ErrRecordNotFound {
+				// Create new trusted device record
+				deviceType, os, browser := parseUserAgent(c.GetHeader("User-Agent"))
+				device = model.UserDevice{
+					UserID:       user.ID,
+					DeviceID:     deviceID,
+					DeviceName:   fmt.Sprintf("%s on %s", browser, os),
+					DeviceType:   deviceType,
+					OS:           os,
+					Browser:      browser,
+					IP:           c.ClientIP(),
+					LastActiveAt: time.Now(),
+					TrustExpiry:  shared.MakeNullTime(trustExpiry),
+				}
+				h.db.Create(&device)
+			} else if err == nil {
+				// Update existing device
+				h.db.Model(&device).Updates(map[string]interface{}{
+					"trust_expiry":   shared.MakeNullTime(trustExpiry),
+					"last_active_at": time.Now(),
+					"ip":             c.ClientIP(),
+				})
+			}
+
+			log.Printf("[auth] device marked as trusted for user_id=%d device_id=%s until=%s",
+				user.ID, deviceID, trustExpiry.Format(time.RFC3339))
+		}
 
 		// 2FA verification successful
 		// Update LastUsedAt and remove backup code if used

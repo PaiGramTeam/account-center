@@ -112,10 +112,16 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 	}
 
 	// Save reset token to database
+	// Calculate token expiry with fallback to default (1 hour, matching better-auth)
+	resetTTL := time.Duration(h.cfg.PasswordResetTokenTTLSeconds) * time.Second
+	if resetTTL <= 0 {
+		resetTTL = 1 * time.Hour // Default: 1 hour (3600 seconds)
+	}
+
 	resetToken := &model.PasswordResetToken{
 		UserID:    user.ID,
 		Token:     tokenHash,
-		ExpiresAt: time.Now().Add(time.Duration(h.cfg.PasswordResetTokenTTLSeconds) * time.Second),
+		ExpiresAt: time.Now().Add(resetTTL),
 	}
 
 	if err := h.db.Create(resetToken).Error; err != nil {

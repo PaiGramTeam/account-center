@@ -33,6 +33,10 @@ type Store interface {
 	IncrementCounter(ctx context.Context, key string, ttl time.Duration) (int64, error)
 	GetTTL(ctx context.Context, key string) (time.Duration, error)
 	Delete(ctx context.Context, key string) error
+
+	// Generic key-value operations
+	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+	Get(ctx context.Context, key string) ([]byte, error)
 }
 
 // RedisStore implements Store backed by Redis.
@@ -187,4 +191,23 @@ func (s *RedisStore) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("delete key: %w", err)
 	}
 	return nil
+}
+
+// Set stores a value with optional TTL
+func (s *RedisStore) Set(ctx context.Context, key string, value []byte, ttl time.Duration) error {
+	fullKey := fmt.Sprintf("%s:%s", s.prefix, key)
+	if err := s.client.Set(ctx, fullKey, value, ttl).Err(); err != nil {
+		return fmt.Errorf("set value: %w", err)
+	}
+	return nil
+}
+
+// Get retrieves a value by key
+func (s *RedisStore) Get(ctx context.Context, key string) ([]byte, error) {
+	fullKey := fmt.Sprintf("%s:%s", s.prefix, key)
+	val, err := s.client.Get(ctx, fullKey).Bytes()
+	if err != nil {
+		return nil, err
+	}
+	return val, nil
 }

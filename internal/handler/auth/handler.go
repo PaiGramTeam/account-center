@@ -5,6 +5,7 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
+	"paigram/internal/geolocation"
 	"paigram/internal/sessioncache"
 )
 
@@ -14,18 +15,23 @@ type Handler struct {
 	cfg          config.AuthConfig
 	emailCfg     config.EmailConfig
 	sessionCache sessioncache.Store
+	geoService   *geolocation.Service
 }
 
 // NewHandler constructs an auth Handler.
-func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailCfg config.EmailConfig, cache sessioncache.Store) *Handler {
+func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailCfg config.EmailConfig, cache sessioncache.Store, geoService *geolocation.Service) *Handler {
 	if cache == nil {
 		cache = sessioncache.NewNoopStore()
+	}
+	if geoService == nil {
+		geoService = geolocation.NewService()
 	}
 	return &Handler{
 		db:           db,
 		cfg:          cfg,
 		emailCfg:     emailCfg,
 		sessionCache: cache,
+		geoService:   geoService,
 	}
 }
 

@@ -82,6 +82,10 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 		return
 	}
 
+	// Hash the verification token before storing (security best practice)
+	// Only the hash is stored in the database, the plaintext token is sent to the user
+	verificationTokenHash := hashToken(verificationToken)
+
 	verificationTTL := time.Duration(h.cfg.EmailVerificationTTLSeconds) * time.Second
 	if verificationTTL <= 0 {
 		verificationTTL = 24 * time.Hour
@@ -122,7 +126,7 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 			UserID:             user.ID,
 			Email:              email,
 			IsPrimary:          true,
-			VerificationToken:  verificationToken,
+			VerificationToken:  verificationTokenHash, // Store hashed token
 			VerificationExpiry: shared.MakeNullTime(verificationExpiry),
 		}
 		if err := tx.Create(&emailRecord).Error; err != nil {
@@ -739,7 +743,8 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 			return fmt.Errorf("no verification token present")
 		}
 
-		if emailRecord.VerificationToken != req.Token {
+		// Hash the provided token and compare with stored hash (secure comparison)
+		if hashToken(req.Token) != emailRecord.VerificationToken {
 			return fmt.Errorf("invalid token")
 		}
 

@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"time"
@@ -25,6 +26,14 @@ func hashToken(token string) string {
 	}
 	hash := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(hash[:])
+}
+
+// generateDeviceID creates a unique device identifier from user agent and IP
+// This matches the implementation in auth/token.go
+func generateDeviceID(userAgent, clientIP string) string {
+	data := userAgent + clientIP
+	hash := sha256.Sum256([]byte(data))
+	return base64.URLEncoding.EncodeToString(hash[:])[:22]
 }
 
 // Handler handles session management endpoints
@@ -90,6 +99,7 @@ func (h *Handler) ListSessions(c *gin.Context) {
 	}
 
 	var sessions []model.UserSession
+	// Preload related user devices for better response
 	if err := h.db.Where("user_id = ? AND revoked_at IS NULL", userID).
 		Order("created_at DESC").
 		Find(&sessions).Error; err != nil {
@@ -101,7 +111,16 @@ func (h *Handler) ListSessions(c *gin.Context) {
 		return
 	}
 
-	// Build response
+	// Get all user devices for device information
+	var devices []model.UserDevice
+	deviceMap := make(map[string]*model.UserDevice)
+	if err := h.db.Where("user_id = ?", userID).Find(&devices).Error; err == nil {
+		for i := range devices {
+			deviceMap[devices[i].DeviceID] = &devices[i]
+		}
+	}
+
+	// Build response with device information
 	responses := make([]SessionResponse, 0, len(sessions))
 	for _, session := range sessions {
 		isCurrent := session.AccessTokenHash == currentTokenHash
@@ -113,6 +132,17 @@ func (h *Handler) ListSessions(c *gin.Context) {
 			AccessExpiry:  session.AccessExpiry,
 			RefreshExpiry: session.RefreshExpiry,
 			IsCurrent:     isCurrent,
+		}
+
+		// Add device information if available
+		// Generate device ID from user agent and IP (same as token.go)
+		deviceID := generateDeviceID(session.UserAgent, session.ClientIP)
+		if device, ok := deviceMap[deviceID]; ok {
+			resp.DeviceID = device.DeviceID
+			resp.DeviceName = device.DeviceName
+			resp.DeviceType = device.DeviceType
+			resp.Location = device.Location
+			resp.LastActiveAt = device.LastActiveAt
 		}
 
 		responses = append(responses, resp)

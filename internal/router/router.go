@@ -11,6 +11,7 @@ import (
 	authhandler "paigram/internal/handler/auth"
 	profilehandler "paigram/internal/handler/profile"
 	securityhandler "paigram/internal/handler/security"
+	sessionhandler "paigram/internal/handler/session"
 	userhandler "paigram/internal/handler/user"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
@@ -204,6 +205,13 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	security.Use(middleware.RequireSelf())
 	{
 		securityHandler.RegisterRoutes(security)
+	}
+
+	// Session management routes
+	sessionHandler := sessionhandler.NewHandler(db, cache)
+	sessions := protected.Group("/sessions")
+	{
+		sessionHandler.RegisterRoutes(sessions)
 	}
 
 	// swagger:route GET / general getRoot

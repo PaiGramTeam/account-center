@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
+	"paigram/internal/config"
 	"paigram/internal/model"
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
@@ -27,7 +29,8 @@ func hashToken(token string) string {
 }
 
 // AuthMiddleware creates middleware that validates access tokens and sets user ID in context.
-func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store) gin.HandlerFunc {
+// It also implements automatic session refresh when updateAge threshold is reached.
+func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store, authCfg config.AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Extract token from Authorization header
 		authHeader := c.GetHeader("Authorization")
@@ -124,6 +127,38 @@ func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store) gin.HandlerFun
 			response.UnauthorizedWithCode(c, "USER_INACTIVE", "user account is not active", nil)
 			c.Abort()
 			return
+		}
+
+		// Auto-refresh session if updateAge threshold is reached
+		// This extends session lifetime without requiring explicit refresh token call
+		updateAge := time.Duration(authCfg.SessionUpdateAgeSeconds) * time.Second
+		if updateAge <= 0 {
+			updateAge = 24 * time.Hour // Default to 1 day like better-auth
+		}
+
+		sessionAge := now.Sub(session.UpdatedAt)
+		if sessionAge >= updateAge {
+			// Time to refresh the session expiry
+			refreshTTL := time.Duration(authCfg.RefreshTokenTTLSeconds) * time.Second
+			if refreshTTL <= 0 {
+				refreshTTL = 7 * 24 * time.Hour // Default 7 days
+			}
+
+			newExpiry := now.Add(refreshTTL)
+
+			// Update session expiry asynchronously to avoid blocking the request
+			go func(sessionID uint64, expiry time.Time) {
+				if err := db.Model(&model.UserSession{}).
+					Where("id = ?", sessionID).
+					Updates(map[string]interface{}{
+						"refresh_expiry": expiry,
+						"updated_at":     now,
+					}).Error; err != nil {
+					log.Printf("[auth] failed to auto-refresh session %d: %v", sessionID, err)
+				} else {
+					log.Printf("[auth] auto-refreshed session %d, new expiry: %s", sessionID, expiry.Format(time.RFC3339))
+				}
+			}(session.ID, newExpiry)
 		}
 
 		// Set user ID in context for downstream handlers

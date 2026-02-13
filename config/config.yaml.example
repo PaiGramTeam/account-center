@@ -136,6 +136,11 @@ email:
 
 # Security Settings
 security:
+  # Bcrypt password hashing cost (default: 12, OWASP recommended minimum)
+  # Higher values = more secure but slower (10=74ms, 12=300ms, 14=1.2s)
+  # Valid range: 10-14 (values outside this range will be clamped)
+  bcrypt_cost: 12
+  
   # Suspicious Login Detection
   suspicious_login_detection: true      # Enable analyzing logins for suspicious patterns
   suspicious_login_email_alert: true    # Send email alerts when suspicious logins detected

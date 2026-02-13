@@ -16,6 +16,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"paigram/internal/config"
 	"paigram/internal/crypto"
 	"paigram/internal/handler/shared"
 	"paigram/internal/middleware"
@@ -24,20 +25,27 @@ import (
 	"paigram/internal/sessioncache"
 )
 
+const (
+	// DefaultBcryptCost is the fallback bcrypt cost if not configured
+	DefaultBcryptCost = 12
+)
+
 // Handler manages security-related endpoints
 type Handler struct {
 	db           *gorm.DB
 	sessionCache sessioncache.Store
+	securityCfg  config.SecurityConfig
 }
 
 // NewHandler creates a new security handler
-func NewHandler(db *gorm.DB, cache sessioncache.Store) *Handler {
+func NewHandler(db *gorm.DB, cache sessioncache.Store, securityCfg config.SecurityConfig) *Handler {
 	if cache == nil {
 		cache = sessioncache.NewNoopStore()
 	}
 	return &Handler{
 		db:           db,
 		sessionCache: cache,
+		securityCfg:  securityCfg,
 	}
 }
 
@@ -125,7 +133,7 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 	}
 
 	// Hash new password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), h.getBcryptCost())
 	if err != nil {
 		response.InternalServerErrorWithCode(c, "HASH_ERROR", "failed to hash password", nil)
 		return
@@ -402,7 +410,7 @@ func (h *Handler) Confirm2FA(c *gin.Context) {
 	// Hash backup codes before storing
 	hashedCodes := make([]string, len(setupData.BackupCodes))
 	for i, code := range setupData.BackupCodes {
-		hashed, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+		hashed, err := bcrypt.GenerateFromPassword([]byte(code), h.getBcryptCost())
 		if err != nil {
 			response.InternalServerErrorWithCode(c, "HASH_ERROR", "failed to hash backup codes", nil)
 			return
@@ -696,7 +704,7 @@ func (h *Handler) RegenerateBackupCodes(c *gin.Context) {
 	// Hash backup codes
 	hashedCodes := make([]string, len(backupCodes))
 	for i, code := range backupCodes {
-		hashed, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+		hashed, err := bcrypt.GenerateFromPassword([]byte(code), h.getBcryptCost())
 		if err != nil {
 			response.InternalServerErrorWithCode(c, "HASH_ERROR", "failed to hash backup codes", nil)
 			return
@@ -1015,4 +1023,16 @@ func (h *Handler) delete2FASetupData(ctx context.Context, key string) error {
 		return nil
 	}
 	return h.sessionCache.Delete(ctx, key)
+}
+
+// getBcryptCost returns the configured bcrypt cost from Handler
+func (h *Handler) getBcryptCost() int {
+	cost := h.securityCfg.BcryptCost
+	if cost < 10 {
+		return DefaultBcryptCost
+	}
+	if cost > 14 {
+		return 14
+	}
+	return cost
 }

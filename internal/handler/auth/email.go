@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"paigram/internal/crypto"
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
 	"paigram/internal/response"
@@ -273,7 +274,15 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 		}
 
 		// Validate TOTP code first
-		totpValid := verifyTOTP(req.TOTPCode, twoFactor.Secret)
+		// Decrypt the secret before validation
+		decryptedSecret, err := crypto.Decrypt(twoFactor.Secret)
+		if err != nil {
+			log.Printf("[auth] failed to decrypt 2FA secret for user_id=%d: %v", user.ID, err)
+			response.InternalServerError(c, "failed to verify 2FA")
+			return
+		}
+
+		totpValid := verifyTOTP(req.TOTPCode, decryptedSecret)
 		backupCodeValid := false
 		var usedBackupCode string
 

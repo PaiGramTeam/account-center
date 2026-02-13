@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -18,12 +19,20 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
+	"paigram/internal/crypto"
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
 	"paigram/internal/sessioncache"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
+	// Initialize encryption for tests
+	testKey := make([]byte, 32)
+	_, err := rand.Read(testKey)
+	require.NoError(t, err)
+	err = crypto.SetEncryptionKey(testKey)
+	require.NoError(t, err)
+
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 
@@ -122,9 +131,13 @@ func enable2FAForUser(t *testing.T, db *gorm.DB, userID uint64) (secret string, 
 	backupCodesJSON, err := json.Marshal(hashedCodes)
 	require.NoError(t, err)
 
+	// Encrypt the secret before storing
+	encryptedSecret, err := crypto.Encrypt(secret)
+	require.NoError(t, err)
+
 	twoFactor := model.UserTwoFactor{
 		UserID:      userID,
-		Secret:      secret,
+		Secret:      encryptedSecret, // Store encrypted
 		BackupCodes: string(backupCodesJSON),
 		EnabledAt:   time.Now().UTC(),
 	}

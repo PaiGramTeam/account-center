@@ -12,6 +12,7 @@ import (
 
 	"paigram/internal/cache"
 	"paigram/internal/config"
+	"paigram/internal/crypto"
 	"paigram/internal/database"
 	"paigram/internal/grpc/server"
 	"paigram/internal/logging"
@@ -44,6 +45,12 @@ func init() {
 func runServer() {
 	cfg := config.MustLoad("config")
 	defer logging.Sync()
+
+	// Initialize encryption for 2FA secrets
+	if err := crypto.InitEncryption(); err != nil {
+		log.Printf("WARNING: Encryption initialization failed: %v", err)
+		log.Printf("2FA will not work properly. Please set ENCRYPTION_KEY environment variable.")
+	}
 
 	db := database.MustConnect(cfg.Database)
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -208,6 +209,15 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	if err := verifyIDToken(tokenResp.IDToken, stateRecord.Nonce); err != nil {
 		response.BadRequest(c, fmt.Sprintf("ID token validation failed: %v", err))
 		return
+	}
+
+	// Step 2.6: Validate scopes
+	scopeWarnings := validateScopes(providerCfg.Scopes, tokenResp.Scope)
+	if len(scopeWarnings) > 0 {
+		// Log warnings but don't fail - some providers may grant subset of scopes
+		for _, warning := range scopeWarnings {
+			log.Printf("[OAuth] Scope warning for provider %s: %s", provider, warning)
+		}
 	}
 
 	// Step 3: Fetch user info from provider
@@ -752,4 +762,30 @@ func (h *Handler) refreshOAuthToken(ctx context.Context, credential *model.UserC
 // Used by background workers to refresh expiring tokens
 func (h *Handler) RefreshOAuthTokenPublic(ctx context.Context, credential *model.UserCredential, cfg config.OAuthProviderConfig) error {
 	return h.refreshOAuthToken(ctx, credential, cfg)
+}
+
+// validateScopes checks if granted scopes meet minimum requirements
+// Returns warning messages if critical scopes are missing
+func validateScopes(requested []string, granted string) []string {
+	if len(requested) == 0 {
+		return nil // No scope requirements
+	}
+
+	// Parse granted scopes (space-separated string)
+	grantedMap := make(map[string]bool)
+	for _, scope := range strings.Split(granted, " ") {
+		scope = strings.TrimSpace(scope)
+		if scope != "" {
+			grantedMap[scope] = true
+		}
+	}
+
+	var warnings []string
+	for _, reqScope := range requested {
+		if !grantedMap[reqScope] {
+			warnings = append(warnings, fmt.Sprintf("scope '%s' was requested but not granted", reqScope))
+		}
+	}
+
+	return warnings
 }

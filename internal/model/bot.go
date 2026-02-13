@@ -26,13 +26,18 @@ type Bot struct {
 
 // BotToken represents an active access token for a bot
 type BotToken struct {
-	ID           uint64    `gorm:"primaryKey"`
-	BotID        string    `gorm:"size:64;index;not null"`
-	AccessToken  string    `gorm:"size:512;uniqueIndex;not null"`
-	RefreshToken string    `gorm:"size:512;uniqueIndex"`
-	ExpiresAt    time.Time `gorm:"index;not null"`
-	CreatedAt    time.Time
-	RevokedAt    sql.NullTime `gorm:"type:datetime(3)"`
+	ID                  uint64       `gorm:"primaryKey"`
+	BotID               string       `gorm:"size:64;index;not null"`
+	AccessTokenHash     string       `gorm:"size:64;uniqueIndex;not null"` // SHA-256 hash of access token
+	RefreshTokenHash    string       `gorm:"size:64;uniqueIndex;not null"` // SHA-256 hash of refresh token
+	RateLimitEnabled    bool         `gorm:"default:true;not null"`
+	RateLimitTimeWindow *int64       `gorm:"type:bigint"` // Time window in milliseconds
+	RateLimitMax        *int         `gorm:"type:int"`    // Max requests within time window
+	RequestCount        int          `gorm:"default:0;not null"`
+	LastRequest         sql.NullTime `gorm:"type:datetime(3);index"`
+	ExpiresAt           time.Time    `gorm:"index;not null"`
+	CreatedAt           time.Time
+	RevokedAt           sql.NullTime `gorm:"type:datetime(3)"`
 
 	Bot Bot `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 }

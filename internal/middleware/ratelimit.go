@@ -39,17 +39,27 @@ type KeyFunc func(*gin.Context) string
 // IPKeyFunc returns a KeyFunc that uses the client IP address as the rate limit key.
 // It respects custom IP headers (e.g., CF-Connecting-IP) if configured via REAL_IP_HEADER env var.
 // Otherwise, it uses Gin's ClientIP() which respects TrustedProxies configuration.
+// SECURITY: Normalizes IPv6 addresses to prevent rotation bypass attacks.
 func IPKeyFunc(c *gin.Context) string {
+	var ip string
+
 	// Check for custom IP header (e.g., Cloudflare's CF-Connecting-IP)
 	if customHeader := os.Getenv("REAL_IP_HEADER"); customHeader != "" {
-		if ip := c.GetHeader(customHeader); ip != "" {
-			return ip
+		if headerIP := c.GetHeader(customHeader); headerIP != "" {
+			ip = headerIP
 		}
 	}
 
 	// Fallback to Gin's ClientIP which respects TrustedProxies
-	// SECURITY: Ensure TrustedProxies is configured in router to prevent IP spoofing
-	return c.ClientIP()
+	if ip == "" {
+		// SECURITY: Ensure TrustedProxies is configured in router to prevent IP spoofing
+		ip = c.ClientIP()
+	}
+
+	// Normalize IP address to prevent bypass attacks
+	// - Converts IPv4-mapped IPv6 to IPv4
+	// - Applies subnet masking to IPv6 (default /64)
+	return normalizeIP(ip, getIPv6SubnetBits())
 }
 
 // UserIDKeyFunc returns a KeyFunc that uses the authenticated user ID as the rate limit key.
@@ -57,8 +67,8 @@ func IPKeyFunc(c *gin.Context) string {
 func UserIDKeyFunc(c *gin.Context) string {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		// Fallback to IP if user ID is not available
-		return c.ClientIP()
+		// Fallback to IP if user ID is not available (with normalization)
+		return IPKeyFunc(c)
 	}
 	return fmt.Sprintf("user:%v", userID)
 }

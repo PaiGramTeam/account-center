@@ -107,7 +107,7 @@ func runServer() {
 
 	// Start gRPC server if enabled
 	if cfg.GRPC.Enabled {
-		grpcServer := server.NewGRPCServer(cfg.GRPC.Port, db)
+		grpcServer := server.NewGRPCServer(cfg.GRPC.Port, db, redisClient, cfg)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

@@ -5,10 +5,12 @@ import (
 	"log"
 	"net"
 
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 	"gorm.io/gorm"
 
+	"paigram/internal/config"
 	"paigram/internal/grpc/interceptor"
 )
 
@@ -16,13 +18,20 @@ import (
 type GRPCServer struct {
 	port            int
 	db              *gorm.DB
+	redisClient     *redis.Client
+	cfg             *config.Config
 	server          *grpc.Server
 	authInterceptor *interceptor.AuthInterceptor
 }
 
 // NewGRPCServer creates a new gRPC server
-func NewGRPCServer(port int, db *gorm.DB) *GRPCServer {
-	authInterceptor := interceptor.NewAuthInterceptor(db)
+func NewGRPCServer(port int, db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *GRPCServer {
+	redisPrefix := "bot_token:"
+	if cfg.Redis.Prefix != "" {
+		redisPrefix = cfg.Redis.Prefix + redisPrefix
+	}
+
+	authInterceptor := interceptor.NewAuthInterceptor(db, redisClient, redisPrefix)
 
 	// Create gRPC server with interceptors
 	opts := []grpc.ServerOption{
@@ -51,6 +60,8 @@ func NewGRPCServer(port int, db *gorm.DB) *GRPCServer {
 	return &GRPCServer{
 		port:            port,
 		db:              db,
+		redisClient:     redisClient,
+		cfg:             cfg,
 		server:          server,
 		authInterceptor: authInterceptor,
 	}

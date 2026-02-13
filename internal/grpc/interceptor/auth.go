@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -20,9 +21,9 @@ type AuthInterceptor struct {
 }
 
 // NewAuthInterceptor creates a new auth interceptor
-func NewAuthInterceptor(db *gorm.DB) *AuthInterceptor {
+func NewAuthInterceptor(db *gorm.DB, redisClient *redis.Client, redisPrefix string) *AuthInterceptor {
 	return &AuthInterceptor{
-		botAuthService: service.NewBotAuthService(db),
+		botAuthService: service.NewBotAuthService(db, redisClient, redisPrefix),
 		publicMethods: map[string]bool{
 			"/paigram.v1.BotAuthService/RegisterBot":     true,
 			"/paigram.v1.BotAuthService/BotLogin":        true,

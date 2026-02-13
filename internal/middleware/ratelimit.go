@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"regexp"
 	"strconv"
@@ -146,9 +147,11 @@ func RateLimit(config RateLimitConfig) gin.HandlerFunc {
 			// Get the rate limit context to extract retry-after
 			key := config.KeyFunc(c)
 			context, err := instance.Get(c.Request.Context(), key)
+
+			var retryAfter int64 = 0
 			if err == nil {
 				// Calculate retry-after in seconds
-				retryAfter := context.Reset - time.Now().Unix()
+				retryAfter = context.Reset - time.Now().Unix()
 				if retryAfter < 0 {
 					retryAfter = 0
 				}
@@ -156,12 +159,34 @@ func RateLimit(config RateLimitConfig) gin.HandlerFunc {
 				// Set Retry-After header
 				c.Header("Retry-After", strconv.FormatInt(retryAfter, 10))
 
+				// SECURITY LOGGING: Record rate limit violations for monitoring
+				log.Printf("[RATE_LIMIT] Blocked request | key=%s | path=%s | method=%s | ip=%s | user_agent=%s | retry_after=%ds",
+					key,
+					c.Request.URL.Path,
+					c.Request.Method,
+					c.ClientIP(),
+					c.Request.UserAgent(),
+					retryAfter,
+				)
+
+				// Record statistics for monitoring
+				globalRateLimitStats.recordBlock(key)
+
 				// Return error response with retry_after in details
 				response.TooManyRequestsWithCode(c, "RATE_LIMIT_EXCEEDED", "rate limit exceeded", map[string]interface{}{
 					"retry_after": retryAfter,
 				})
 			} else {
 				// Fallback if we can't get the context
+				log.Printf("[RATE_LIMIT] Blocked request (no context) | key=%s | path=%s | method=%s | ip=%s",
+					key,
+					c.Request.URL.Path,
+					c.Request.Method,
+					c.ClientIP(),
+				)
+				// Record statistics even without context
+				globalRateLimitStats.recordBlock(key)
+
 				response.TooManyRequestsWithCode(c, "RATE_LIMIT_EXCEEDED", "rate limit exceeded", nil)
 			}
 			return

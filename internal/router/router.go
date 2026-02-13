@@ -199,12 +199,25 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	emailGroup.Use(middleware.RequireSelf())
 	profileHandler.RegisterEmailRoutes(emailGroup)
 
-	// Security routes (password change, 2FA) - only self
+	// Security routes (password change, 2FA) - only self + fresh session for sensitive ops
 	securityHandler := securityhandler.NewHandler(db, cache)
 	security := protected.Group("/profiles/:id")
 	security.Use(middleware.RequireSelf())
 	{
-		securityHandler.RegisterRoutes(security)
+		// Routes that DON'T require fresh session
+		security.GET("/:id/devices", securityHandler.GetDevices)
+
+		// Routes that REQUIRE fresh session (sensitive operations)
+		freshSecurity := security.Group("")
+		freshSecurity.Use(middleware.RequireFreshSession(db, authCfg))
+		{
+			freshSecurity.POST("/:id/password/change", securityHandler.ChangePassword)
+			freshSecurity.POST("/:id/2fa/enable", securityHandler.Enable2FA)
+			freshSecurity.POST("/:id/2fa/confirm", securityHandler.Confirm2FA)
+			freshSecurity.POST("/:id/2fa/disable", securityHandler.Disable2FA)
+			freshSecurity.POST("/:id/2fa/regenerate-backup-codes", securityHandler.RegenerateBackupCodes)
+			freshSecurity.DELETE("/:id/devices/:device_id", securityHandler.RemoveDevice)
+		}
 	}
 
 	// Session management routes

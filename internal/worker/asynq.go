@@ -32,12 +32,14 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 	refreshHandler := tasks.NewRefreshOAuthTokenHandler(db, cfg, authHandler)
 	scheduleHandler := tasks.NewScheduleOAuthRefreshHandler(db, cfg, asynqClient)
 	cleanupHandler := tasks.NewCleanExpiredOAuthStatesHandler(db)
+	botTokenCleanupHandler := tasks.NewCleanExpiredBotTokensHandler(db)
 
 	// Create mux (task router)
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(tasks.TypeRefreshOAuthToken, refreshHandler.ProcessTask)
 	mux.HandleFunc(tasks.TypeScheduleOAuthRefresh, scheduleHandler.ProcessTask)
 	mux.HandleFunc(tasks.TypeCleanExpiredOAuthStates, cleanupHandler.ProcessTask)
+	mux.HandleFunc(tasks.TypeCleanExpiredBotTokens, botTokenCleanupHandler.ProcessTask)
 
 	// Configure server
 	srv := asynq.NewServer(
@@ -100,6 +102,18 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 		return nil, nil, err
 	}
 	log.Printf("[Asynq] Registered periodic task: clean_expired_oauth_states (entry_id=%s)", entryID2)
+
+	// Register periodic task: clean expired bot tokens every 12 hours
+	botTokenCleanupTask, err := tasks.NewCleanExpiredBotTokensTask()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	entryID3, err := scheduler.Register("0 */12 * * *", botTokenCleanupTask) // Every 12 hours
+	if err != nil {
+		return nil, nil, err
+	}
+	log.Printf("[Asynq] Registered periodic task: clean_expired_bot_tokens (entry_id=%s)", entryID3)
 
 	// Start server in background
 	go func() {

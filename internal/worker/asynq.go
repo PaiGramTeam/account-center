@@ -31,11 +31,13 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 	// Create task handlers
 	refreshHandler := tasks.NewRefreshOAuthTokenHandler(db, cfg, authHandler)
 	scheduleHandler := tasks.NewScheduleOAuthRefreshHandler(db, cfg, asynqClient)
+	cleanupHandler := tasks.NewCleanExpiredOAuthStatesHandler(db)
 
 	// Create mux (task router)
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(tasks.TypeRefreshOAuthToken, refreshHandler.ProcessTask)
 	mux.HandleFunc(tasks.TypeScheduleOAuthRefresh, scheduleHandler.ProcessTask)
+	mux.HandleFunc(tasks.TypeCleanExpiredOAuthStates, cleanupHandler.ProcessTask)
 
 	// Configure server
 	srv := asynq.NewServer(
@@ -86,6 +88,18 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 		return nil, nil, err
 	}
 	log.Printf("[Asynq] Registered periodic task: schedule_oauth_refresh (entry_id=%s)", entryID)
+
+	// Register periodic task: clean expired OAuth states every 6 hours
+	cleanupTask, err := tasks.NewCleanExpiredOAuthStatesTask()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	entryID2, err := scheduler.Register("0 */6 * * *", cleanupTask) // Every 6 hours
+	if err != nil {
+		return nil, nil, err
+	}
+	log.Printf("[Asynq] Registered periodic task: clean_expired_oauth_states (entry_id=%s)", entryID2)
 
 	// Start server in background
 	go func() {

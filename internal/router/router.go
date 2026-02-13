@@ -61,7 +61,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	geoService := geolocation.NewService()
 
 	// Public routes - no authentication required
-	authHandler := authhandler.NewHandler(db, authCfg, cfg.Email, cache, geoService)
+	authHandler := authhandler.NewHandler(db, authCfg, cfg.Email, cfg.Security, cache, geoService)
 	authGroup := v1.Group("/auth")
 	{
 		// Apply rate limiting to auth endpoints if enabled

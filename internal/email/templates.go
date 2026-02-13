@@ -287,3 +287,113 @@ const twoFactorBackupCodesTemplate = `
 </body>
 </html>
 `
+
+const suspiciousLoginTemplate = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Suspicious Login Detected</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f4f4f4;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f4f4f4; padding: 20px;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 8px; overflow: hidden;">
+                    <tr>
+                        <td style="padding: 40px 30px; text-align: center; background-color: #d32f2f;">
+                            <h1 style="margin: 0; color: #ffffff; font-size: 28px;">🔒 Security Alert</h1>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 40px 30px;">
+                            <p style="margin: 0 0 20px; color: #333333; font-size: 16px; line-height: 1.6;">
+                                We detected a <strong style="color: #d32f2f;">suspicious login attempt</strong> to your account:
+                            </p>
+                            
+                            <table width="100%" cellpadding="8" cellspacing="0" style="margin: 20px 0; background-color: #fff3e0; border-left: 4px solid #ff9800;">
+                                <tr>
+                                    <td style="padding: 15px;">
+                                        <p style="margin: 0 0 10px; color: #e65100; font-size: 14px; font-weight: bold;">
+                                            ⚠️ {{.SuspicionReason}}
+                                        </p>
+                                        <p style="margin: 0; color: #666666; font-size: 13px;">
+                                            Suspicion Level: <strong style="color: {{.SuspicionColor}};">{{.SuspicionLevel}}</strong>
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <p style="margin: 20px 0 10px; color: #333333; font-size: 15px; font-weight: bold;">
+                                Login Details:
+                            </p>
+                            <table width="100%" cellpadding="8" cellspacing="0" style="margin: 10px 0; border: 1px solid #e0e0e0;">
+                                <tr>
+                                    <td style="color: #666666; font-size: 14px; width: 35%;"><strong>Device:</strong></td>
+                                    <td style="color: #333333; font-size: 14px;">{{.DeviceName}}</td>
+                                </tr>
+                                <tr style="background-color: #fafafa;">
+                                    <td style="color: #666666; font-size: 14px;"><strong>Device Type:</strong></td>
+                                    <td style="color: #333333; font-size: 14px;">{{.DeviceType}}</td>
+                                </tr>
+                                <tr>
+                                    <td style="color: #666666; font-size: 14px;"><strong>Location:</strong></td>
+                                    <td style="color: #333333; font-size: 14px;">{{.Location}}</td>
+                                </tr>
+                                <tr style="background-color: #fafafa;">
+                                    <td style="color: #666666; font-size: 14px;"><strong>IP Address:</strong></td>
+                                    <td style="color: #333333; font-size: 14px;">{{.IP}}</td>
+                                </tr>
+                                <tr>
+                                    <td style="color: #666666; font-size: 14px;"><strong>Time:</strong></td>
+                                    <td style="color: #333333; font-size: 14px;">{{.Timestamp}}</td>
+                                </tr>
+                            </table>
+
+                            <div style="margin: 30px 0; padding: 20px; background-color: #ffebee; border-radius: 4px; border-left: 4px solid #d32f2f;">
+                                <p style="margin: 0 0 15px; color: #c62828; font-size: 16px; font-weight: bold;">
+                                    Was this you?
+                                </p>
+                                <p style="margin: 0 0 15px; color: #666666; font-size: 14px; line-height: 1.6;">
+                                    If you recognize this login, you can safely ignore this email. If you did NOT authorize this login:
+                                </p>
+                                <ol style="margin: 0 0 15px 20px; padding: 0; color: #666666; font-size: 14px; line-height: 1.8;">
+                                    <li>Change your password immediately</li>
+                                    <li>Review your recent account activity</li>
+                                    <li>Enable Two-Factor Authentication (2FA) if not already enabled</li>
+                                    <li>Contact our support team</li>
+                                </ol>
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <td align="center" style="padding: 10px 0;">
+                                            <a href="{{.SecurityURL}}" style="display: inline-block; padding: 12px 30px; background-color: #d32f2f; color: #ffffff; text-decoration: none; border-radius: 4px; font-size: 14px; font-weight: bold;">
+                                                Secure My Account
+                                            </a>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            <p style="margin: 20px 0 0; color: #999999; font-size: 13px; line-height: 1.6;">
+                                This is an automated security alert. We monitor login activity to protect your account from unauthorized access.
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 20px 30px; background-color: #f8f8f8; text-align: center;">
+                            <p style="margin: 0 0 10px; color: #999999; font-size: 12px;">
+                                Need help? Contact us at <a href="mailto:support@paigram.com" style="color: #1976d2; text-decoration: none;">support@paigram.com</a>
+                            </p>
+                            <p style="margin: 0; color: #999999; font-size: 12px;">
+                                © 2024 PaiGram. All rights reserved.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+`

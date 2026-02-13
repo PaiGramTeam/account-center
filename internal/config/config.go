@@ -17,6 +17,7 @@ type Config struct {
 	GRPC      GRPCConfig      `mapstructure:"grpc"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Email     EmailConfig     `mapstructure:"email"`
+	Security  SecurityConfig  `mapstructure:"security"`
 }
 
 // AppConfig holds HTTP server configuration.
@@ -138,6 +139,13 @@ type EmailConfig struct {
 	RetryAttempts int    `mapstructure:"retry_attempts"` // Number of retry attempts
 	RetryDelay    int    `mapstructure:"retry_delay"`    // Delay between retries in seconds
 	TemplateDir   string `mapstructure:"template_dir"`   // Directory for email templates (optional, uses embedded if empty)
+}
+
+// SecurityConfig holds security-related configuration.
+type SecurityConfig struct {
+	SuspiciousLoginDetection  bool   `mapstructure:"suspicious_login_detection"`   // Enable suspicious login detection
+	SuspiciousLoginEmailAlert bool   `mapstructure:"suspicious_login_email_alert"` // Send email alerts for suspicious logins
+	SecuritySettingsURL       string `mapstructure:"security_settings_url"`        // URL to account security settings page
 }
 
 var (

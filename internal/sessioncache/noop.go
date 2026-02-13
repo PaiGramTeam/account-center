@@ -48,3 +48,11 @@ func (*NoopStore) GetTTL(_ context.Context, _ string) (time.Duration, error) {
 func (*NoopStore) Delete(_ context.Context, _ string) error {
 	return nil
 }
+
+func (*NoopStore) Set(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	return nil
+}
+
+func (*NoopStore) Get(_ context.Context, _ string) ([]byte, error) {
+	return nil, redis.Nil
+}

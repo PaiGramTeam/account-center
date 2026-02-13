@@ -1,6 +1,7 @@
 package security
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -20,16 +21,24 @@ import (
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	"paigram/internal/sessioncache"
 )
 
 // Handler manages security-related endpoints
 type Handler struct {
-	db *gorm.DB
+	db           *gorm.DB
+	sessionCache sessioncache.Store
 }
 
 // NewHandler creates a new security handler
-func NewHandler(db *gorm.DB) *Handler {
-	return &Handler{db: db}
+func NewHandler(db *gorm.DB, cache sessioncache.Store) *Handler {
+	if cache == nil {
+		cache = sessioncache.NewNoopStore()
+	}
+	return &Handler{
+		db:           db,
+		sessionCache: cache,
+	}
 }
 
 // RegisterRoutes binds security endpoints beneath the given route group
@@ -225,37 +234,58 @@ func (h *Handler) Enable2FA(c *gin.Context) {
 		return
 	}
 
-	// Generate backup codes
-	backupCodes := make([]string, 8)
+	// Generate backup codes (10 codes, 10 digits each following better-auth best practice)
+	backupCodes := make([]string, 10)
 	for i := range backupCodes {
-		code := make([]byte, 4)
+		code := make([]byte, 5) // 5 bytes = 10 hex digits
 		if _, err := rand.Read(code); err != nil {
 			response.InternalServerErrorWithCode(c, "RANDOM_ERROR", "failed to generate backup codes", nil)
 			return
 		}
-		backupCodes[i] = fmt.Sprintf("%08d", int(code[0])<<24|int(code[1])<<16|int(code[2])<<8|int(code[3]))
+		// Generate 10-digit numeric code
+		backupCodes[i] = fmt.Sprintf("%010d",
+			int(code[0])<<32|int(code[1])<<24|int(code[2])<<16|int(code[3])<<8|int(code[4]))
 	}
 
-	backupCodesJSON, _ := json.Marshal(backupCodes)
+	// Store setup data in Redis with 15-minute expiry
+	setupData := TwoFactorSetupData{
+		Secret:      key.Secret(),
+		BackupCodes: backupCodes,
+		CreatedAt:   time.Now(),
+		ExpiresAt:   time.Now().Add(15 * time.Minute),
+	}
 
-	// Store in session/cache temporarily (not in DB yet)
-	// In a real implementation, you might want to use Redis or session storage
-	// For now, we'll return the data and require confirmation
-	_ = backupCodesJSON // Will be used in actual implementation
+	setupDataJSON, err := json.Marshal(setupData)
+	if err != nil {
+		response.InternalServerErrorWithCode(c, "JSON_ERROR", "failed to serialize setup data", nil)
+		return
+	}
+
+	// Store in Redis
+	ctx := context.Background()
+	setupKey := fmt.Sprintf("2fa_setup:%d", userID)
+
+	// Use a simple Set operation via the session cache
+	// We'll add a helper method for this
+	if err := h.store2FASetupData(ctx, setupKey, setupDataJSON, 15*time.Minute); err != nil {
+		response.InternalServerErrorWithCode(c, "CACHE_ERROR", "failed to store setup data", nil)
+		return
+	}
 
 	// Generate QR code URL
 	qrCodeURL := key.URL()
 
+	// Return QR code and backup codes to user (only time they'll see plaintext codes)
 	response.Success(c, gin.H{
 		"qr_code":      qrCodeURL,
-		"secret":       key.Secret(),
-		"backup_codes": backupCodes,
+		"secret":       key.Secret(), // Allow manual entry
+		"backup_codes": backupCodes,  // Show codes for user to save
+		"expires_at":   setupData.ExpiresAt.Format(time.RFC3339),
 	})
 }
 
 type confirm2FARequest struct {
-	Code   string `json:"code" binding:"required,len=6"`
-	Secret string `json:"secret" binding:"required"`
+	Code string `json:"code" binding:"required,len=6"`
 }
 
 // Confirm2FA confirms and activates 2FA
@@ -298,10 +328,33 @@ func (h *Handler) Confirm2FA(c *gin.Context) {
 		return
 	}
 
+	// Retrieve setup data from Redis
+	ctx := context.Background()
+	setupKey := fmt.Sprintf("2fa_setup:%d", userID)
+
+	setupDataJSON, err := h.get2FASetupData(ctx, setupKey)
+	if err != nil {
+		response.BadRequestWithCode(c, "SETUP_EXPIRED", "2FA setup expired or not found, please start again", nil)
+		return
+	}
+
+	var setupData TwoFactorSetupData
+	if err := json.Unmarshal(setupDataJSON, &setupData); err != nil {
+		response.InternalServerErrorWithCode(c, "JSON_ERROR", "failed to parse setup data", nil)
+		return
+	}
+
+	// Check if setup data has expired
+	if time.Now().After(setupData.ExpiresAt) {
+		h.delete2FASetupData(ctx, setupKey)
+		response.BadRequestWithCode(c, "SETUP_EXPIRED", "2FA setup expired, please start again", nil)
+		return
+	}
+
 	// Verify the TOTP code with time window tolerance
 	valid, err := totp.ValidateCustom(
 		req.Code,
-		req.Secret,
+		setupData.Secret,
 		time.Now(),
 		totp.ValidateOpts{
 			Period:    30,
@@ -316,20 +369,9 @@ func (h *Handler) Confirm2FA(c *gin.Context) {
 		return
 	}
 
-	// Generate backup codes (in real implementation, these should come from Enable2FA step)
-	backupCodes := make([]string, 8)
-	for i := range backupCodes {
-		code := make([]byte, 4)
-		if _, err := rand.Read(code); err != nil {
-			response.InternalServerErrorWithCode(c, "RANDOM_ERROR", "failed to generate backup codes", nil)
-			return
-		}
-		backupCodes[i] = fmt.Sprintf("%08d", int(code[0])<<24|int(code[1])<<16|int(code[2])<<8|int(code[3]))
-	}
-
-	// Hash backup codes
-	hashedCodes := make([]string, len(backupCodes))
-	for i, code := range backupCodes {
+	// Hash backup codes before storing
+	hashedCodes := make([]string, len(setupData.BackupCodes))
+	for i, code := range setupData.BackupCodes {
 		hashed, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
 		if err != nil {
 			response.InternalServerErrorWithCode(c, "HASH_ERROR", "failed to hash backup codes", nil)
@@ -341,7 +383,7 @@ func (h *Handler) Confirm2FA(c *gin.Context) {
 	backupCodesJSON, _ := json.Marshal(hashedCodes)
 
 	// Encrypt the TOTP secret before storing
-	encryptedSecret, err := crypto.Encrypt(req.Secret)
+	encryptedSecret, err := crypto.Encrypt(setupData.Secret)
 	if err != nil {
 		response.InternalServerErrorWithCode(c, "ENCRYPTION_ERROR", "failed to encrypt secret", nil)
 		return
@@ -380,9 +422,12 @@ func (h *Handler) Confirm2FA(c *gin.Context) {
 		return
 	}
 
+	// Delete setup data from Redis after successful confirmation
+	h.delete2FASetupData(ctx, setupKey)
+
+	// Note: We don't return backup codes here as they were already shown in Enable2FA
 	response.Success(c, gin.H{
-		"message":      "2FA enabled successfully",
-		"backup_codes": backupCodes, // Return unhashed codes to user (only this time)
+		"message": "2FA enabled successfully",
 	})
 }
 
@@ -786,4 +831,28 @@ func parseUserAgent(userAgent string) (deviceType, os, browser string) {
 	}
 
 	return
+}
+
+// store2FASetupData stores temporary 2FA setup data in Redis
+func (h *Handler) store2FASetupData(ctx context.Context, key string, data []byte, ttl time.Duration) error {
+	if h.sessionCache == nil {
+		return fmt.Errorf("session cache not available")
+	}
+	return h.sessionCache.Set(ctx, key, data, ttl)
+}
+
+// get2FASetupData retrieves temporary 2FA setup data from Redis
+func (h *Handler) get2FASetupData(ctx context.Context, key string) ([]byte, error) {
+	if h.sessionCache == nil {
+		return nil, fmt.Errorf("session cache not available")
+	}
+	return h.sessionCache.Get(ctx, key)
+}
+
+// delete2FASetupData removes temporary 2FA setup data from Redis
+func (h *Handler) delete2FASetupData(ctx context.Context, key string) error {
+	if h.sessionCache == nil {
+		return nil
+	}
+	return h.sessionCache.Delete(ctx, key)
 }

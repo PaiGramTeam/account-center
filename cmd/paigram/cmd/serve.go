@@ -14,11 +14,14 @@ import (
 	"paigram/internal/config"
 	"paigram/internal/crypto"
 	"paigram/internal/database"
+	"paigram/internal/geolocation"
 	"paigram/internal/grpc/server"
+	authhandler "paigram/internal/handler/auth"
 	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/router"
 	"paigram/internal/sessioncache"
+	"paigram/internal/worker"
 )
 
 // serveCmd represents the serve command
@@ -90,6 +93,28 @@ func runServer() {
 			}
 		}()
 		log.Printf("gRPC server started on port %d", cfg.GRPC.Port)
+	}
+
+	// Start Asynq worker for background tasks (OAuth token refresh, etc.)
+	if cfg.Redis.Enabled {
+		// Create auth handler for worker
+		geoService := geolocation.NewService()
+		authHandler := authhandler.NewHandler(db, cfg.Auth, cfg.Email, cfg.Security, sessionStore, geoService)
+
+		asynqServer, asynqScheduler, err := worker.StartAsynqServer(cfg, redisClient, db, authHandler)
+		if err != nil {
+			log.Printf("WARNING: Failed to start Asynq worker: %v", err)
+			log.Println("Background tasks (OAuth token refresh) will not run")
+		} else {
+			defer func() {
+				if asynqServer != nil {
+					asynqServer.Shutdown()
+				}
+				if asynqScheduler != nil {
+					asynqScheduler.Shutdown()
+				}
+			}()
+		}
 	}
 
 	// Start HTTP server

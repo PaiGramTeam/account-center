@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -297,8 +298,19 @@ func (h *Handler) Confirm2FA(c *gin.Context) {
 		return
 	}
 
-	// Verify the TOTP code
-	valid := totp.Validate(req.Code, req.Secret)
+	// Verify the TOTP code with time window tolerance
+	valid, err := totp.ValidateCustom(
+		req.Code,
+		req.Secret,
+		time.Now(),
+		totp.ValidateOpts{
+			Period:    30,
+			Skew:      1, // Accept ±1 period (±30 seconds)
+			Digits:    otp.DigitsSix,
+			Algorithm: otp.AlgorithmSHA1,
+		},
+	)
+	valid = err == nil && valid
 	if !valid {
 		response.UnauthorizedWithCode(c, "INVALID_CODE", "invalid verification code", nil)
 		return
@@ -456,8 +468,19 @@ func (h *Handler) Disable2FA(c *gin.Context) {
 		return
 	}
 
-	// Verify TOTP code
-	valid := totp.Validate(req.Code, decryptedSecret)
+	// Verify TOTP code with time window tolerance
+	valid, err := totp.ValidateCustom(
+		req.Code,
+		decryptedSecret,
+		time.Now(),
+		totp.ValidateOpts{
+			Period:    30,
+			Skew:      1, // Accept ±1 period (±30 seconds)
+			Digits:    otp.DigitsSix,
+			Algorithm: otp.AlgorithmSHA1,
+		},
+	)
+	valid = err == nil && valid
 	if !valid {
 		// Try backup codes
 		var backupCodes []string

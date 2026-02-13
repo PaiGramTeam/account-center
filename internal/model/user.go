@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"time"
 
+	"paigram/internal/crypto"
+
 	"gorm.io/gorm"
 )
 
@@ -55,19 +57,21 @@ type UserProfile struct {
 
 // UserCredential stores authentication secrets per provider.
 type UserCredential struct {
-	ID                uint64       `gorm:"primaryKey"`
-	UserID            uint64       `gorm:"index;not null"`
-	Provider          string       `gorm:"size:64;not null;index:user_provider,priority:1"`
-	ProviderAccountID string       `gorm:"size:255;not null;index:user_provider,priority:2"`
-	PasswordHash      string       `gorm:"size:255"`
-	AccessToken       string       `gorm:"size:1024"`
-	RefreshToken      string       `gorm:"size:1024"`
-	TokenExpiry       sql.NullTime `gorm:"type:datetime(3)"`
-	Scopes            string       `gorm:"size:512"`
-	LastSyncAt        sql.NullTime `gorm:"type:datetime(3)"`
-	Metadata          string       `gorm:"type:text"`
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                    uint64       `gorm:"primaryKey"`
+	UserID                uint64       `gorm:"index;not null"`
+	Provider              string       `gorm:"size:64;not null;index:user_provider,priority:1"`
+	ProviderAccountID     string       `gorm:"size:255;not null;index:user_provider,priority:2"`
+	PasswordHash          string       `gorm:"size:255"`
+	AccessToken           string       `gorm:"type:text"`                                // AES-256-GCM encrypted OAuth access token
+	RefreshToken          string       `gorm:"type:text"`                                // AES-256-GCM encrypted OAuth refresh token
+	AccessTokenEncrypted  string       `gorm:"type:text;column:access_token_encrypted"`  // Temporary migration field
+	RefreshTokenEncrypted string       `gorm:"type:text;column:refresh_token_encrypted"` // Temporary migration field
+	TokenExpiry           sql.NullTime `gorm:"type:datetime(3)"`
+	Scopes                string       `gorm:"size:512"`
+	LastSyncAt            sql.NullTime `gorm:"type:datetime(3)"`
+	Metadata              string       `gorm:"type:text"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // UserEmail keeps track of user email addresses and verification state.
@@ -124,4 +128,48 @@ type LoginAudit struct {
 
 func (UserOAuthState) TableName() string {
 	return "user_oauth_states"
+}
+
+// SetAccessToken encrypts and stores the OAuth access token
+func (c *UserCredential) SetAccessToken(plaintext string) error {
+	if plaintext == "" {
+		c.AccessToken = ""
+		return nil
+	}
+	encrypted, err := crypto.Encrypt(plaintext)
+	if err != nil {
+		return err
+	}
+	c.AccessToken = encrypted
+	return nil
+}
+
+// GetAccessToken decrypts and returns the OAuth access token
+func (c *UserCredential) GetAccessToken() (string, error) {
+	if c.AccessToken == "" {
+		return "", nil
+	}
+	return crypto.Decrypt(c.AccessToken)
+}
+
+// SetRefreshToken encrypts and stores the OAuth refresh token
+func (c *UserCredential) SetRefreshToken(plaintext string) error {
+	if plaintext == "" {
+		c.RefreshToken = ""
+		return nil
+	}
+	encrypted, err := crypto.Encrypt(plaintext)
+	if err != nil {
+		return err
+	}
+	c.RefreshToken = encrypted
+	return nil
+}
+
+// GetRefreshToken decrypts and returns the OAuth refresh token
+func (c *UserCredential) GetRefreshToken() (string, error) {
+	if c.RefreshToken == "" {
+		return "", nil
+	}
+	return crypto.Decrypt(c.RefreshToken)
 }

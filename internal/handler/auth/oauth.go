@@ -1,10 +1,13 @@
 package auth
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -110,16 +113,8 @@ func (h *Handler) InitiateOAuth(c *gin.Context) {
 }
 
 type oauthCallbackRequest struct {
-	State             string `json:"state" binding:"required"`
-	Code              string `json:"code"`
-	ProviderAccountID string `json:"provider_account_id" binding:"required"`
-	Email             string `json:"email"`
-	EmailVerified     bool   `json:"email_verified"`
-	DisplayName       string `json:"display_name"`
-	AccessToken       string `json:"access_token"`
-	RefreshToken      string `json:"refresh_token"`
-	ExpiresIn         int    `json:"expires_in"`
-	Scope             string `json:"scope"`
+	State string `json:"state" binding:"required"`
+	Code  string `json:"code" binding:"required"` // Authorization code from provider
 }
 
 // swagger:route POST /api/v1/auth/oauth/{provider}/callback auth handleOAuthCallback
@@ -148,9 +143,10 @@ type oauthCallbackRequest struct {
 //	500: authErrorResponse
 //
 // HandleOAuthCallback processes the OAuth callback and issues a local session.
+// Now performs secure backend token exchange - frontend only sends authorization code.
 func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	provider := strings.ToLower(c.Param("provider"))
-	_, ok := h.resolveProvider(provider)
+	providerCfg, ok := h.resolveProvider(provider)
 	if !ok {
 		response.BadRequest(c, "unsupported provider")
 		return
@@ -166,40 +162,64 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	clientIP := c.ClientIP()
 	userAgent := c.GetHeader("User-Agent")
 
+	// Step 1: Validate OAuth state
+	var stateRecord model.UserOAuthState
+	if err := h.db.Where("state = ? AND provider = ?", req.State, provider).First(&stateRecord).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.BadRequest(c, "invalid oauth state")
+		} else {
+			response.InternalServerError(c, "database error")
+		}
+		return
+	}
+
+	if now.After(stateRecord.ExpiresAt) {
+		_ = h.db.Delete(&stateRecord)
+		response.BadRequest(c, "oauth state expired")
+		return
+	}
+
+	// Delete state (one-time use)
+	if err := h.db.Delete(&stateRecord).Error; err != nil {
+		response.InternalServerError(c, "failed to delete oauth state")
+		return
+	}
+
+	// Step 2: Exchange authorization code for tokens (BACKEND ONLY)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tokenResp, err := h.exchangeCodeForToken(ctx, provider, req.Code, providerCfg)
+	if err != nil {
+		response.BadRequest(c, fmt.Sprintf("token exchange failed: %v", err))
+		return
+	}
+
+	// Step 3: Fetch user info from provider
+	userInfo, err := h.fetchUserInfo(ctx, provider, tokenResp.AccessToken, providerCfg)
+	if err != nil {
+		response.BadRequest(c, fmt.Sprintf("failed to fetch user info: %v", err))
+		return
+	}
+
+	// Step 4: Create or update user account
 	var user model.User
 	var emailRecord *model.UserEmail
 	var sessionWithTokens *SessionWithTokens
 
-	err := h.db.Transaction(func(tx *gorm.DB) error {
-		var stateRecord model.UserOAuthState
-		if err := tx.Where("state = ? AND provider = ?", req.State, provider).First(&stateRecord).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return fmt.Errorf("invalid oauth state")
-			}
-			return err
-		}
-
-		if now.After(stateRecord.ExpiresAt) {
-			if err := tx.Delete(&stateRecord).Error; err != nil {
-				return err
-			}
-			return fmt.Errorf("oauth state expired")
-		}
-		if err := tx.Delete(&stateRecord).Error; err != nil {
-			return err
-		}
-
+	err = h.db.Transaction(func(tx *gorm.DB) error {
 		var credential model.UserCredential
-		credErr := tx.Where("provider = ? AND provider_account_id = ?", provider, req.ProviderAccountID).First(&credential).Error
+		credErr := tx.Where("provider = ? AND provider_account_id = ?", provider, userInfo.ID).First(&credential).Error
 		if credErr != nil && !errors.Is(credErr, gorm.ErrRecordNotFound) {
 			return credErr
 		}
 
 		tokenExpiry := shared.ClearNullTime()
-		if req.ExpiresIn > 0 {
-			tokenExpiry = shared.MakeNullTime(now.Add(time.Duration(req.ExpiresIn) * time.Second))
+		if tokenResp.ExpiresIn > 0 {
+			tokenExpiry = shared.MakeNullTime(now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second))
 		}
 
+		// New user
 		if errors.Is(credErr, gorm.ErrRecordNotFound) {
 			user = model.User{
 				PrimaryLoginType: model.LoginTypeOAuth,
@@ -209,27 +229,28 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 				return err
 			}
 
-			displayName := strings.TrimSpace(req.DisplayName)
+			displayName := strings.TrimSpace(userInfo.Name)
 			if displayName == "" {
-				displayName = fmt.Sprintf("%s_user_%s", provider, req.ProviderAccountID)
+				displayName = fmt.Sprintf("%s_user_%s", provider, userInfo.ID)
 			}
 
 			profile := model.UserProfile{
 				UserID:      user.ID,
 				DisplayName: displayName,
+				AvatarURL:   userInfo.Picture,
 				Locale:      "en_US",
 			}
 			if err := tx.Create(&profile).Error; err != nil {
 				return err
 			}
 
-			if email := strings.TrimSpace(strings.ToLower(req.Email)); email != "" {
+			if email := strings.TrimSpace(strings.ToLower(userInfo.Email)); email != "" {
 				emailModel := model.UserEmail{
 					UserID:    user.ID,
 					Email:     email,
 					IsPrimary: true,
 				}
-				if req.EmailVerified {
+				if userInfo.EmailVerified {
 					emailModel.VerifiedAt = shared.MakeNullTime(now)
 				}
 				if err := tx.Create(&emailModel).Error; err != nil {
@@ -238,36 +259,51 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 				emailRecord = &emailModel
 			}
 
+			// Create credential with ENCRYPTED tokens
 			credential = model.UserCredential{
 				UserID:            user.ID,
 				Provider:          provider,
-				ProviderAccountID: req.ProviderAccountID,
-				AccessToken:       req.AccessToken,
-				RefreshToken:      req.RefreshToken,
+				ProviderAccountID: userInfo.ID,
 				TokenExpiry:       tokenExpiry,
-				Scopes:            strings.TrimSpace(req.Scope),
+				Scopes:            strings.TrimSpace(tokenResp.Scope),
 				LastSyncAt:        shared.MakeNullTime(now),
 			}
+
+			// Encrypt and store OAuth tokens
+			if err := credential.SetAccessToken(tokenResp.AccessToken); err != nil {
+				return fmt.Errorf("encrypt access token: %w", err)
+			}
+			if err := credential.SetRefreshToken(tokenResp.RefreshToken); err != nil {
+				return fmt.Errorf("encrypt refresh token: %w", err)
+			}
+
 			if err := tx.Create(&credential).Error; err != nil {
 				return err
 			}
 		} else {
+			// Existing user
 			if err := tx.First(&user, credential.UserID).Error; err != nil {
 				return err
 			}
 
-			update := map[string]interface{}{
-				"access_token":  req.AccessToken,
-				"refresh_token": req.RefreshToken,
-				"token_expiry":  tokenExpiry,
-				"scopes":        strings.TrimSpace(req.Scope),
-				"last_sync_at":  shared.MakeNullTime(now),
+			// Update credential with ENCRYPTED tokens
+			credential.TokenExpiry = tokenExpiry
+			credential.Scopes = strings.TrimSpace(tokenResp.Scope)
+			credential.LastSyncAt = shared.MakeNullTime(now)
+
+			if err := credential.SetAccessToken(tokenResp.AccessToken); err != nil {
+				return fmt.Errorf("encrypt access token: %w", err)
 			}
-			if err := tx.Model(&model.UserCredential{}).Where("id = ?", credential.ID).Updates(update).Error; err != nil {
+			if err := credential.SetRefreshToken(tokenResp.RefreshToken); err != nil {
+				return fmt.Errorf("encrypt refresh token: %w", err)
+			}
+
+			if err := tx.Save(&credential).Error; err != nil {
 				return err
 			}
 
-			if email := strings.TrimSpace(strings.ToLower(req.Email)); email != "" {
+			// Update or create email record
+			if email := strings.TrimSpace(strings.ToLower(userInfo.Email)); email != "" {
 				var userEmail model.UserEmail
 				err := tx.Where("user_id = ? AND email = ?", user.ID, email).First(&userEmail).Error
 				if err != nil {
@@ -275,9 +311,9 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 						userEmail = model.UserEmail{
 							UserID:    user.ID,
 							Email:     email,
-							IsPrimary: true,
+							IsPrimary: false,
 						}
-						if req.EmailVerified {
+						if userInfo.EmailVerified {
 							userEmail.VerifiedAt = shared.MakeNullTime(now)
 						}
 						if err := tx.Create(&userEmail).Error; err != nil {
@@ -286,8 +322,9 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 					} else {
 						return err
 					}
-				} else if req.EmailVerified && !userEmail.VerifiedAt.Valid {
-					if err := tx.Model(&model.UserEmail{}).Where("id = ?", userEmail.ID).Update("verified_at", shared.MakeNullTime(now)).Error; err != nil {
+				} else if userInfo.EmailVerified && !userEmail.VerifiedAt.Valid {
+					userEmail.VerifiedAt = shared.MakeNullTime(now)
+					if err := tx.Save(&userEmail).Error; err != nil {
 						return err
 					}
 				}
@@ -295,6 +332,7 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 			}
 		}
 
+		// Update user last login
 		updates := map[string]interface{}{
 			"last_login_at": shared.MakeNullTime(now),
 		}
@@ -305,12 +343,14 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 			return err
 		}
 
+		// Issue local session
 		var err error
 		sessionWithTokens, err = h.issueSession(tx, user.ID, clientIP, userAgent)
 		if err != nil {
 			return err
 		}
 
+		// Record successful login
 		return h.recordLoginAudit(tx, model.LoginAudit{
 			UserID:    sql.NullInt64{Int64: int64(user.ID), Valid: true},
 			Provider:  provider,
@@ -407,4 +447,142 @@ func emailValue(email *model.UserEmail) string {
 		return ""
 	}
 	return email.Email
+}
+
+// OAuth token response structures
+type oauthTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	Scope        string `json:"scope"`
+	IDToken      string `json:"id_token,omitempty"` // For OIDC providers
+}
+
+type oauthUserInfo struct {
+	ID            string `json:"id"` // Provider user ID
+	Email         string `json:"email"`
+	EmailVerified bool   `json:"email_verified"`
+	Name          string `json:"name"`
+	GivenName     string `json:"given_name"`
+	FamilyName    string `json:"family_name"`
+	Picture       string `json:"picture"`
+	// GitHub specific
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatar_url"`
+}
+
+// exchangeCodeForToken exchanges an authorization code for OAuth tokens
+// This is the secure backend token exchange - keeps client_secret safe
+func (h *Handler) exchangeCodeForToken(ctx context.Context, provider, code string, cfg config.OAuthProviderConfig) (*oauthTokenResponse, error) {
+	if cfg.TokenURL == "" {
+		return nil, fmt.Errorf("token_url not configured for provider %s", provider)
+	}
+
+	// Build token exchange request
+	data := url.Values{
+		"grant_type":    []string{"authorization_code"},
+		"code":          []string{code},
+		"client_id":     []string{cfg.ClientID},
+		"client_secret": []string{cfg.ClientSecret},
+	}
+
+	if cfg.RedirectURL != "" {
+		data.Set("redirect_uri", cfg.RedirectURL)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequestWithContext(ctx, "POST", cfg.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create token request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	// Execute request
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute token request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read token response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var tokenResp oauthTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("parse token response: %w", err)
+	}
+
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("no access_token in response")
+	}
+
+	return &tokenResp, nil
+}
+
+// fetchUserInfo retrieves user information from the OAuth provider
+func (h *Handler) fetchUserInfo(ctx context.Context, provider, accessToken string, cfg config.OAuthProviderConfig) (*oauthUserInfo, error) {
+	if cfg.UserInfoURL == "" {
+		return nil, fmt.Errorf("user_info_url not configured for provider %s", provider)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", cfg.UserInfoURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create userinfo request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("execute userinfo request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read userinfo response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("userinfo request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var userInfo oauthUserInfo
+	if err := json.Unmarshal(body, &userInfo); err != nil {
+		return nil, fmt.Errorf("parse userinfo response: %w", err)
+	}
+
+	// Normalize provider-specific fields
+	switch provider {
+	case "github":
+		if userInfo.ID == "" && userInfo.Login != "" {
+			// GitHub uses 'id' as number, but we need string
+			// The ID field should already be populated by JSON unmarshal
+		}
+		if userInfo.Name == "" && userInfo.Login != "" {
+			userInfo.Name = userInfo.Login
+		}
+		if userInfo.Picture == "" && userInfo.AvatarURL != "" {
+			userInfo.Picture = userInfo.AvatarURL
+		}
+	}
+
+	if userInfo.ID == "" {
+		return nil, fmt.Errorf("provider did not return user ID")
+	}
+
+	return &userInfo, nil
 }

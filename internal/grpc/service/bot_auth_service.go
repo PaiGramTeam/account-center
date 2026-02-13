@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 
+	"paigram/internal/cache"
 	"paigram/internal/model"
 )
 
@@ -34,14 +36,21 @@ const (
 type BotAuthService struct {
 	UnimplementedBotAuthServiceServer
 	db                   *gorm.DB
+	cache                *cache.BotTokenCache
 	accessTokenDuration  time.Duration
 	refreshTokenDuration time.Duration
 }
 
 // NewBotAuthService creates a new bot auth service
-func NewBotAuthService(db *gorm.DB) *BotAuthService {
+func NewBotAuthService(db *gorm.DB, redisClient *redis.Client, redisPrefix string) *BotAuthService {
+	var tokenCache *cache.BotTokenCache
+	if redisClient != nil {
+		tokenCache = cache.NewBotTokenCache(redisClient, redisPrefix)
+	}
+
 	return &BotAuthService{
 		db:                   db,
+		cache:                tokenCache,
 		accessTokenDuration:  time.Hour,
 		refreshTokenDuration: time.Hour * 24 * 30, // 30 days
 	}
@@ -219,16 +228,103 @@ func (s *BotAuthService) RefreshBotToken(ctx context.Context, req *RefreshBotTok
 	}, nil
 }
 
-// ValidateBotToken validates an access token with rate limiting
+// ValidateBotToken validates an access token with rate limiting and caching
 func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotTokenRequest) (*ValidateBotTokenResponse, error) {
 	if req.AccessToken == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "access token is required")
 	}
 
-	// Hash the access token to look up in database
+	// Hash the access token to look up in database/cache
 	accessTokenHash := hashToken(req.AccessToken)
 
-	// Find token record
+	// Check revocation cache first (fastest path)
+	if s.cache != nil {
+		revoked, err := s.cache.IsRevoked(ctx, accessTokenHash)
+		if err == nil && revoked {
+			return &ValidateBotTokenResponse{Valid: false}, nil
+		}
+	}
+
+	// Try to get from cache (fast path - no DB query!)
+	if s.cache != nil {
+		cacheData, err := s.cache.Get(ctx, accessTokenHash)
+		if err == nil && cacheData != nil {
+			// Cache hit! Validate using cached data
+			now := time.Now()
+
+			// Check expiry from cache
+			if now.After(cacheData.ExpiresAt) {
+				return &ValidateBotTokenResponse{Valid: false}, nil
+			}
+
+			// Check bot status from cache
+			if cacheData.BotStatus != "ACTIVE" {
+				return &ValidateBotTokenResponse{Valid: false}, nil
+			}
+
+			// Check rate limit from cache
+			if cacheData.RateLimitEnabled && cacheData.RateLimitTimeWindow != nil && cacheData.RateLimitMax != nil {
+				timeWindow := time.Duration(*cacheData.RateLimitTimeWindow) * time.Millisecond
+
+				needsUpdate := false
+				if cacheData.LastRequest != nil {
+					timeSinceLastRequest := now.Sub(*cacheData.LastRequest)
+
+					if timeSinceLastRequest > timeWindow {
+						// Reset window
+						cacheData.RequestCount = 1
+						cacheData.LastRequest = &now
+						needsUpdate = true
+					} else {
+						// Within window - check limit
+						if cacheData.RequestCount >= *cacheData.RateLimitMax {
+							tryAgainIn := timeWindow - timeSinceLastRequest
+							return &ValidateBotTokenResponse{
+								Valid:      false,
+								Error:      "RATE_LIMITED",
+								TryAgainIn: int64(tryAgainIn / time.Millisecond),
+							}, nil
+						}
+						cacheData.RequestCount++
+						needsUpdate = true
+					}
+				} else {
+					// First request
+					cacheData.RequestCount = 1
+					cacheData.LastRequest = &now
+					needsUpdate = true
+				}
+
+				// Update cache with new rate limit counters (async)
+				if needsUpdate {
+					go s.cache.UpdateRateLimit(context.Background(), accessTokenHash, cacheData.RequestCount, *cacheData.LastRequest)
+				}
+			}
+
+			// Verify required permissions from cached scopes
+			permissionsGranted := true
+			if len(req.RequiredPermissions) > 0 {
+				permissionsGranted = s.verifyPermissions(cacheData.Scopes, req.RequiredPermissions)
+				if !permissionsGranted {
+					return &ValidateBotTokenResponse{
+						Valid:              false,
+						Error:              "INSUFFICIENT_PERMISSIONS",
+						PermissionsGranted: false,
+					}, nil
+				}
+			}
+
+			// Cache validation successful
+			return &ValidateBotTokenResponse{
+				Valid:              true,
+				Scopes:             cacheData.Scopes,
+				ExpiresAt:          timestamppb.New(cacheData.ExpiresAt),
+				PermissionsGranted: permissionsGranted,
+			}, nil
+		}
+	}
+
+	// Cache miss - fall back to database lookup
 	var botToken model.BotToken
 	if err := s.db.Preload("Bot").Where("access_token_hash = ? AND revoked_at IS NULL", accessTokenHash).First(&botToken).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -282,14 +378,15 @@ func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotT
 			botToken.LastRequest.Valid = true
 		}
 
-		// Update rate limit counters in database
-		if err := s.db.Model(&botToken).Updates(map[string]interface{}{
-			"request_count": botToken.RequestCount,
-			"last_request":  botToken.LastRequest,
-		}).Error; err != nil {
-			// Log error but don't fail validation
-			// In production, consider logging to monitoring system
-		}
+		// Update rate limit counters in database (async to avoid blocking)
+		go func() {
+			if err := s.db.Model(&botToken).Updates(map[string]interface{}{
+				"request_count": botToken.RequestCount,
+				"last_request":  botToken.LastRequest,
+			}).Error; err != nil {
+				// Log error but don't fail validation
+			}
+		}()
 	}
 
 	// Parse scopes
@@ -308,16 +405,40 @@ func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotT
 		}
 	}
 
+	// Cache the validation result for future requests
+	if s.cache != nil {
+		var lastRequest *time.Time
+		if botToken.LastRequest.Valid {
+			lastRequest = &botToken.LastRequest.Time
+		}
+
+		cacheData := &cache.BotTokenCacheData{
+			Valid:               true,
+			BotID:               botToken.Bot.ID,
+			BotName:             botToken.Bot.Name,
+			BotStatus:           botToken.Bot.Status,
+			Scopes:              scopes,
+			ExpiresAt:           botToken.ExpiresAt,
+			RateLimitEnabled:    botToken.RateLimitEnabled,
+			RateLimitTimeWindow: botToken.RateLimitTimeWindow,
+			RateLimitMax:        botToken.RateLimitMax,
+			RequestCount:        botToken.RequestCount,
+			LastRequest:         lastRequest,
+		}
+
+		// Cache asynchronously (don't block response)
+		go s.cache.Set(context.Background(), accessTokenHash, cacheData)
+	}
+
 	return &ValidateBotTokenResponse{
 		Valid:              true,
-		Bot:                s.modelBotToProto(&botToken.Bot),
 		Scopes:             scopes,
 		ExpiresAt:          timestamppb.New(botToken.ExpiresAt),
 		PermissionsGranted: permissionsGranted,
 	}, nil
 }
 
-// RevokeBotToken revokes an access token
+// RevokeBotToken revokes an access token and clears cache
 func (s *BotAuthService) RevokeBotToken(ctx context.Context, req *RevokeBotTokenRequest) (*RevokeBotTokenResponse, error) {
 	if req.AccessToken == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "access token is required")
@@ -326,7 +447,17 @@ func (s *BotAuthService) RevokeBotToken(ctx context.Context, req *RevokeBotToken
 	// Hash the access token to look up in database
 	accessTokenHash := hashToken(req.AccessToken)
 
-	// Find and revoke token
+	// Get token to find expiry time for cache TTL
+	var botToken model.BotToken
+	if err := s.db.Where("access_token_hash = ? AND revoked_at IS NULL", accessTokenHash).First(&botToken).Error; err == nil {
+		// Mark as revoked in cache
+		if s.cache != nil {
+			go s.cache.MarkRevoked(context.Background(), accessTokenHash, botToken.ExpiresAt)
+			go s.cache.Delete(context.Background(), accessTokenHash)
+		}
+	}
+
+	// Find and revoke token in database
 	result := s.db.Model(&model.BotToken{}).
 		Where("access_token_hash = ? AND revoked_at IS NULL", accessTokenHash).
 		Update("revoked_at", time.Now())

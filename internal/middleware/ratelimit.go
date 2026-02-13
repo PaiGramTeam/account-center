@@ -3,7 +3,9 @@ package middleware
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +16,9 @@ import (
 
 	"paigram/internal/response"
 )
+
+// Email validation regex (RFC 5322 simplified)
+var emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
 
 // RateLimitConfig holds configuration for rate limiting.
 type RateLimitConfig struct {
@@ -58,21 +63,52 @@ func UserIDKeyFunc(c *gin.Context) string {
 	return fmt.Sprintf("user:%v", userID)
 }
 
-// EmailKeyFunc returns a KeyFunc that extracts the email from the request body.
-// The field parameter specifies the JSON field name to extract.
+// EmailKeyFunc returns a KeyFunc that extracts and validates the email from the request.
+// The field parameter specifies the field name to extract from query or form data.
+// SECURITY: Validates email format and normalizes case to prevent rate limit bypass.
 func EmailKeyFunc(field string) KeyFunc {
 	return func(c *gin.Context) string {
+		var email string
+
 		// Try to get email from query parameter first
-		if email := c.Query(field); email != "" {
-			return fmt.Sprintf("email:%s", email)
+		if email = c.Query(field); email != "" {
+			// Validate and normalize
+			if normalized := normalizeAndValidateEmail(email); normalized != "" {
+				return fmt.Sprintf("email:%s", normalized)
+			}
 		}
+
 		// Try to get from form data
-		if email := c.PostForm(field); email != "" {
-			return fmt.Sprintf("email:%s", email)
+		if email = c.PostForm(field); email != "" {
+			// Validate and normalize
+			if normalized := normalizeAndValidateEmail(email); normalized != "" {
+				return fmt.Sprintf("email:%s", normalized)
+			}
 		}
-		// Fallback to IP if email extraction fails
-		return c.ClientIP()
+
+		// Invalid email or not found - fallback to IP
+		// This prevents attackers from bypassing email rate limits with invalid inputs
+		return IPKeyFunc(c)
 	}
+}
+
+// normalizeAndValidateEmail validates and normalizes an email address
+// Returns empty string if invalid, normalized email otherwise
+func normalizeAndValidateEmail(email string) string {
+	// Trim whitespace and convert to lowercase
+	email = strings.TrimSpace(strings.ToLower(email))
+
+	// Validate format
+	if !emailRegex.MatchString(email) {
+		return ""
+	}
+
+	// Additional length check (max 254 chars per RFC 5321)
+	if len(email) > 254 {
+		return ""
+	}
+
+	return email
 }
 
 // RateLimit creates a rate limiting middleware with the given configuration.

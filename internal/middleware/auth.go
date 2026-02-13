@@ -67,19 +67,48 @@ func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store, authCfg config
 			return
 		}
 
-		// Try to get session from cache first
+		// Try to get complete session data from cache first (fast path - no DB query!)
 		var session model.UserSession
 		var userID uint64
-		sessionID, err := sessionCache.GetSessionID(ctx, sessioncache.TokenTypeAccess, accessToken)
-		if err == nil && sessionID > 0 {
-			// Found in cache, get from database
-			if err := db.First(&session, sessionID).Error; err == nil {
-				userID = session.UserID
+		var needDBLookup = true
+
+		sessionData, err := sessionCache.GetSessionData(ctx, sessioncache.TokenTypeAccess, accessToken)
+		if err == nil && sessionData != nil {
+			// Cache hit! Validate using cached data
+			now := time.Now().UTC()
+
+			// Check expiry from cache
+			if sessionData.AccessExpiry.Before(now) {
+				response.UnauthorizedWithCode(c, "TOKEN_EXPIRED", "access token has expired", nil)
+				c.Abort()
+				return
 			}
+
+			// Check revocation from cache
+			if sessionData.RevokedAt != nil {
+				response.UnauthorizedWithCode(c, "SESSION_REVOKED", "session has been revoked", nil)
+				c.Abort()
+				return
+			}
+
+			// Cache validation passed - populate session for later use
+			session.ID = sessionData.SessionID
+			session.UserID = sessionData.UserID
+			session.AccessExpiry = sessionData.AccessExpiry
+			session.RefreshExpiry = sessionData.RefreshExpiry
+			if sessionData.RevokedAt != nil {
+				session.RevokedAt.Valid = true
+				session.RevokedAt.Time = *sessionData.RevokedAt
+			}
+
+			userID = sessionData.UserID
+			needDBLookup = false
+
+			log.Printf("[auth] cache hit for user %d, skipped DB query", userID)
 		}
 
-		// If not in cache or cache miss, query database using token hash
-		if userID == 0 {
+		// If not in cache, fall back to database lookup
+		if needDBLookup {
 			accessTokenHash := hashToken(accessToken)
 			if err := db.Where("access_token_hash = ?", accessTokenHash).First(&session).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -91,23 +120,23 @@ func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store, authCfg config
 				return
 			}
 			userID = session.UserID
-		}
 
-		// Validate session
-		now := time.Now().UTC()
+			// Validate session from DB
+			now := time.Now().UTC()
 
-		// Check if token is expired
-		if session.AccessExpiry.Before(now) {
-			response.UnauthorizedWithCode(c, "TOKEN_EXPIRED", "access token has expired", nil)
-			c.Abort()
-			return
-		}
+			if session.AccessExpiry.Before(now) {
+				response.UnauthorizedWithCode(c, "TOKEN_EXPIRED", "access token has expired", nil)
+				c.Abort()
+				return
+			}
 
-		// Check if session is revoked
-		if session.RevokedAt.Valid {
-			response.UnauthorizedWithCode(c, "SESSION_REVOKED", "session has been revoked", nil)
-			c.Abort()
-			return
+			if session.RevokedAt.Valid {
+				response.UnauthorizedWithCode(c, "SESSION_REVOKED", "session has been revoked", nil)
+				c.Abort()
+				return
+			}
+
+			log.Printf("[auth] cache miss for user %d, queried database", userID)
 		}
 
 		// Verify user exists and is active
@@ -136,6 +165,7 @@ func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store, authCfg config
 			updateAge = 24 * time.Hour // Default to 1 day like better-auth
 		}
 
+		now := time.Now().UTC()
 		sessionAge := now.Sub(session.UpdatedAt)
 		if sessionAge >= updateAge {
 			// Time to refresh the session expiry

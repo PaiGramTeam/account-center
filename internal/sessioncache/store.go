@@ -27,6 +27,7 @@ type Store interface {
 	SaveSessionWithTokens(ctx context.Context, session *model.UserSession, accessToken, refreshToken string) error
 	RemoveTokens(ctx context.Context, accessToken, refreshToken string) error
 	GetSessionID(ctx context.Context, tokenType TokenType, token string) (uint64, error)
+	GetSessionData(ctx context.Context, tokenType TokenType, token string) (*SessionData, error)
 	MarkRevoked(ctx context.Context, tokenType TokenType, token string, ttl time.Duration) error
 	IsRevoked(ctx context.Context, tokenType TokenType, token string) (bool, error)
 
@@ -38,6 +39,15 @@ type Store interface {
 	// Generic key-value operations
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
 	Get(ctx context.Context, key string) ([]byte, error)
+}
+
+// SessionData holds cached session information for fast validation
+type SessionData struct {
+	SessionID     uint64
+	UserID        uint64
+	AccessExpiry  time.Time
+	RefreshExpiry time.Time
+	RevokedAt     *time.Time
 }
 
 // RedisStore implements Store backed by Redis.
@@ -52,8 +62,11 @@ func NewRedisStore(client *redis.Client, prefix string) *RedisStore {
 }
 
 type tokenPayload struct {
-	SessionID uint64 `json:"session_id"`
-	UserID    uint64 `json:"user_id"`
+	SessionID     uint64     `json:"session_id"`
+	UserID        uint64     `json:"user_id"`
+	AccessExpiry  time.Time  `json:"access_expiry"`
+	RefreshExpiry time.Time  `json:"refresh_expiry"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
 }
 
 func (s *RedisStore) SaveSession(ctx context.Context, session *model.UserSession) error {
@@ -71,9 +84,17 @@ func (s *RedisStore) SaveSessionWithTokens(ctx context.Context, session *model.U
 		return fmt.Errorf("tokens cannot be empty")
 	}
 
+	var revokedAt *time.Time
+	if session.RevokedAt.Valid {
+		revokedAt = &session.RevokedAt.Time
+	}
+
 	payload := tokenPayload{
-		SessionID: session.ID,
-		UserID:    session.UserID,
+		SessionID:     session.ID,
+		UserID:        session.UserID,
+		AccessExpiry:  session.AccessExpiry,
+		RefreshExpiry: session.RefreshExpiry,
+		RevokedAt:     revokedAt,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -129,6 +150,29 @@ func (s *RedisStore) GetSessionID(ctx context.Context, tokenType TokenType, toke
 		return 0, fmt.Errorf("unmarshal payload: %w", err)
 	}
 	return payload.SessionID, nil
+}
+
+// GetSessionData retrieves full cached session data for fast validation
+func (s *RedisStore) GetSessionData(ctx context.Context, tokenType TokenType, token string) (*SessionData, error) {
+	if token == "" {
+		return nil, fmt.Errorf("token cannot be empty")
+	}
+	cmd := s.client.Get(ctx, s.tokenKey(tokenType, token))
+	if err := cmd.Err(); err != nil {
+		return nil, err
+	}
+	var payload tokenPayload
+	if err := json.Unmarshal([]byte(cmd.Val()), &payload); err != nil {
+		return nil, fmt.Errorf("unmarshal payload: %w", err)
+	}
+
+	return &SessionData{
+		SessionID:     payload.SessionID,
+		UserID:        payload.UserID,
+		AccessExpiry:  payload.AccessExpiry,
+		RefreshExpiry: payload.RefreshExpiry,
+		RevokedAt:     payload.RevokedAt,
+	}, nil
 }
 
 func (s *RedisStore) MarkRevoked(ctx context.Context, tokenType TokenType, token string, ttl time.Duration) error {

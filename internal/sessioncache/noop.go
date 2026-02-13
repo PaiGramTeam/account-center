@@ -33,6 +33,10 @@ func (*NoopStore) GetSessionID(_ context.Context, _ TokenType, _ string) (uint64
 	return 0, redis.Nil
 }
 
+func (*NoopStore) GetSessionData(_ context.Context, _ TokenType, _ string) (*SessionData, error) {
+	return nil, redis.Nil
+}
+
 func (*NoopStore) MarkRevoked(_ context.Context, _ TokenType, _ string, _ time.Duration) error {
 	return nil
 }

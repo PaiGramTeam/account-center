@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -14,6 +16,15 @@ import (
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
 )
+
+// hashToken creates SHA-256 hash of token for database lookup
+func hashToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
+}
 
 // AuthMiddleware creates middleware that validates access tokens and sets user ID in context.
 func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store) gin.HandlerFunc {
@@ -64,9 +75,10 @@ func AuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store) gin.HandlerFun
 			}
 		}
 
-		// If not in cache or cache miss, query database
+		// If not in cache or cache miss, query database using token hash
 		if userID == 0 {
-			if err := db.Where("access_token = ?", accessToken).First(&session).Error; err != nil {
+			accessTokenHash := hashToken(accessToken)
+			if err := db.Where("access_token_hash = ?", accessTokenHash).First(&session).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					response.UnauthorizedWithCode(c, "INVALID_TOKEN", "invalid access token", nil)
 				} else {
@@ -154,7 +166,9 @@ func OptionalAuthMiddleware(db *gorm.DB, sessionCache sessioncache.Store) gin.Ha
 		if err == nil && sessionID > 0 {
 			db.First(&session, sessionID)
 		} else {
-			db.Where("access_token = ?", accessToken).First(&session)
+			// Query by token hash
+			accessTokenHash := hashToken(accessToken)
+			db.Where("access_token_hash = ?", accessTokenHash).First(&session)
 		}
 
 		// If valid session found, set user ID

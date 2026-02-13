@@ -16,7 +16,15 @@ import (
 	"paigram/internal/sessioncache"
 )
 
-func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent string) (*model.UserSession, error) {
+// SessionWithTokens holds the session record and the original tokens
+// The tokens are only returned once during creation and never stored in plain text
+type SessionWithTokens struct {
+	Session      *model.UserSession
+	AccessToken  string // Only available at creation time
+	RefreshToken string // Only available at creation time
+}
+
+func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent string) (*SessionWithTokens, error) {
 	accessToken, err := randomToken(48)
 	if err != nil {
 		return nil, err
@@ -36,14 +44,15 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 		refreshTTL = 7 * 24 * time.Hour
 	}
 
+	// Hash the tokens before storing
 	session := &model.UserSession{
-		UserID:        userID,
-		AccessToken:   accessToken,
-		RefreshToken:  refreshToken,
-		AccessExpiry:  now.Add(accessTTL),
-		RefreshExpiry: now.Add(refreshTTL),
-		UserAgent:     userAgent,
-		ClientIP:      clientIP,
+		UserID:           userID,
+		AccessTokenHash:  hashToken(accessToken),
+		RefreshTokenHash: hashToken(refreshToken),
+		AccessExpiry:     now.Add(accessTTL),
+		RefreshExpiry:    now.Add(refreshTTL),
+		UserAgent:        userAgent,
+		ClientIP:         clientIP,
 	}
 
 	if err := tx.Create(session).Error; err != nil {
@@ -106,7 +115,8 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 		log.Printf("failed to create login log: %v", err)
 	}
 
-	h.cacheStoreSession(session)
+	// Cache session with original tokens for verification
+	h.cacheStoreSessionWithTokens(session, accessToken, refreshToken)
 
 	if h.cfg.MaxConcurrentSessionsPerUser > 0 {
 		var sessions []model.UserSession
@@ -126,12 +136,17 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 				}).Error; err != nil {
 				return nil, err
 			}
-			h.cacheRevokeSessionTokens(&oldest)
+			h.cacheRevokeSessionTokens(&oldest, "", "")
 			sessions = sessions[1:]
 		}
 	}
 
-	return session, nil
+	// Return session with original tokens (only time they are in memory)
+	return &SessionWithTokens{
+		Session:      session,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+	}, nil
 }
 
 func (h *Handler) revokeSession(tx *gorm.DB, session *model.UserSession, reason string) error {
@@ -155,24 +170,33 @@ func (h *Handler) recordLoginAudit(tx *gorm.DB, audit model.LoginAudit) error {
 	return tx.Create(&audit).Error
 }
 
-func (h *Handler) cacheStoreSession(session *model.UserSession) {
+// cacheStoreSessionWithTokens stores session in cache with original tokens
+func (h *Handler) cacheStoreSessionWithTokens(session *model.UserSession, accessToken, refreshToken string) {
 	if session == nil {
 		return
 	}
 	ctx := context.Background()
-	if err := h.sessionCache.SaveSession(ctx, session); err != nil && !errorsIsRedisNil(err) {
+	if err := h.sessionCache.SaveSessionWithTokens(ctx, session, accessToken, refreshToken); err != nil && !errorsIsRedisNil(err) {
 		log.Printf("failed to cache session tokens: %v", err)
 	}
 }
 
-func (h *Handler) cacheRevokeSessionTokens(session *model.UserSession) {
+// cacheRevokeSessionTokens removes and marks tokens as revoked in cache
+// accessToken and refreshToken are the original (unhashed) tokens
+func (h *Handler) cacheRevokeSessionTokens(session *model.UserSession, accessToken, refreshToken string) {
 	if session == nil {
 		return
 	}
 	ctx := context.Background()
-	if err := h.sessionCache.RemoveTokens(ctx, session.AccessToken, session.RefreshToken); err != nil && !errorsIsRedisNil(err) {
-		log.Printf("failed to remove session tokens from cache: %v", err)
+
+	// Remove tokens from cache (if provided)
+	if accessToken != "" || refreshToken != "" {
+		if err := h.sessionCache.RemoveTokens(ctx, accessToken, refreshToken); err != nil && !errorsIsRedisNil(err) {
+			log.Printf("failed to remove session tokens from cache: %v", err)
+		}
 	}
+
+	// Calculate TTL for revoked markers
 	accessTTL := time.Until(session.AccessExpiry)
 	refreshTTL := time.Until(session.RefreshExpiry)
 	if accessTTL < 0 {
@@ -181,11 +205,17 @@ func (h *Handler) cacheRevokeSessionTokens(session *model.UserSession) {
 	if refreshTTL < 0 {
 		refreshTTL = 0
 	}
-	if err := h.sessionCache.MarkRevoked(ctx, sessioncache.TokenTypeAccess, session.AccessToken, accessTTL); err != nil && !errorsIsRedisNil(err) {
-		log.Printf("failed to cache revoked access token: %v", err)
+
+	// Mark tokens as revoked (if provided)
+	if accessToken != "" {
+		if err := h.sessionCache.MarkRevoked(ctx, sessioncache.TokenTypeAccess, accessToken, accessTTL); err != nil && !errorsIsRedisNil(err) {
+			log.Printf("failed to cache revoked access token: %v", err)
+		}
 	}
-	if err := h.sessionCache.MarkRevoked(ctx, sessioncache.TokenTypeRefresh, session.RefreshToken, refreshTTL); err != nil && !errorsIsRedisNil(err) {
-		log.Printf("failed to cache revoked refresh token: %v", err)
+	if refreshToken != "" {
+		if err := h.sessionCache.MarkRevoked(ctx, sessioncache.TokenTypeRefresh, refreshToken, refreshTTL); err != nil && !errorsIsRedisNil(err) {
+			log.Printf("failed to cache revoked refresh token: %v", err)
+		}
 	}
 }
 

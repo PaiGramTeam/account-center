@@ -92,7 +92,7 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 	}
 
 	// Issue session
-	session, err := h.issueSession(tx, user.ID, c.ClientIP(), c.GetHeader("User-Agent"))
+	sessionWithTokens, err := h.issueSession(tx, user.ID, c.ClientIP(), c.GetHeader("User-Agent"))
 	if err != nil {
 		tx.Rollback()
 		response.InternalServerError(c, "failed to create session")
@@ -144,8 +144,8 @@ func (h *Handler) HandleTelegramAuth(c *gin.Context) {
 			"email":        primaryEmail,
 			"avatar_url":   user.Profile.AvatarURL,
 		},
-		"access_token":  session.AccessToken,
-		"refresh_token": session.RefreshToken,
+		"access_token":  sessionWithTokens.AccessToken,
+		"refresh_token": sessionWithTokens.RefreshToken,
 		"token_type":    "Bearer",
 		"expires_in":    h.cfg.AccessTokenTTLSeconds,
 	}

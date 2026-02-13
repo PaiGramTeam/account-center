@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -300,11 +299,7 @@ func generatePasswordResetToken() (plain, hashed string, err error) {
 	return plain, hashed, nil
 }
 
-// hashToken hashes a token for secure storage
-func hashToken(token string) string {
-	hash, _ := bcrypt.GenerateFromPassword([]byte(token), bcrypt.MinCost)
-	return string(hash)
-}
+// hashToken is now defined in helpers.go (SHA-256 implementation)
 
 // revokeAllUserSessions revokes all active sessions for a user
 func (h *Handler) revokeAllUserSessions(tx *gorm.DB, userID uint64) error {
@@ -314,18 +309,9 @@ func (h *Handler) revokeAllUserSessions(tx *gorm.DB, userID uint64) error {
 		return fmt.Errorf("query user sessions: %w", err)
 	}
 
-	// Delete each session from cache
-	if h.sessionCache != nil {
-		ctx := context.Background()
-		for _, session := range sessions {
-			if err := h.sessionCache.RemoveTokens(ctx, session.AccessToken, session.RefreshToken); err != nil {
-				logging.Warn("failed to delete session from cache",
-					zap.Error(err),
-					zap.Uint64("session_id", session.ID),
-				)
-			}
-		}
-	}
+	// Note: We cannot remove tokens from cache here because we don't have the original tokens
+	// The cache entries will naturally expire based on their TTL
+	// The revoked_at flag in the database will prevent any cached tokens from being used
 
 	// Delete all user sessions from database
 	if err := tx.Where("user_id = ?", userID).Delete(&model.UserSession{}).Error; err != nil {

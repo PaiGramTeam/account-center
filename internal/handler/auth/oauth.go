@@ -168,7 +168,7 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 
 	var user model.User
 	var emailRecord *model.UserEmail
-	var session *model.UserSession
+	var sessionWithTokens *SessionWithTokens
 
 	err := h.db.Transaction(func(tx *gorm.DB) error {
 		var stateRecord model.UserOAuthState
@@ -306,7 +306,7 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		}
 
 		var err error
-		session, err = h.issueSession(tx, user.ID, clientIP, userAgent)
+		sessionWithTokens, err = h.issueSession(tx, user.ID, clientIP, userAgent)
 		if err != nil {
 			return err
 		}
@@ -328,10 +328,10 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 
 	responseData := map[string]interface{}{
 		"user_id":        user.ID,
-		"access_token":   session.AccessToken,
-		"refresh_token":  session.RefreshToken,
-		"access_expiry":  session.AccessExpiry.Format(time.RFC3339),
-		"refresh_expiry": session.RefreshExpiry.Format(time.RFC3339),
+		"access_token":   sessionWithTokens.AccessToken,
+		"refresh_token":  sessionWithTokens.RefreshToken,
+		"access_expiry":  sessionWithTokens.Session.AccessExpiry.Format(time.RFC3339),
+		"refresh_expiry": sessionWithTokens.Session.RefreshExpiry.Format(time.RFC3339),
 		"email":          emailValue(emailRecord),
 	}
 	response.Success(c, responseData)

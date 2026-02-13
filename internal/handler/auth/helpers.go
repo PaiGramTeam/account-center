@@ -2,7 +2,9 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"strings"
 
@@ -41,4 +43,13 @@ func comparePassword(hash string, password string) error {
 		return errors.New("empty password hash")
 	}
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+}
+
+// hashToken creates a SHA-256 hash of a token for secure storage
+func hashToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
 }

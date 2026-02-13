@@ -21,6 +21,10 @@ func (*NoopStore) SaveSession(_ context.Context, _ *model.UserSession) error {
 	return nil
 }
 
+func (*NoopStore) SaveSessionWithTokens(_ context.Context, _ *model.UserSession, _, _ string) error {
+	return nil
+}
+
 func (*NoopStore) RemoveTokens(_ context.Context, _, _ string) error {
 	return nil
 }

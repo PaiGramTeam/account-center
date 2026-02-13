@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ulule/limiter/v3"
@@ -34,6 +35,23 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 
 	engine := gin.New()
 	engine.Use(gin.Recovery(), gin.Logger())
+
+	// SECURITY: Configure trusted proxies to prevent IP spoofing
+	// This is critical for rate limiting based on IP address
+	if len(appCfg.TrustedProxies) > 0 {
+		if err := engine.SetTrustedProxies(appCfg.TrustedProxies); err != nil {
+			log.Printf("[SECURITY WARNING] Failed to set trusted proxies: %v", err)
+			log.Printf("Rate limiting by IP may be vulnerable to spoofing!")
+		} else {
+			log.Printf("[SECURITY] Trusted proxies configured: %v", appCfg.TrustedProxies)
+		}
+	} else {
+		// No trusted proxies - trust direct connections only
+		if err := engine.SetTrustedProxies(nil); err != nil {
+			log.Printf("[SECURITY WARNING] Failed to disable trusted proxies: %v", err)
+		}
+		log.Printf("[SECURITY] No trusted proxies - only direct connections trusted")
+	}
 
 	registerSwagger(engine)
 

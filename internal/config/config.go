@@ -22,10 +22,12 @@ type Config struct {
 
 // AppConfig holds HTTP server configuration.
 type AppConfig struct {
-	Name string `mapstructure:"name"`
-	Host string `mapstructure:"host"`
-	Port int    `mapstructure:"port"`
-	Mode string `mapstructure:"mode"`
+	Name           string   `mapstructure:"name"`
+	Host           string   `mapstructure:"host"`
+	Port           int      `mapstructure:"port"`
+	Mode           string   `mapstructure:"mode"`
+	TrustedProxies []string `mapstructure:"trusted_proxies"` // Trusted proxy CIDR ranges for X-Forwarded-For
+	RealIPHeader   string   `mapstructure:"real_ip_header"`  // Custom header for real IP (e.g., "CF-Connecting-IP")
 }
 
 // DatabaseConfig holds MySQL connection configuration.
@@ -220,6 +222,15 @@ func Reset() {
 }
 
 func setDefaults(v *viper.Viper) {
+	// App defaults
+	v.SetDefault("app.trusted_proxies", []string{
+		"127.0.0.1",      // localhost
+		"10.0.0.0/8",     // private network
+		"172.16.0.0/12",  // Docker default network
+		"192.168.0.0/16", // private network
+	})
+	v.SetDefault("app.real_ip_header", "") // Empty means use X-Forwarded-For via TrustedProxies
+
 	v.SetDefault("database.config", "charset=utf8mb4&parseTime=True&loc=Asia%2FShanghai")
 	v.SetDefault("database.migrations_dir", "initialize/migrate/sql")
 	v.SetDefault("database.max_idle_conns", 10)

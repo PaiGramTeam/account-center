@@ -57,6 +57,7 @@ message Bot {
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
   google.protobuf.Timestamp last_active_at = 9;
+  string metadata = 10; // JSON string for custom metadata
 }
 
 // Bot 注册请求
@@ -66,6 +67,7 @@ message RegisterBotRequest {
   BotType type = 3;
   repeated string scopes = 4;
   string owner_email = 5;
+  string metadata = 6; // JSON string for custom metadata
 }
 
 // Bot 注册响应

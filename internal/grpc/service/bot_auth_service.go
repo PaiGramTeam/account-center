@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -17,6 +19,15 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/model"
+)
+
+const (
+	// BcryptCost is the cost factor for bcrypt hashing (better-auth recommends >= 12)
+	BcryptCost = 12
+	// DefaultRateLimitTimeWindow is 24 hours in milliseconds
+	DefaultRateLimitTimeWindow = int64(24 * 60 * 60 * 1000)
+	// DefaultRateLimitMax is 1000 requests per day
+	DefaultRateLimitMax = 1000
 )
 
 // BotAuthService implements the gRPC BotAuthService
@@ -60,8 +71,8 @@ func (s *BotAuthService) RegisterBot(ctx context.Context, req *RegisterBotReques
 	apiKey := s.generateAPIKey()
 	apiSecret := s.generateAPISecret()
 
-	// Hash the API secret
-	hashedSecret, err := bcrypt.GenerateFromPassword([]byte(apiSecret), bcrypt.DefaultCost)
+	// Hash the API secret with higher cost for better security
+	hashedSecret, err := bcrypt.GenerateFromPassword([]byte(apiSecret), BcryptCost)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to hash secret: %v", err)
 	}
@@ -116,16 +127,27 @@ func (s *BotAuthService) BotLogin(ctx context.Context, req *BotLoginRequest) (*B
 		return nil, status.Errorf(codes.PermissionDenied, "bot is not active")
 	}
 
-	// Generate tokens
+	// Generate tokens (plaintext - will be hashed before storage)
 	accessToken := s.generateToken()
 	refreshToken := s.generateToken()
 
-	// Create token record
+	// Hash tokens for secure storage
+	accessTokenHash := hashToken(accessToken)
+	refreshTokenHash := hashToken(refreshToken)
+
+	// Create token record with default rate limiting
+	rateLimitTimeWindow := DefaultRateLimitTimeWindow
+	rateLimitMax := DefaultRateLimitMax
+
 	botToken := &model.BotToken{
-		BotID:        bot.ID,
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresAt:    time.Now().Add(s.accessTokenDuration),
+		BotID:               bot.ID,
+		AccessTokenHash:     accessTokenHash,
+		RefreshTokenHash:    refreshTokenHash,
+		RateLimitEnabled:    true,
+		RateLimitTimeWindow: &rateLimitTimeWindow,
+		RateLimitMax:        &rateLimitMax,
+		RequestCount:        0,
+		ExpiresAt:           time.Now().Add(s.accessTokenDuration),
 	}
 
 	if err := s.db.Create(botToken).Error; err != nil {
@@ -150,10 +172,15 @@ func (s *BotAuthService) RefreshBotToken(ctx context.Context, req *RefreshBotTok
 		return nil, status.Errorf(codes.InvalidArgument, "refresh token is required")
 	}
 
+	// Hash the refresh token to look up in database
+	refreshTokenHash := hashToken(req.RefreshToken)
+
 	// Find token record
 	var botToken model.BotToken
-	if err := s.db.Preload("Bot").Where("refresh_token = ? AND revoked_at IS NULL", req.RefreshToken).First(&botToken).Error; err != nil {
+	if err := s.db.Preload("Bot").Where("refresh_token_hash = ? AND revoked_at IS NULL", refreshTokenHash).First(&botToken).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Potential refresh token reuse attack detected
+			// In production, you may want to revoke all tokens for this bot
 			return nil, status.Errorf(codes.Unauthenticated, "invalid refresh token")
 		}
 		return nil, status.Errorf(codes.Internal, "failed to find token: %v", err)
@@ -164,13 +191,17 @@ func (s *BotAuthService) RefreshBotToken(ctx context.Context, req *RefreshBotTok
 		return nil, status.Errorf(codes.PermissionDenied, "bot is not active")
 	}
 
-	// Generate new access token
+	// Generate new tokens (token rotation for security)
 	newAccessToken := s.generateToken()
 	newRefreshToken := s.generateToken()
 
-	// Update token record
-	botToken.AccessToken = newAccessToken
-	botToken.RefreshToken = newRefreshToken
+	// Hash new tokens
+	newAccessTokenHash := hashToken(newAccessToken)
+	newRefreshTokenHash := hashToken(newRefreshToken)
+
+	// Update token record with new hashes
+	botToken.AccessTokenHash = newAccessTokenHash
+	botToken.RefreshTokenHash = newRefreshTokenHash
 	botToken.ExpiresAt = time.Now().Add(s.accessTokenDuration)
 
 	if err := s.db.Save(&botToken).Error; err != nil {
@@ -181,22 +212,25 @@ func (s *BotAuthService) RefreshBotToken(ctx context.Context, req *RefreshBotTok
 	s.db.Model(&botToken.Bot).Update("last_active_at", time.Now())
 
 	return &RefreshBotTokenResponse{
-		AccessToken:  newAccessToken,
-		RefreshToken: newRefreshToken,
+		AccessToken:  newAccessToken,  // Return plaintext token to client
+		RefreshToken: newRefreshToken, // Return plaintext token to client
 		ExpiresIn:    int64(s.accessTokenDuration.Seconds()),
 		TokenType:    "Bearer",
 	}, nil
 }
 
-// ValidateBotToken validates an access token
+// ValidateBotToken validates an access token with rate limiting
 func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotTokenRequest) (*ValidateBotTokenResponse, error) {
 	if req.AccessToken == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "access token is required")
 	}
 
+	// Hash the access token to look up in database
+	accessTokenHash := hashToken(req.AccessToken)
+
 	// Find token record
 	var botToken model.BotToken
-	if err := s.db.Preload("Bot").Where("access_token = ? AND revoked_at IS NULL", req.AccessToken).First(&botToken).Error; err != nil {
+	if err := s.db.Preload("Bot").Where("access_token_hash = ? AND revoked_at IS NULL", accessTokenHash).First(&botToken).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &ValidateBotTokenResponse{Valid: false}, nil
 		}
@@ -204,13 +238,58 @@ func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotT
 	}
 
 	// Check if token is expired
-	if time.Now().After(botToken.ExpiresAt) {
+	now := time.Now()
+	if now.After(botToken.ExpiresAt) {
 		return &ValidateBotTokenResponse{Valid: false}, nil
 	}
 
 	// Check bot status
 	if botToken.Bot.Status != "ACTIVE" {
 		return &ValidateBotTokenResponse{Valid: false}, nil
+	}
+
+	// Check rate limit (sliding window algorithm)
+	if botToken.RateLimitEnabled && botToken.RateLimitTimeWindow != nil && botToken.RateLimitMax != nil {
+		timeWindow := time.Duration(*botToken.RateLimitTimeWindow) * time.Millisecond
+
+		// Check if we need to reset the window
+		if botToken.LastRequest.Valid {
+			timeSinceLastRequest := now.Sub(botToken.LastRequest.Time)
+
+			if timeSinceLastRequest > timeWindow {
+				// Reset window
+				botToken.RequestCount = 1
+				botToken.LastRequest.Time = now
+				botToken.LastRequest.Valid = true
+			} else {
+				// Within window - check limit
+				if botToken.RequestCount >= *botToken.RateLimitMax {
+					// Rate limit exceeded
+					tryAgainIn := timeWindow - timeSinceLastRequest
+					return &ValidateBotTokenResponse{
+						Valid:      false,
+						Error:      "RATE_LIMITED",
+						TryAgainIn: int64(tryAgainIn / time.Millisecond),
+					}, nil
+				}
+				// Increment counter
+				botToken.RequestCount++
+			}
+		} else {
+			// First request
+			botToken.RequestCount = 1
+			botToken.LastRequest.Time = now
+			botToken.LastRequest.Valid = true
+		}
+
+		// Update rate limit counters in database
+		if err := s.db.Model(&botToken).Updates(map[string]interface{}{
+			"request_count": botToken.RequestCount,
+			"last_request":  botToken.LastRequest,
+		}).Error; err != nil {
+			// Log error but don't fail validation
+			// In production, consider logging to monitoring system
+		}
 	}
 
 	// Parse scopes
@@ -230,9 +309,12 @@ func (s *BotAuthService) RevokeBotToken(ctx context.Context, req *RevokeBotToken
 		return nil, status.Errorf(codes.InvalidArgument, "access token is required")
 	}
 
+	// Hash the access token to look up in database
+	accessTokenHash := hashToken(req.AccessToken)
+
 	// Find and revoke token
 	result := s.db.Model(&model.BotToken{}).
-		Where("access_token = ? AND revoked_at IS NULL", req.AccessToken).
+		Where("access_token_hash = ? AND revoked_at IS NULL", accessTokenHash).
 		Update("revoked_at", time.Now())
 
 	if result.Error != nil {
@@ -273,22 +355,34 @@ func (s *BotAuthService) GetBotInfo(ctx context.Context, req *GetBotInfoRequest)
 
 // Helper functions
 
+// hashToken creates SHA-256 hash of token for secure database storage
+func hashToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
+}
+
 func (s *BotAuthService) generateAPIKey() string {
-	return "pk_" + s.generateRandomString(32)
+	return "pk_" + s.generateRandomString(48) // 64 chars base64
 }
 
 func (s *BotAuthService) generateAPISecret() string {
-	return "sk_" + s.generateRandomString(48)
+	return "sk_" + s.generateRandomString(48) // 64 chars base64
 }
 
 func (s *BotAuthService) generateToken() string {
-	return s.generateRandomString(64)
+	return s.generateRandomString(48) // 64 chars base64
 }
 
-func (s *BotAuthService) generateRandomString(length int) string {
-	bytes := make([]byte, length)
-	rand.Read(bytes)
-	return base64.URLEncoding.EncodeToString(bytes)[:length]
+// generateRandomString generates a cryptographically secure random string
+// Fixed: No longer truncates base64 output, preserving full entropy
+func (s *BotAuthService) generateRandomString(byteLength int) string {
+	bytes := make([]byte, byteLength)
+	if _, err := rand.Read(bytes); err != nil {
+		// In production, this should be logged and handled properly
+		panic("failed to generate random bytes: " + err.Error())
+	}
+	// Return full base64 string without truncation (preserves all entropy)
+	return base64.URLEncoding.EncodeToString(bytes)
 }
 
 func (s *BotAuthService) encodeScopesJSON(scopes []string) string {
@@ -417,10 +511,12 @@ type ValidateBotTokenRequest struct {
 }
 
 type ValidateBotTokenResponse struct {
-	Valid     bool
-	Bot       *Bot
-	Scopes    []string
-	ExpiresAt *timestamppb.Timestamp
+	Valid      bool
+	Bot        *Bot
+	Scopes     []string
+	ExpiresAt  *timestamppb.Timestamp
+	Error      string // Error code for rate limiting or other issues
+	TryAgainIn int64  // Milliseconds to wait before retry (for rate limiting)
 }
 
 type RevokeBotTokenRequest struct {

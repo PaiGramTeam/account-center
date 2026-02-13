@@ -48,6 +48,7 @@ type DatabaseConfig struct {
 type AuthConfig struct {
 	AccessTokenTTLSeconds         int                            `mapstructure:"access_token_ttl"`
 	RefreshTokenTTLSeconds        int                            `mapstructure:"refresh_token_ttl"`
+	SessionUpdateAgeSeconds       int                            `mapstructure:"session_update_age"` // Auto-refresh threshold
 	EmailVerificationTTLSeconds   int                            `mapstructure:"email_verification_ttl"`
 	OAuthStateTTLSeconds          int                            `mapstructure:"oauth_state_ttl"`
 	AllowedOAuthProviders         []string                       `mapstructure:"allowed_providers"`

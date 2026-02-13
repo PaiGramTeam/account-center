@@ -127,7 +127,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 
 	// Protected routes - require authentication
 	protected := v1.Group("")
-	protected.Use(middleware.AuthMiddleware(db, cache))
+	protected.Use(middleware.AuthMiddleware(db, cache, authCfg))
 
 	// Apply rate limiting to authenticated endpoints if enabled
 	if rateLimitCfg.Enabled && rateLimitStore != nil {

@@ -295,11 +295,25 @@ func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotT
 	// Parse scopes
 	scopes := s.decodeScopesJSON(botToken.Bot.Scopes)
 
+	// Verify required permissions (if provided)
+	permissionsGranted := true
+	if len(req.RequiredPermissions) > 0 {
+		permissionsGranted = s.verifyPermissions(scopes, req.RequiredPermissions)
+		if !permissionsGranted {
+			return &ValidateBotTokenResponse{
+				Valid:              false,
+				Error:              "INSUFFICIENT_PERMISSIONS",
+				PermissionsGranted: false,
+			}, nil
+		}
+	}
+
 	return &ValidateBotTokenResponse{
-		Valid:     true,
-		Bot:       s.modelBotToProto(&botToken.Bot),
-		Scopes:    scopes,
-		ExpiresAt: timestamppb.New(botToken.ExpiresAt),
+		Valid:              true,
+		Bot:                s.modelBotToProto(&botToken.Bot),
+		Scopes:             scopes,
+		ExpiresAt:          timestamppb.New(botToken.ExpiresAt),
+		PermissionsGranted: permissionsGranted,
 	}, nil
 }
 
@@ -397,6 +411,42 @@ func (s *BotAuthService) decodeScopesJSON(scopesJSON string) []string {
 	var scopes []string
 	json.Unmarshal([]byte(scopesJSON), &scopes)
 	return scopes
+}
+
+// verifyPermissions checks if granted scopes satisfy required permissions
+// Scopes format: ["resource:action", "files:read", "files:write", "users:read"]
+// Required permissions format: map[resource][]actions
+func (s *BotAuthService) verifyPermissions(grantedScopes []string, requiredPerms map[string]*PermissionActions) bool {
+	// Convert scopes to permissions map
+	grantedPerms := make(map[string]map[string]bool)
+	for _, scope := range grantedScopes {
+		parts := strings.Split(scope, ":")
+		if len(parts) == 2 {
+			resource := parts[0]
+			action := parts[1]
+			if grantedPerms[resource] == nil {
+				grantedPerms[resource] = make(map[string]bool)
+			}
+			grantedPerms[resource][action] = true
+		}
+	}
+
+	// Check all required permissions
+	for resource, permActions := range requiredPerms {
+		granted, ok := grantedPerms[resource]
+		if !ok {
+			// Resource not granted at all
+			return false
+		}
+		for _, action := range permActions.Actions {
+			if !granted[action] {
+				// Required action not granted
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func (s *BotAuthService) modelBotToProto(bot *model.Bot) *Bot {
@@ -507,16 +557,23 @@ type RefreshBotTokenResponse struct {
 }
 
 type ValidateBotTokenRequest struct {
-	AccessToken string
+	AccessToken         string
+	RequiredPermissions map[string]*PermissionActions // Optional: permissions to verify
 }
 
 type ValidateBotTokenResponse struct {
-	Valid      bool
-	Bot        *Bot
-	Scopes     []string
-	ExpiresAt  *timestamppb.Timestamp
-	Error      string // Error code for rate limiting or other issues
-	TryAgainIn int64  // Milliseconds to wait before retry (for rate limiting)
+	Valid              bool
+	Bot                *Bot
+	Scopes             []string
+	ExpiresAt          *timestamppb.Timestamp
+	Error              string // Error code for rate limiting or other issues
+	TryAgainIn         int64  // Milliseconds to wait before retry (for rate limiting)
+	PermissionsGranted bool   // Whether required permissions are granted
+}
+
+// PermissionActions represents a list of actions for a resource
+type PermissionActions struct {
+	Actions []string
 }
 
 type RevokeBotTokenRequest struct {

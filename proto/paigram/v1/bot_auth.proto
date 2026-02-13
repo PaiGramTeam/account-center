@@ -106,6 +106,15 @@ message RefreshBotTokenResponse {
 // 验证令牌请求
 message ValidateBotTokenRequest {
   string access_token = 1;
+  // 可选：需要验证的权限 (better-auth permissions format)
+  // key: resource (e.g., "files", "users")
+  // value: list of actions (e.g., ["read", "write"])
+  map<string, PermissionActions> required_permissions = 2;
+}
+
+// 权限动作列表
+message PermissionActions {
+  repeated string actions = 1;
 }
 
 // 验证令牌响应
@@ -114,6 +123,10 @@ message ValidateBotTokenResponse {
   Bot bot = 2;
   repeated string scopes = 3;
   google.protobuf.Timestamp expires_at = 4;
+  // Rate limiting information
+  string error = 5; // Error code (e.g., "RATE_LIMITED")
+  int64 try_again_in = 6; // Milliseconds to wait before retry
+  bool permissions_granted = 7; // Whether required permissions are granted
 }
 
 // 撤销令牌请求

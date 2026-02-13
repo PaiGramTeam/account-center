@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"paigram/internal/crypto"
 	"paigram/internal/handler/shared"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
@@ -327,12 +328,19 @@ func (h *Handler) Confirm2FA(c *gin.Context) {
 
 	backupCodesJSON, _ := json.Marshal(hashedCodes)
 
+	// Encrypt the TOTP secret before storing
+	encryptedSecret, err := crypto.Encrypt(req.Secret)
+	if err != nil {
+		response.InternalServerErrorWithCode(c, "ENCRYPTION_ERROR", "failed to encrypt secret", nil)
+		return
+	}
+
 	// Save 2FA configuration
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		// Create 2FA record
 		twoFactor := model.UserTwoFactor{
 			UserID:      userID,
-			Secret:      req.Secret, // In production, encrypt this
+			Secret:      encryptedSecret, // Encrypted secret
 			BackupCodes: string(backupCodesJSON),
 			EnabledAt:   time.Now(),
 		}
@@ -441,8 +449,15 @@ func (h *Handler) Disable2FA(c *gin.Context) {
 		return
 	}
 
+	// Decrypt the secret for verification
+	decryptedSecret, err := crypto.Decrypt(twoFactor.Secret)
+	if err != nil {
+		response.InternalServerErrorWithCode(c, "DECRYPTION_ERROR", "failed to decrypt secret", nil)
+		return
+	}
+
 	// Verify TOTP code
-	valid := totp.Validate(req.Code, twoFactor.Secret)
+	valid := totp.Validate(req.Code, decryptedSecret)
 	if !valid {
 		// Try backup codes
 		var backupCodes []string

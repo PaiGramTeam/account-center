@@ -9,8 +9,8 @@ import (
 type UserTwoFactor struct {
 	ID          uint64       `gorm:"primaryKey"`
 	UserID      uint64       `gorm:"uniqueIndex;not null"`
-	Secret      string       `gorm:"size:255;not null"` // Encrypted TOTP secret
-	BackupCodes string       `gorm:"type:text"`         // JSON array of encrypted backup codes
+	Secret      string       `gorm:"size:255;not null"` // AES-256-GCM encrypted TOTP secret
+	BackupCodes string       `gorm:"type:text"`         // JSON array of bcrypt-hashed backup codes
 	EnabledAt   time.Time    `gorm:"not null"`
 	LastUsedAt  sql.NullTime `gorm:"type:datetime(3)"`
 	CreatedAt   time.Time

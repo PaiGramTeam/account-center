@@ -504,6 +504,7 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		log.Printf("failed to get session id from cache: %v", err)
 	}
 
+	now := time.Now().UTC()
 	var err error
 	refreshTokenHash := hashToken(req.RefreshToken)
 	if sessionID > 0 {
@@ -524,11 +525,23 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	}
 
 	if session.RevokedAt.Valid {
-		response.Unauthorized(c, "token revoked")
+		// Token已被撤销 - 可能是重用攻击！
+		// 撤销该用户的所有 session 作为安全措施
+		log.Printf("[security] Attempt to use revoked refresh token detected for user %d - revoking all sessions", session.UserID)
+
+		h.db.Transaction(func(tx *gorm.DB) error {
+			return tx.Model(&model.UserSession{}).
+				Where("user_id = ? AND revoked_at IS NULL", session.UserID).
+				Updates(map[string]interface{}{
+					"revoked_at":     now,
+					"revoked_reason": "token_reuse_detected",
+				}).Error
+		})
+
+		response.UnauthorizedWithCode(c, "TOKEN_REUSE_DETECTED", "security violation: token reuse detected, all sessions revoked", nil)
 		return
 	}
 
-	now := time.Now().UTC()
 	if now.After(session.RefreshExpiry) {
 		response.Unauthorized(c, "refresh token expired")
 		return
@@ -542,6 +555,26 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 
 	prevSession := session
 	var newAccessToken, newRefreshToken string
+
+	// Check if this session was recently refreshed (within last 5 seconds)
+	// This could indicate a replay attack or race condition
+	if time.Since(session.UpdatedAt) < 5*time.Second {
+		log.Printf("[security] Refresh token used too quickly after last refresh for session %d - possible replay attack", session.ID)
+
+		// Revoke this session and all user sessions as a security measure
+		h.db.Transaction(func(tx *gorm.DB) error {
+			return tx.Model(&model.UserSession{}).
+				Where("user_id = ?", session.UserID).
+				Updates(map[string]interface{}{
+					"revoked_at":     now,
+					"revoked_reason": "rapid_refresh_detected",
+				}).Error
+		})
+
+		response.UnauthorizedWithCode(c, "RAPID_REFRESH_DETECTED", "security violation: rapid token refresh detected", nil)
+		return
+	}
+
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		accessToken, err := randomToken(48)
 		if err != nil {

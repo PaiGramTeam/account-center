@@ -255,8 +255,13 @@ func NewTelegramAuthChecker(botToken string) *TelegramAuthChecker {
 
 // VerifyTelegramAuth verifies the Telegram OAuth data
 func (c *TelegramAuthChecker) VerifyTelegramAuth(data *TelegramAuthData) error {
+	now := time.Now().Unix()
+	if data.AuthDate > now {
+		return fmt.Errorf("auth data timestamp is in the future")
+	}
+
 	// Check if auth is not too old (24 hours)
-	if time.Now().Unix()-data.AuthDate > 86400 {
+	if now-data.AuthDate > 86400 {
 		return fmt.Errorf("auth data is too old")
 	}
 
@@ -266,10 +271,15 @@ func (c *TelegramAuthChecker) VerifyTelegramAuth(data *TelegramAuthData) error {
 	// Calculate expected hash
 	secretKey := c.calculateSecretKey()
 	expectedHash := c.calculateHash(dataCheckString, secretKey)
+	providedHash, err := hex.DecodeString(strings.TrimSpace(data.Hash))
+	if err != nil {
+		return fmt.Errorf("invalid hash encoding")
+	}
 
 	// Compare hashes
-	if expectedHash != data.Hash {
-		return fmt.Errorf("invalid hash: expected %s, got %s", expectedHash, data.Hash)
+	if !hmac.Equal(expectedHash, providedHash) {
+		expectedHashHex := hex.EncodeToString(expectedHash)
+		return fmt.Errorf("invalid hash: expected %s, got %s", expectedHashHex, data.Hash)
 	}
 
 	return nil
@@ -322,8 +332,8 @@ func (c *TelegramAuthChecker) calculateSecretKey() []byte {
 }
 
 // calculateHash calculates HMAC-SHA256
-func (c *TelegramAuthChecker) calculateHash(data string, key []byte) string {
+func (c *TelegramAuthChecker) calculateHash(data string, key []byte) []byte {
 	h := hmac.New(sha256.New, key)
 	h.Write([]byte(data))
-	return hex.EncodeToString(h.Sum(nil))
+	return h.Sum(nil)
 }

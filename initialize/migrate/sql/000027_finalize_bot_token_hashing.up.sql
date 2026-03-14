@@ -9,5 +9,6 @@ ALTER TABLE bot_tokens
     DROP COLUMN refresh_token;
 
 -- Remove old indexes that are no longer needed
-DROP INDEX IF EXISTS uniq_access_token ON bot_tokens;
-DROP INDEX IF EXISTS uniq_refresh_token ON bot_tokens;
+ALTER TABLE bot_tokens
+    DROP INDEX uniq_access_token,
+    DROP INDEX uniq_refresh_token;

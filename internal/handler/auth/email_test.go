@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
@@ -23,6 +22,7 @@ import (
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
 	"paigram/internal/sessioncache"
+	"paigram/internal/testutil"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -33,10 +33,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	err = crypto.SetEncryptionKey(testKey)
 	require.NoError(t, err)
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	require.NoError(t, err)
-
-	err = db.AutoMigrate(
+	db := testutil.OpenMySQLTestDB(t, "auth_email",
 		&model.User{},
 		&model.UserProfile{},
 		&model.UserCredential{},
@@ -46,7 +43,6 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&model.LoginAudit{},
 		&model.AuditLog{},
 	)
-	require.NoError(t, err)
 
 	return db
 }

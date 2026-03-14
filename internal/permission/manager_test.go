@@ -5,25 +5,20 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"paigram/internal/model"
+	"paigram/internal/testutil"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	require.NoError(t, err)
-
-	// Migrate all tables
-	err = db.AutoMigrate(
+	db := testutil.OpenMySQLTestDB(t, "permission",
 		&model.Permission{},
 		&model.Role{},
 		&model.RolePermission{},
 		&model.User{},
 		&model.UserRole{},
 	)
-	require.NoError(t, err)
 
 	return db
 }

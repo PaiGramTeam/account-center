@@ -125,6 +125,26 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 				authHandler.VerifyEmail,
 			)
 
+			// Password reset request endpoint with rate limiting (by email)
+			authGroup.POST("/forgot-password",
+				middleware.RateLimit(middleware.RateLimitConfig{
+					Rate:    rateLimitCfg.Auth.VerifyEmail,
+					KeyFunc: middleware.EmailKeyFunc("email"),
+					Store:   rateLimitStore,
+				}),
+				authHandler.ForgotPassword,
+			)
+
+			// Password reset completion endpoint with rate limiting (by IP)
+			authGroup.POST("/reset-password",
+				middleware.RateLimit(middleware.RateLimitConfig{
+					Rate:    rateLimitCfg.API.Unauthenticated,
+					KeyFunc: middleware.IPKeyFunc,
+					Store:   rateLimitStore,
+				}),
+				authHandler.ResetPassword,
+			)
+
 			// Logout doesn't need strict rate limiting
 			authGroup.POST("/logout", authHandler.Logout)
 
@@ -218,13 +238,13 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 
 	// Email management routes - only self can manage their own emails
 	// We need to create a separate group to apply RequireSelf middleware
-	emailGroup := protected.Group("/profiles/:id/emails")
+	emailGroup := protected.Group("/profiles")
 	emailGroup.Use(middleware.RequireSelf())
 	profileHandler.RegisterEmailRoutes(emailGroup)
 
 	// Security routes (password change, 2FA) - only self + fresh session for sensitive ops
 	securityHandler := securityhandler.NewHandler(db, cache, cfg.Security)
-	security := protected.Group("/profiles/:id")
+	security := protected.Group("/profiles")
 	security.Use(middleware.RequireSelf())
 	{
 		// Routes that DON'T require fresh session

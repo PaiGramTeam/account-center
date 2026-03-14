@@ -207,6 +207,20 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 		return
 	}
 
+	var credential model.UserCredential
+	if err := h.db.Where("user_id = ? AND provider = ?", user.ID, string(model.LoginTypeEmail)).First(&credential).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.NotFoundWithCode(c, "NO_PASSWORD", "user does not have password authentication", nil)
+			return
+		}
+		logging.Error("failed to query user credential",
+			zap.Error(err),
+			zap.Uint64("user_id", user.ID),
+		)
+		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
+		return
+	}
+
 	// Hash new password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), h.getBcryptCost())
 	if err != nil {
@@ -220,7 +234,9 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	// Update password and mark token as used in a transaction
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		// Update password
-		if err := tx.Model(&user).Update("password_hash", string(hashedPassword)).Error; err != nil {
+		if err := tx.Model(&model.UserCredential{}).
+			Where("id = ?", credential.ID).
+			Update("password_hash", string(hashedPassword)).Error; err != nil {
 			return fmt.Errorf("update password: %w", err)
 		}
 

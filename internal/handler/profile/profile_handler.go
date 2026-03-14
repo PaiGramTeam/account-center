@@ -396,20 +396,33 @@ func (h *Handler) BindAccount(c *gin.Context) {
 
 	switch req.Provider {
 	case "telegram":
-		// Telegram provider data should contain id, first_name, username, etc.
-		if id, ok := req.ProviderData["id"].(float64); ok {
+		// Telegram OIDC data primarily uses sub/name/preferred_username/picture.
+		// Keep legacy id/first_name fields as a fallback while clients migrate.
+		if sub, ok := req.ProviderData["sub"].(string); ok {
+			providerAccountID = strings.TrimSpace(sub)
+		} else if id, ok := req.ProviderData["id"].(float64); ok {
 			providerAccountID = fmt.Sprintf("%.0f", id)
 		}
-		if firstName, ok := req.ProviderData["first_name"].(string); ok {
+		if name, ok := req.ProviderData["name"].(string); ok {
+			displayName = strings.TrimSpace(name)
+		} else if firstName, ok := req.ProviderData["first_name"].(string); ok {
 			displayName = firstName
 		}
 		if lastName, ok := req.ProviderData["last_name"].(string); ok && lastName != "" {
 			displayName = displayName + " " + lastName
 		}
-		if username, ok := req.ProviderData["username"].(string); ok && username != "" {
+		if username, ok := req.ProviderData["preferred_username"].(string); ok && username != "" {
+			if displayName == "" {
+				displayName = username
+			} else {
+				displayName = displayName + " (@" + username + ")"
+			}
+		} else if username, ok := req.ProviderData["username"].(string); ok && username != "" {
 			displayName = displayName + " (@" + username + ")"
 		}
-		// Telegram doesn't provide avatar URL in auth data
+		if picture, ok := req.ProviderData["picture"].(string); ok {
+			avatarURL = picture
+		}
 
 	case "google":
 		// Google provider data should contain sub (subject/ID), email, name, picture

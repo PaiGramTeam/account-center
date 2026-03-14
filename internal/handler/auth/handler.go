@@ -56,7 +56,6 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/reset-password", h.ResetPassword)
 
 	oauth := rg.Group("/oauth")
-	oauth.POST("/telegram", h.HandleTelegramAuth)
 	oauth.POST("/:provider/init", h.InitiateOAuth)
 	oauth.POST("/:provider/callback", h.HandleOAuthCallback)
 }

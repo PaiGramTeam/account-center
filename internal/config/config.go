@@ -248,7 +248,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.refresh_token_ttl", 604800)
 	v.SetDefault("auth.email_verification_ttl", 86400)
 	v.SetDefault("auth.oauth_state_ttl", 300)
-	v.SetDefault("auth.allowed_providers", []string{"github", "google"})
+	v.SetDefault("auth.allowed_providers", []string{"github", "google", "telegram"})
 	v.SetDefault("auth.default_oauth_redirect_url", "http://localhost:8080/api/v1/auth/oauth/callback")
 	v.SetDefault("auth.max_sessions_per_user", 10)
 	v.SetDefault("auth.pending_user_expiry", 2592000)

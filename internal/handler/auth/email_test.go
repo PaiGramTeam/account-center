@@ -36,6 +36,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 	db := testutil.OpenMySQLTestDB(t, "auth_email",
 		&model.User{},
+		&model.Role{},
+		&model.UserRole{},
 		&model.UserProfile{},
 		&model.UserCredential{},
 		&model.UserEmail{},

@@ -40,6 +40,8 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&model.UserEmail{},
 		&model.UserSession{},
 		&model.UserTwoFactor{},
+		&model.UserDevice{},
+		&model.LoginLog{},
 		&model.LoginAudit{},
 		&model.AuditLog{},
 	)

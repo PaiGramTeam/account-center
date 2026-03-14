@@ -41,7 +41,7 @@ func (h *EmailHandler) RegisterEmailRoutes(rg *gin.RouterGroup) {
 }
 
 type addEmailRequest struct {
-	Email string `json:"email" binding:"required,email"`
+	Email string `json:"email" binding:"required"`
 }
 
 // swagger:route POST /api/v1/profiles/{id}/emails profile addEmail

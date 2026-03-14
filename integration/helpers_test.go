@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,7 +77,7 @@ func newIntegrationStack(t *testing.T) *integrationStack {
 		Password:      env.MySQLPassword,
 		Dbname:        dbName,
 		Config:        env.MySQLConfig,
-		MigrationsDir: "initialize/migrate/sql",
+		MigrationsDir: migrationsDir(t),
 		AutoMigrate:   false,
 		AutoSeed:      false,
 	}
@@ -298,6 +299,13 @@ func cleanupRedisPrefix(t *testing.T, client *redis.Client, prefix string) {
 func runMigrations(t *testing.T, sqlDB *sql.DB, cfg config.DatabaseConfig) {
 	t.Helper()
 	require.NoError(t, initmigrate.Run(sqlDB, cfg))
+}
+
+func migrationsDir(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	return filepath.Join(wd, "..", "initialize", "migrate", "sql")
 }
 
 func performJSONRequest(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {

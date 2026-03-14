@@ -3,8 +3,10 @@ package user
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/model"
+	"paigram/internal/response"
 	"paigram/internal/testutil"
 )
 
@@ -129,7 +132,7 @@ func TestHandler_ListUsers(t *testing.T) {
 
 		email := model.UserEmail{
 			UserID:    user.ID,
-			Email:     "test" + string(rune(i)) + "@example.com",
+			Email:     fmt.Sprintf("test%d@example.com", i),
 			IsPrimary: true,
 		}
 		require.NoError(t, db.Create(&email).Error)
@@ -180,11 +183,17 @@ func TestHandler_ListUsers(t *testing.T) {
 
 			assert.Equal(t, tt.wantStatus, w.Code)
 
-			var response UserListResponse
-			err := json.Unmarshal(w.Body.Bytes(), &response)
+			var resp response.Response
+			err := json.Unmarshal(w.Body.Bytes(), &resp)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantCount, len(response.Data))
-			assert.Equal(t, int64(25), response.Pagination.Total)
+			data, ok := resp.Data.(map[string]interface{})
+			require.True(t, ok)
+			items, ok := data["data"].([]interface{})
+			require.True(t, ok)
+			pagination, ok := data["pagination"].(map[string]interface{})
+			require.True(t, ok)
+			assert.Equal(t, tt.wantCount, len(items))
+			assert.Equal(t, float64(25), pagination["total"])
 		})
 	}
 }
@@ -263,7 +272,7 @@ func TestHandler_UpdateUser(t *testing.T) {
 			bodyBytes, err := json.Marshal(tt.body)
 			require.NoError(t, err)
 
-			req := httptest.NewRequest(http.MethodPatch, "/users/"+string(rune(tt.userID)), bytes.NewReader(bodyBytes))
+			req := httptest.NewRequest(http.MethodPatch, "/users/"+strconv.FormatUint(tt.userID, 10), bytes.NewReader(bodyBytes))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
@@ -328,7 +337,7 @@ func TestHandler_DeleteUser(t *testing.T) {
 				require.NoError(t, db.Create(&profile).Error)
 			}
 
-			url := "/users/" + string(rune(userID))
+			url := "/users/" + strconv.FormatUint(userID, 10)
 			if tt.hardDelete {
 				url += "?hard_delete=true"
 			}

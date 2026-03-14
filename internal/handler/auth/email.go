@@ -173,8 +173,8 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 type loginEmailRequest struct {
 	Email       string `json:"email" binding:"required,email"`
 	Password    string `json:"password" binding:"required"`
-	TOTPCode    string `json:"totp_code" binding:"omitempty,len=6"` // Optional 2FA code
-	TrustDevice bool   `json:"trust_device"`                        // Trust this device for 30 days
+	TOTPCode    string `json:"totp_code" binding:"omitempty,min=6,max=8"` // Optional 2FA or backup code
+	TrustDevice bool   `json:"trust_device"`                              // Trust this device for 30 days
 }
 
 // swagger:route POST /api/v1/auth/login auth loginEmail

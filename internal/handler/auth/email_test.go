@@ -151,6 +151,88 @@ func enable2FAForUser(t *testing.T, db *gorm.DB, userID uint64) (secret string, 
 	return secret, backupCodes
 }
 
+func TestRegisterEmail_Success(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/register", handler.RegisterEmail)
+
+	bodyBytes, err := json.Marshal(registerEmailRequest{
+		Email:       "NewUser@Example.com",
+		Password:    "Password123!",
+		DisplayName: "  New User  ",
+		Locale:      "zh_CN",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.NotEmpty(t, data["verification_token"])
+	assert.Equal(t, "newuser@example.com", data["email"])
+	assert.Equal(t, false, data["requires_email_verification"])
+
+	var user model.User
+	require.NoError(t, db.First(&user, uint64(data["user_id"].(float64))).Error)
+	assert.Equal(t, model.UserStatusPending, user.Status)
+	assert.Equal(t, model.LoginTypeEmail, user.PrimaryLoginType)
+
+	var profile model.UserProfile
+	require.NoError(t, db.Where("user_id = ?", user.ID).First(&profile).Error)
+	assert.Equal(t, "New User", profile.DisplayName)
+	assert.Equal(t, "zh_CN", profile.Locale)
+
+	var credential model.UserCredential
+	require.NoError(t, db.Where("user_id = ? AND provider = ?", user.ID, string(model.LoginTypeEmail)).First(&credential).Error)
+	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(credential.PasswordHash), []byte("Password123!")))
+
+	var emailRecord model.UserEmail
+	require.NoError(t, db.Where("user_id = ?", user.ID).First(&emailRecord).Error)
+	assert.Equal(t, "newuser@example.com", emailRecord.Email)
+	assert.True(t, emailRecord.VerificationExpiry.Valid)
+	assert.NotEmpty(t, emailRecord.VerificationToken)
+	assert.NotEqual(t, data["verification_token"], emailRecord.VerificationToken)
+}
+
+func TestRegisterEmail_DuplicateEmail_ReturnsConflict(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+	createTestUser(t, db, "existing@example.com", "Password123!", true)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/register", handler.RegisterEmail)
+
+	bodyBytes, err := json.Marshal(registerEmailRequest{
+		Email:       "Existing@Example.com",
+		Password:    "Password123!",
+		DisplayName: "Existing User",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+
+	var userCount int64
+	require.NoError(t, db.Model(&model.User{}).Count(&userCount).Error)
+	assert.Equal(t, int64(1), userCount)
+}
+
 func TestLoginWithEmail_Without2FA_Success(t *testing.T) {
 	db := setupTestDB(t)
 	handler := setupTestHandler(db)
@@ -183,6 +265,37 @@ func TestLoginWithEmail_Without2FA_Success(t *testing.T) {
 	assert.NotEmpty(t, data["access_token"])
 	assert.NotEmpty(t, data["refresh_token"])
 	assert.Equal(t, float64(user.ID), data["user_id"])
+}
+
+func TestLoginWithEmail_RequiresVerifiedEmail_ReturnsForbidden(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+	handler.cfg.RequireEmailVerificationLogin = true
+
+	createTestUser(t, db, "pending@example.com", "password123", false)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/login", handler.LoginWithEmail)
+
+	bodyBytes, err := json.Marshal(loginEmailRequest{
+		Email:    "pending@example.com",
+		Password: "password123",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "email not verified")
+
+	var sessionCount int64
+	require.NoError(t, db.Model(&model.UserSession{}).Count(&sessionCount).Error)
+	assert.Zero(t, sessionCount)
 }
 
 func TestLoginWithEmail_With2FA_NoCodeProvided_Returns2FAChallenge(t *testing.T) {

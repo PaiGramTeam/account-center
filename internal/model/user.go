@@ -62,10 +62,10 @@ type UserCredential struct {
 	Provider              string       `gorm:"size:64;not null;index:user_provider,priority:1"`
 	ProviderAccountID     string       `gorm:"size:255;not null;index:user_provider,priority:2"`
 	PasswordHash          string       `gorm:"size:255"`
-	AccessToken           string       `gorm:"type:text"`                                // AES-256-GCM encrypted OAuth access token
-	RefreshToken          string       `gorm:"type:text"`                                // AES-256-GCM encrypted OAuth refresh token
-	AccessTokenEncrypted  string       `gorm:"type:text;column:access_token_encrypted"`  // Temporary migration field
-	RefreshTokenEncrypted string       `gorm:"type:text;column:refresh_token_encrypted"` // Temporary migration field
+	AccessToken           string       `gorm:"type:text"` // AES-256-GCM encrypted OAuth access token
+	RefreshToken          string       `gorm:"type:text"` // AES-256-GCM encrypted OAuth refresh token
+	AccessTokenEncrypted  string       `gorm:"-"`         // Legacy migration-only column, not persisted by current model
+	RefreshTokenEncrypted string       `gorm:"-"`         // Legacy migration-only column, not persisted by current model
 	TokenExpiry           sql.NullTime `gorm:"type:datetime(3)"`
 	Scopes                string       `gorm:"size:512"`
 	LastSyncAt            sql.NullTime `gorm:"type:datetime(3)"`

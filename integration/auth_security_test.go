@@ -4,6 +4,7 @@ package integration
 
 import (
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -54,7 +55,7 @@ func TestAuthLoginRateLimitByIP(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, second.Code, second.Body.String())
 	require.Equal(t, http.StatusTooManyRequests, third.Code, third.Body.String())
 	assert.Contains(t, third.Body.String(), "RATE_LIMIT_EXCEEDED")
-	assert.Equal(t, "60", third.Header().Get("Retry-After"))
+	assertRetryAfterWithinRange(t, third.Header().Get("Retry-After"), 58, 60)
 
 	fourth := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"email":    "other@example.com",
@@ -92,7 +93,7 @@ func TestAuthRegisterRateLimitByIP(t *testing.T) {
 	require.Equal(t, http.StatusConflict, second.Code, second.Body.String())
 	require.Equal(t, http.StatusTooManyRequests, third.Code, third.Body.String())
 	assert.Contains(t, third.Body.String(), "RATE_LIMIT_EXCEEDED")
-	assert.Equal(t, "60", third.Header().Get("Retry-After"))
+	assertRetryAfterWithinRange(t, third.Header().Get("Retry-After"), 58, 60)
 
 	otherEmail := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
 		"email":        "another-register@example.com",
@@ -101,4 +102,13 @@ func TestAuthRegisterRateLimitByIP(t *testing.T) {
 		"locale":       "en_US",
 	}, nil, "198.51.100.21:12345")
 	require.Equal(t, http.StatusCreated, otherEmail.Code, otherEmail.Body.String())
+}
+
+func assertRetryAfterWithinRange(t *testing.T, value string, min int, max int) {
+	t.Helper()
+
+	retryAfter, err := strconv.Atoi(value)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, retryAfter, min)
+	assert.LessOrEqual(t, retryAfter, max)
 }

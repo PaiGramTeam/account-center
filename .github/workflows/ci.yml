@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   unit:
     runs-on: ubuntu-latest
@@ -36,13 +40,23 @@ jobs:
         run: go mod download
 
       - name: Run unit tests
-        run: go test ./...
+        run: go test -covermode=atomic -coverprofile=coverage-unit.out ./...
         env:
           PAI_DATABASE_ADDR: 127.0.0.1:3306
           PAI_DATABASE_USERNAME: root
           PAI_DATABASE_PASSWORD: root
           PAI_DATABASE_DBNAME: paigram_test
           PAI_DATABASE_CONFIG: charset=utf8mb4&parseTime=True&loc=UTC&multiStatements=true
+
+      - name: Upload unit coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage-unit.out
+          flags: unit
+          name: unit-coverage
+          fail_ci_if_error: true
+          use_oidc: true
+          verbose: true
 
       - name: Run go vet
         run: go vet ./...
@@ -88,7 +102,7 @@ jobs:
         run: go mod download
 
       - name: Run integration tests
-        run: go test -tags=integration ./integration/...
+        run: go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./integration/...
         env:
           PAI_DATABASE_ADDR: 127.0.0.1:3306
           PAI_DATABASE_USERNAME: root
@@ -97,3 +111,13 @@ jobs:
           PAI_DATABASE_CONFIG: charset=utf8mb4&parseTime=True&loc=UTC&multiStatements=true
           PAI_REDIS_ADDR: 127.0.0.1:6379
           PAI_REDIS_PREFIX: gha-itest
+
+      - name: Upload integration coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: ./coverage-integration.out
+          flags: integration
+          name: integration-coverage
+          fail_ci_if_error: true
+          use_oidc: true
+          verbose: true

@@ -445,6 +445,178 @@ func TestLoginWithEmail_DisabledUser_ReturnsForbidden(t *testing.T) {
 	assert.Zero(t, sessionCount)
 }
 
+func TestVerifyEmail_Success_ActivatesPendingUser(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	user := createTestUser(t, db, "verify@example.com", "password123", false)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.ID).Update("status", model.UserStatusPending).Error)
+
+	plainToken := "plain-verification-token"
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	require.NoError(t, db.Model(&model.UserEmail{}).
+		Where("user_id = ?", user.ID).
+		Updates(map[string]any{
+			"verification_token":  hashToken(plainToken),
+			"verification_expiry": shared.MakeNullTime(expiresAt),
+			"verified_at":         shared.ClearNullTime(),
+		}).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/verify-email", handler.VerifyEmail)
+
+	bodyBytes, err := json.Marshal(verifyEmailRequest{
+		Email: "verify@example.com",
+		Token: plainToken,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify-email", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var emailRecord model.UserEmail
+	require.NoError(t, db.Where("user_id = ?", user.ID).First(&emailRecord).Error)
+	assert.True(t, emailRecord.VerifiedAt.Valid)
+	assert.Empty(t, emailRecord.VerificationToken)
+	assert.False(t, emailRecord.VerificationExpiry.Valid)
+
+	var updatedUser model.User
+	require.NoError(t, db.First(&updatedUser, user.ID).Error)
+	assert.Equal(t, model.UserStatusActive, updatedUser.Status)
+}
+
+func TestVerifyEmail_InvalidToken_ReturnsBadRequest(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	user := createTestUser(t, db, "verify@example.com", "password123", false)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.ID).Update("status", model.UserStatusPending).Error)
+	require.NoError(t, db.Model(&model.UserEmail{}).
+		Where("user_id = ?", user.ID).
+		Updates(map[string]any{
+			"verification_token":  hashToken("expected-token"),
+			"verification_expiry": shared.MakeNullTime(time.Now().UTC().Add(time.Hour)),
+			"verified_at":         shared.ClearNullTime(),
+		}).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/verify-email", handler.VerifyEmail)
+
+	bodyBytes, err := json.Marshal(verifyEmailRequest{
+		Email: "verify@example.com",
+		Token: "wrong-token",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify-email", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid token")
+}
+
+func TestVerifyEmail_ExpiredToken_ReturnsBadRequest(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	user := createTestUser(t, db, "verify@example.com", "password123", false)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.ID).Update("status", model.UserStatusPending).Error)
+	plainToken := "expired-token"
+	require.NoError(t, db.Model(&model.UserEmail{}).
+		Where("user_id = ?", user.ID).
+		Updates(map[string]any{
+			"verification_token":  hashToken(plainToken),
+			"verification_expiry": shared.MakeNullTime(time.Now().UTC().Add(-time.Hour)),
+			"verified_at":         shared.ClearNullTime(),
+		}).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/verify-email", handler.VerifyEmail)
+
+	bodyBytes, err := json.Marshal(verifyEmailRequest{
+		Email: "verify@example.com",
+		Token: plainToken,
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify-email", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "verification token expired")
+}
+
+func TestVerifyEmail_UnknownEmail_ReturnsNotFound(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/verify-email", handler.VerifyEmail)
+
+	bodyBytes, err := json.Marshal(verifyEmailRequest{
+		Email: "missing@example.com",
+		Token: "some-token",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify-email", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "email not found")
+}
+
+func TestVerifyEmail_AlreadyVerified_IsIdempotent(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	user := createTestUser(t, db, "verify@example.com", "password123", true)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.ID).Update("status", model.UserStatusActive).Error)
+	require.NoError(t, db.Model(&model.UserEmail{}).
+		Where("user_id = ?", user.ID).
+		Updates(map[string]any{
+			"verification_token":  "",
+			"verification_expiry": shared.ClearNullTime(),
+		}).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/verify-email", handler.VerifyEmail)
+
+	bodyBytes, err := json.Marshal(verifyEmailRequest{
+		Email: "verify@example.com",
+		Token: "unused-token",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/verify-email", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "email verified")
+}
+
 func TestLoginWithEmail_With2FA_NoCodeProvided_Returns2FAChallenge(t *testing.T) {
 	db := setupTestDB(t)
 	handler := setupTestHandler(db)

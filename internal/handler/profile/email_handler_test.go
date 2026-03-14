@@ -12,20 +12,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
+	"paigram/internal/testutil"
 )
 
 func setupTestDBForEmail(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	require.NoError(t, err)
-
-	err = db.AutoMigrate(&model.User{}, &model.UserProfile{}, &model.UserEmail{}, &model.UserCredential{})
-	require.NoError(t, err)
+	db := testutil.OpenMySQLTestDB(t, "profile_email", &model.User{}, &model.UserProfile{}, &model.UserEmail{}, &model.UserCredential{})
+	var err error
 
 	// Create test user
 	user := model.User{

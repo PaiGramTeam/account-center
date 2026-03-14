@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -355,17 +354,24 @@ func hashTokenForTest(token string) string {
 }
 
 func uniqueDatabaseName(testName, base string) string {
-	return fmt.Sprintf("%s_%s", sanitizeName(base), randomSuffix(testName))
+	baseName := sanitizeName(base)
+	if len(baseName) > 12 {
+		baseName = baseName[:12]
+	}
+	return fmt.Sprintf("t_%s_%s_%s", baseName, shortHash(testName), shortHash(fmt.Sprintf("%d", time.Now().UnixNano())))
 }
 
 func uniqueRedisPrefix(testName, base string) string {
-	return fmt.Sprintf("%s:%s", sanitizeName(base), randomSuffix(testName))
+	baseName := sanitizeName(base)
+	if len(baseName) > 16 {
+		baseName = baseName[:16]
+	}
+	return fmt.Sprintf("%s:%s:%s", baseName, shortHash(testName), shortHash(fmt.Sprintf("%d", time.Now().UnixNano())))
 }
 
-func randomSuffix(seed string) string {
-	buf := make([]byte, 4)
-	_, _ = rand.Read(buf)
-	return fmt.Sprintf("%s_%d_%s", sanitizeName(seed), time.Now().UnixNano(), hex.EncodeToString(buf))
+func shortHash(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 func sanitizeName(value string) string {

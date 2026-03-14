@@ -40,6 +40,9 @@ type RegisterEmailRequest struct {
 	// User locale preference
 	// example: en_US
 	Locale string `json:"locale,omitempty"`
+	// CAPTCHA token issued by Cloudflare Turnstile
+	// example: 0.zrSnR7...
+	CaptchaToken string `json:"captcha_token,omitempty"`
 }
 
 // swagger:model registerEmailResponse
@@ -87,6 +90,9 @@ type LoginEmailRequest struct {
 	// required: true
 	// example: SecurePassword123
 	Password string `json:"password"`
+	// CAPTCHA token issued by Cloudflare Turnstile when risk checks require it
+	// example: 0.zrSnR7...
+	CaptchaToken string `json:"captcha_token,omitempty"`
 }
 
 // swagger:model loginResponse

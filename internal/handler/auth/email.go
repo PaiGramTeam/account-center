@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -24,10 +25,11 @@ import (
 )
 
 type registerEmailRequest struct {
-	Email       string `json:"email" binding:"required,email"`
-	Password    string `json:"password" binding:"required,min=8,max=72"`
-	DisplayName string `json:"display_name" binding:"required"`
-	Locale      string `json:"locale"`
+	Email        string `json:"email" binding:"required,email"`
+	Password     string `json:"password" binding:"required,min=8,max=72"`
+	DisplayName  string `json:"display_name" binding:"required"`
+	Locale       string `json:"locale"`
+	CaptchaToken string `json:"captcha_token"`
 }
 
 // swagger:route POST /api/v1/auth/register auth registerEmail
@@ -59,6 +61,12 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
 		displayName = strings.Split(email, "@")[0]
+	}
+
+	if h.captchaRequiredForRegister() {
+		if !h.requireCaptchaVerification(c, req.CaptchaToken, turnstileActionRegister) {
+			return
+		}
 	}
 
 	var existing model.UserEmail
@@ -171,10 +179,11 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 }
 
 type loginEmailRequest struct {
-	Email       string `json:"email" binding:"required,email"`
-	Password    string `json:"password" binding:"required"`
-	TOTPCode    string `json:"totp_code" binding:"omitempty,min=6,max=8"` // Optional 2FA or backup code
-	TrustDevice bool   `json:"trust_device"`                              // Trust this device for 30 days
+	Email        string `json:"email" binding:"required,email"`
+	Password     string `json:"password" binding:"required"`
+	TOTPCode     string `json:"totp_code" binding:"omitempty,min=6,max=8"` // Optional 2FA or backup code
+	TrustDevice  bool   `json:"trust_device"`                              // Trust this device for 30 days
+	CaptchaToken string `json:"captcha_token"`
 }
 
 // swagger:route POST /api/v1/auth/login auth loginEmail
@@ -205,12 +214,24 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 
+	requireCaptcha, err := h.captchaRequiredForLogin(c.ClientIP())
+	if err != nil {
+		response.InternalServerErrorWithCode(c, "CAPTCHA_CHECK_FAILED", "failed to evaluate CAPTCHA requirement", nil)
+		return
+	}
+	if requireCaptcha {
+		if !h.requireCaptchaVerification(c, req.CaptchaToken, turnstileActionLogin) {
+			return
+		}
+	}
+
 	var emailRecord model.UserEmail
-	err := h.db.
+	err = h.db.
 		Where("email = ?", email).
 		First(&emailRecord).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			h.recordFailedLoginAudit(sql.NullInt64{}, c.ClientIP(), c.GetHeader("User-Agent"), "invalid credentials")
 			response.Unauthorized(c, "invalid credentials")
 			return
 		}
@@ -237,6 +258,7 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 	var credential model.UserCredential
 	if err := h.db.Where("user_id = ? AND provider = ?", user.ID, string(model.LoginTypeEmail)).First(&credential).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			h.recordFailedLoginAudit(sql.NullInt64{Int64: int64(user.ID), Valid: true}, c.ClientIP(), c.GetHeader("User-Agent"), "invalid credentials")
 			response.Unauthorized(c, "invalid credentials")
 			return
 		}
@@ -247,6 +269,7 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 	// Verify password
 	if err := comparePassword(credential.PasswordHash, req.Password); err != nil {
 		log.Printf("[auth] password verification failed for email=%s: %v", email, err)
+		h.recordFailedLoginAudit(sql.NullInt64{Int64: int64(user.ID), Valid: true}, c.ClientIP(), c.GetHeader("User-Agent"), "invalid credentials")
 		response.Unauthorized(c, "invalid credentials")
 		return
 	}
@@ -784,6 +807,100 @@ func defaultLocale(input string) string {
 		return "en_US"
 	}
 	return trimmed
+}
+
+func (h *Handler) captchaRequiredForRegister() bool {
+	return h.captchaVerifier != nil && h.captchaVerifier.Enabled() && h.cfg.Captcha.Turnstile.RequireOnRegister
+}
+
+func (h *Handler) captchaRequiredForLogin(clientIP string) (bool, error) {
+	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
+		return false, nil
+	}
+	if h.cfg.Captcha.Turnstile.RequireOnLogin {
+		return true, nil
+	}
+
+	threshold := h.cfg.Captcha.Turnstile.LoginFailureThreshold
+	if threshold <= 0 {
+		return false, nil
+	}
+
+	window := time.Duration(h.cfg.Captcha.Turnstile.LoginFailureWindowSeconds) * time.Second
+	if window <= 0 {
+		window = 15 * time.Minute
+	}
+
+	var attempts int64
+	err := h.db.Model(&model.LoginAudit{}).
+		Where("provider = ? AND success = ? AND client_ip = ? AND created_at >= ?", string(model.LoginTypeEmail), false, clientIP, time.Now().UTC().Add(-window)).
+		Count(&attempts).Error
+	if err != nil {
+		return false, err
+	}
+
+	return attempts >= int64(threshold), nil
+}
+
+func (h *Handler) requireCaptchaVerification(c *gin.Context, token string, expectedAction string) bool {
+	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
+		return true
+	}
+
+	verification, err := h.captchaVerifier.Verify(c.Request.Context(), captchaVerifyRequest{
+		Token:          token,
+		RemoteIP:       c.ClientIP(),
+		ExpectedAction: expectedAction,
+	})
+	if err != nil {
+		log.Printf("[auth] CAPTCHA verification failed: %v", err)
+		response.InternalServerErrorWithCode(c, "CAPTCHA_UNAVAILABLE", "captcha verification unavailable", nil)
+		return false
+	}
+	if verification != nil && verification.Success {
+		return true
+	}
+
+	details := map[string]any{}
+	if verification != nil {
+		if len(verification.ErrorCodes) > 0 {
+			details["error_codes"] = verification.ErrorCodes
+		}
+		if verification.Action != "" {
+			details["action"] = verification.Action
+		}
+		if verification.Hostname != "" {
+			details["hostname"] = verification.Hostname
+		}
+	}
+	if len(details) == 0 {
+		details = nil
+	}
+
+	errCode := "CAPTCHA_FAILED"
+	message := "captcha verification failed"
+	status := http.StatusBadRequest
+	if strings.TrimSpace(token) == "" {
+		errCode = "CAPTCHA_REQUIRED"
+		message = "captcha token required"
+	}
+
+	response.ErrorWithCode(c, status, errCode, message, details)
+	return false
+}
+
+func (h *Handler) recordFailedLoginAudit(userID sql.NullInt64, clientIP, userAgent, message string) {
+	audit := model.LoginAudit{
+		UserID:    userID,
+		Provider:  string(model.LoginTypeEmail),
+		Success:   false,
+		ClientIP:  clientIP,
+		UserAgent: userAgent,
+		Message:   message,
+	}
+	if err := h.db.Create(&audit).Error; err != nil {
+		log.Printf("[auth] failed to create failed login audit: %v", err)
+	}
 }
 
 // verifyTOTP validates a TOTP code against the secret

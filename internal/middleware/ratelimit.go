@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"regexp"
@@ -97,10 +100,54 @@ func EmailKeyFunc(field string) KeyFunc {
 			}
 		}
 
+		if email = emailFromJSONBody(c, field); email != "" {
+			if normalized := normalizeAndValidateEmail(email); normalized != "" {
+				return fmt.Sprintf("email:%s", normalized)
+			}
+		}
+
 		// Invalid email or not found - fallback to IP
 		// This prevents attackers from bypassing email rate limits with invalid inputs
 		return IPKeyFunc(c)
 	}
+}
+
+func emailFromJSONBody(c *gin.Context, field string) string {
+	if c.Request == nil || c.Request.Body == nil {
+		return ""
+	}
+
+	contentType := strings.ToLower(c.GetHeader("Content-Type"))
+	if !strings.Contains(contentType, "application/json") {
+		return ""
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		return ""
+	}
+	c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+
+	if len(bytes.TrimSpace(body)) == 0 {
+		return ""
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+
+	value, ok := payload[field]
+	if !ok {
+		return ""
+	}
+
+	email, ok := value.(string)
+	if !ok {
+		return ""
+	}
+
+	return email
 }
 
 // normalizeAndValidateEmail validates and normalizes an email address

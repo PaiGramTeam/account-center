@@ -19,6 +19,7 @@ import (
 
 	"paigram/internal/config"
 	"paigram/internal/crypto"
+	"paigram/internal/email"
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
 	"paigram/internal/sessioncache"
@@ -39,6 +40,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&model.UserCredential{},
 		&model.UserEmail{},
 		&model.UserSession{},
+		&model.PasswordResetToken{},
 		&model.UserTwoFactor{},
 		&model.UserDevice{},
 		&model.LoginLog{},
@@ -58,10 +60,15 @@ func setupTestHandler(db *gorm.DB) *Handler {
 	}
 
 	sessionCache := sessioncache.NewNoopStore()
+	emailService, err := email.NewService(config.EmailConfig{Enabled: false})
+	if err != nil {
+		panic(err)
+	}
 
 	return &Handler{
 		db:           db,
 		cfg:          cfg,
+		emailService: emailService,
 		sessionCache: sessionCache,
 	}
 }

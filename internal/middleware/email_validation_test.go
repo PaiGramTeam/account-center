@@ -1,7 +1,12 @@
 package middleware
 
 import (
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNormalizeAndValidateEmail(t *testing.T) {
@@ -110,4 +115,20 @@ func TestEmailKeyFunc_Normalization(t *testing.T) {
 	if email1 != email2 || email2 != email3 {
 		t.Errorf("Case variations should normalize to same email: %q, %q, %q", email1, email2, email3)
 	}
+}
+
+func TestEmailKeyFunc_ExtractsEmailFromJSONBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/auth/forgot-password", strings.NewReader(`{"email":"User@Example.com"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.RemoteAddr = "192.168.1.1:12345"
+
+	keyFunc := EmailKeyFunc("email")
+	key := keyFunc(c)
+	assert.Equal(t, "email:user@example.com", key)
+
+	body := emailFromJSONBody(c, "email")
+	assert.Equal(t, "User@Example.com", body)
 }

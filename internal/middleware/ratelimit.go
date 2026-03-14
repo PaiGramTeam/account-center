@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
 	"regexp"
 	"strconv"
@@ -189,8 +190,10 @@ func RateLimit(config RateLimitConfig) gin.HandlerFunc {
 		// Call the limiter middleware
 		middleware(c)
 
-		// Check if request was aborted (rate limit exceeded)
-		if c.IsAborted() {
+		// Only handle aborts caused by the limiter itself.
+		// Downstream middleware can also abort the request (for example auth or freshness checks),
+		// and those responses should pass through unchanged.
+		if c.IsAborted() && c.Writer.Status() == http.StatusTooManyRequests {
 			// Get the rate limit context to extract retry-after
 			key := config.KeyFunc(c)
 			context, err := instance.Get(c.Request.Context(), key)
@@ -236,6 +239,10 @@ func RateLimit(config RateLimitConfig) gin.HandlerFunc {
 
 				response.TooManyRequestsWithCode(c, "RATE_LIMIT_EXCEEDED", "rate limit exceeded", nil)
 			}
+			return
+		}
+
+		if c.IsAborted() {
 			return
 		}
 

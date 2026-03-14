@@ -814,9 +814,12 @@ func (h *Handler) GetDevices(c *gin.Context) {
 	}
 
 	// Get current session to mark current device
-	currentToken := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 	var currentSession model.UserSession
-	h.db.Where("access_token = ?", currentToken).First(&currentSession)
+	if sessionIDRaw, exists := c.Get("session_id"); exists {
+		if sessionID, ok := sessionIDRaw.(uint64); ok && sessionID != 0 {
+			h.db.First(&currentSession, sessionID)
+		}
+	}
 
 	deviceList := make([]gin.H, 0, len(devices))
 	for _, device := range devices {
@@ -892,9 +895,12 @@ func (h *Handler) RemoveDevice(c *gin.Context) {
 	}
 
 	// Don't allow removing current device
-	currentToken := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 	var currentSession model.UserSession
-	h.db.Where("access_token = ?", currentToken).First(&currentSession)
+	if sessionIDRaw, exists := c.Get("session_id"); exists {
+		if sessionID, ok := sessionIDRaw.(uint64); ok && sessionID != 0 {
+			h.db.First(&currentSession, sessionID)
+		}
+	}
 
 	if currentSession.ID != 0 && device.DeviceID == generateDeviceID(currentSession.UserAgent, currentSession.ClientIP) {
 		response.ForbiddenWithCode(c, "CURRENT_DEVICE", "cannot remove current device", nil)

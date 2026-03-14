@@ -167,10 +167,10 @@ func TestHandler_BindAccount(t *testing.T) {
 		reqBody := bindAccountRequest{
 			Provider: "telegram",
 			ProviderData: map[string]interface{}{
-				"id":         float64(123456789),
-				"first_name": "John",
-				"last_name":  "Doe",
-				"username":   "johndoe",
+				"sub":                "123456789",
+				"name":               "John Doe",
+				"preferred_username": "johndoe",
+				"picture":            "https://t.me/i/userpic/320/johndoe.jpg",
 			},
 		}
 		body, _ := json.Marshal(reqBody)
@@ -246,7 +246,7 @@ func TestHandler_BindAccount(t *testing.T) {
 		reqBody := bindAccountRequest{
 			Provider: "telegram",
 			ProviderData: map[string]interface{}{
-				"id": float64(123456789),
+				"sub": "123456789",
 			},
 		}
 		body, _ := json.Marshal(reqBody)
@@ -270,7 +270,7 @@ func TestHandler_BindAccount(t *testing.T) {
 		reqBody := bindAccountRequest{
 			Provider: "telegram",
 			ProviderData: map[string]interface{}{
-				"first_name": "John",
+				"name": "John",
 			},
 		}
 		body, _ := json.Marshal(reqBody)

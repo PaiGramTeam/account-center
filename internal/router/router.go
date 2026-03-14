@@ -156,7 +156,6 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 				Store:   rateLimitStore,
 			}))
 			{
-				oauth.POST("/telegram", authHandler.HandleTelegramAuth)
 				oauth.POST("/:provider/init", authHandler.InitiateOAuth)
 				oauth.POST("/:provider/callback", authHandler.HandleOAuthCallback)
 			}

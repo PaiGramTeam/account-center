@@ -2,12 +2,15 @@ package auth
 
 import (
 	"context"
+	"crypto/rsa"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -21,6 +24,11 @@ import (
 	"paigram/internal/handler/shared"
 	"paigram/internal/model"
 	"paigram/internal/response"
+)
+
+var (
+	telegramOIDCIssuer  = "https://oauth.telegram.org"
+	telegramOIDCJWKSURL = "https://oauth.telegram.org/.well-known/jwks.json"
 )
 
 type initiateOAuthRequest struct {
@@ -205,8 +213,9 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// Step 2.5: Verify ID token nonce (OIDC)
-	if err := verifyIDToken(tokenResp.IDToken, stateRecord.Nonce); err != nil {
+	// Step 2.5: Verify ID token claims (OIDC)
+	idTokenClaims, err := verifyIDToken(ctx, provider, tokenResp.IDToken, providerCfg, stateRecord.Nonce)
+	if err != nil {
 		response.BadRequest(c, fmt.Sprintf("ID token validation failed: %v", err))
 		return
 	}
@@ -221,7 +230,7 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	}
 
 	// Step 3: Fetch user info from provider
-	userInfo, err := h.fetchUserInfo(ctx, provider, tokenResp.AccessToken, providerCfg)
+	userInfo, err := h.fetchUserInfo(ctx, provider, tokenResp.AccessToken, providerCfg, idTokenClaims)
 	if err != nil {
 		response.BadRequest(c, fmt.Sprintf("failed to fetch user info: %v", err))
 		return
@@ -535,6 +544,15 @@ type oauthUserInfo struct {
 	AvatarURL string `json:"avatar_url"`
 }
 
+type oidcIDTokenClaims struct {
+	jwt.RegisteredClaims
+	Nonce             string `json:"nonce,omitempty"`
+	Name              string `json:"name,omitempty"`
+	PreferredUsername string `json:"preferred_username,omitempty"`
+	Picture           string `json:"picture,omitempty"`
+	PhoneNumber       string `json:"phone_number,omitempty"`
+}
+
 // exchangeCodeForToken exchanges an authorization code for OAuth tokens
 // This is the secure backend token exchange - keeps client_secret safe
 // Uses PKCE code_verifier for additional security
@@ -545,10 +563,12 @@ func (h *Handler) exchangeCodeForToken(ctx context.Context, provider, code, code
 
 	// Build token exchange request
 	data := url.Values{
-		"grant_type":    []string{"authorization_code"},
-		"code":          []string{code},
-		"client_id":     []string{cfg.ClientID},
-		"client_secret": []string{cfg.ClientSecret},
+		"grant_type": []string{"authorization_code"},
+		"code":       []string{code},
+		"client_id":  []string{cfg.ClientID},
+	}
+	if !strings.EqualFold(provider, "telegram") {
+		data.Set("client_secret", cfg.ClientSecret)
 	}
 
 	if cfg.RedirectURL != "" {
@@ -568,6 +588,10 @@ func (h *Handler) exchangeCodeForToken(ctx context.Context, provider, code, code
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	if strings.EqualFold(provider, "telegram") && cfg.ClientID != "" && cfg.ClientSecret != "" {
+		credentials := base64.StdEncoding.EncodeToString([]byte(cfg.ClientID + ":" + cfg.ClientSecret))
+		req.Header.Set("Authorization", "Basic "+credentials)
+	}
 
 	// Execute request
 	client := &http.Client{Timeout: 30 * time.Second}
@@ -600,7 +624,11 @@ func (h *Handler) exchangeCodeForToken(ctx context.Context, provider, code, code
 }
 
 // fetchUserInfo retrieves user information from the OAuth provider
-func (h *Handler) fetchUserInfo(ctx context.Context, provider, accessToken string, cfg config.OAuthProviderConfig) (*oauthUserInfo, error) {
+func (h *Handler) fetchUserInfo(ctx context.Context, provider, accessToken string, cfg config.OAuthProviderConfig, idTokenClaims *oidcIDTokenClaims) (*oauthUserInfo, error) {
+	if strings.EqualFold(provider, "telegram") {
+		return oauthUserInfoFromTelegramClaims(idTokenClaims)
+	}
+
 	if cfg.UserInfoURL == "" {
 		return nil, fmt.Errorf("user_info_url not configured for provider %s", provider)
 	}
@@ -656,48 +684,149 @@ func (h *Handler) fetchUserInfo(ctx context.Context, provider, accessToken strin
 	return &userInfo, nil
 }
 
-// verifyIDToken validates an OIDC ID token's nonce claim
-// This prevents token replay attacks for OIDC providers
-func verifyIDToken(idToken, expectedNonce string) error {
+// verifyIDToken validates an OIDC ID token and returns its claims.
+func verifyIDToken(ctx context.Context, provider, idToken string, cfg config.OAuthProviderConfig, expectedNonce string) (*oidcIDTokenClaims, error) {
 	if idToken == "" {
 		// Not all providers return ID tokens (e.g., GitHub doesn't)
-		return nil
+		return nil, nil
 	}
 
-	if expectedNonce == "" {
-		// No nonce to verify
-		return nil
+	if strings.EqualFold(provider, "telegram") {
+		return verifyTelegramIDToken(ctx, idToken, cfg.ClientID, expectedNonce)
 	}
 
-	// Parse JWT without signature verification (we trust the token came from provider via HTTPS)
-	// Signature verification would require fetching provider's public keys (JWKS)
+	return parseUnverifiedIDToken(idToken, expectedNonce)
+}
+
+func parseUnverifiedIDToken(idToken, expectedNonce string) (*oidcIDTokenClaims, error) {
 	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
-	token, _, err := parser.ParseUnverified(idToken, jwt.MapClaims{})
+	claims := &oidcIDTokenClaims{}
+	token, _, err := parser.ParseUnverified(idToken, claims)
 	if err != nil {
-		return fmt.Errorf("failed to parse ID token: %w", err)
+		return nil, fmt.Errorf("failed to parse ID token: %w", err)
 	}
 
-	claims, ok := token.Claims.(jwt.MapClaims)
+	parsedClaims, ok := token.Claims.(*oidcIDTokenClaims)
 	if !ok {
-		return fmt.Errorf("invalid ID token claims")
+		return nil, fmt.Errorf("invalid ID token claims")
 	}
 
-	// Verify nonce claim
-	nonce, ok := claims["nonce"].(string)
-	if !ok {
-		// Some providers might not include nonce if not in auth request
-		return nil
+	if expectedNonce != "" && parsedClaims.Nonce != "" && parsedClaims.Nonce != expectedNonce {
+		return nil, fmt.Errorf("ID token nonce mismatch: expected %s, got %s", expectedNonce, parsedClaims.Nonce)
 	}
 
-	if nonce != expectedNonce {
-		return fmt.Errorf("ID token nonce mismatch: expected %s, got %s", expectedNonce, nonce)
+	return parsedClaims, nil
+}
+
+func verifyTelegramIDToken(ctx context.Context, idToken, clientID, expectedNonce string) (*oidcIDTokenClaims, error) {
+	claims := &oidcIDTokenClaims{}
+	token, err := jwt.ParseWithClaims(idToken, claims, func(token *jwt.Token) (interface{}, error) {
+		if token.Method.Alg() != jwt.SigningMethodRS256.Alg() {
+			return nil, fmt.Errorf("unexpected signing method: %s", token.Method.Alg())
+		}
+
+		kid, _ := token.Header["kid"].(string)
+		if kid == "" {
+			return nil, fmt.Errorf("missing key id in token header")
+		}
+
+		return fetchTelegramJWKSKey(ctx, kid)
+	}, jwt.WithAudience(clientID), jwt.WithIssuer(telegramOIDCIssuer), jwt.WithLeeway(time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid ID token")
 	}
 
-	// Optionally verify other claims
-	// iss (issuer), aud (audience), exp (expiration), iat (issued at)
-	// For production, should verify signature using provider's JWKS
+	if expectedNonce != "" && claims.Nonce != "" && claims.Nonce != expectedNonce {
+		return nil, fmt.Errorf("ID token nonce mismatch: expected %s, got %s", expectedNonce, claims.Nonce)
+	}
+	if claims.Subject == "" {
+		return nil, fmt.Errorf("missing subject in ID token")
+	}
 
-	return nil
+	return claims, nil
+}
+
+func fetchTelegramJWKSKey(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, telegramOIDCJWKSURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create jwks request: %w", err)
+	}
+
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch jwks: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fetch jwks failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var jwks struct {
+		Keys []struct {
+			Kty string `json:"kty"`
+			Kid string `json:"kid"`
+			N   string `json:"n"`
+			E   string `json:"e"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, fmt.Errorf("decode jwks: %w", err)
+	}
+
+	for _, key := range jwks.Keys {
+		if key.Kid != kid {
+			continue
+		}
+		if key.Kty != "RSA" {
+			return nil, fmt.Errorf("unsupported jwk type: %s", key.Kty)
+		}
+
+		nBytes, err := base64.RawURLEncoding.DecodeString(key.N)
+		if err != nil {
+			return nil, fmt.Errorf("decode jwk modulus: %w", err)
+		}
+		eBytes, err := base64.RawURLEncoding.DecodeString(key.E)
+		if err != nil {
+			return nil, fmt.Errorf("decode jwk exponent: %w", err)
+		}
+
+		e := new(big.Int).SetBytes(eBytes)
+		if !e.IsInt64() {
+			return nil, fmt.Errorf("invalid jwk exponent")
+		}
+
+		return &rsa.PublicKey{
+			N: new(big.Int).SetBytes(nBytes),
+			E: int(e.Int64()),
+		}, nil
+	}
+
+	return nil, fmt.Errorf("no jwk found for kid %s", kid)
+}
+
+func oauthUserInfoFromTelegramClaims(claims *oidcIDTokenClaims) (*oauthUserInfo, error) {
+	if claims == nil {
+		return nil, fmt.Errorf("missing telegram id token claims")
+	}
+	if claims.Subject == "" {
+		return nil, fmt.Errorf("telegram id token missing subject")
+	}
+
+	userInfo := &oauthUserInfo{
+		ID:      claims.Subject,
+		Name:    strings.TrimSpace(claims.Name),
+		Picture: strings.TrimSpace(claims.Picture),
+		Login:   strings.TrimSpace(claims.PreferredUsername),
+	}
+	if userInfo.Name == "" {
+		userInfo.Name = userInfo.Login
+	}
+	return userInfo, nil
 }
 
 // refreshOAuthToken refreshes an expired OAuth access token using refresh token

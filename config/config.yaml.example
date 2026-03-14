@@ -28,7 +28,6 @@ auth:
   email_verification_ttl: 86400  # 24 hours
   password_reset_ttl: 3600       # 1 hour - password reset token expiry (default: 3600, matching better-auth)
   oauth_state_ttl: 600           # 10 minutes
-  telegram_bot_token: "YOUR_TELEGRAM_BOT_TOKEN"  # Get from @BotFather
   allowed_providers:
     - google
     - github
@@ -54,6 +53,15 @@ auth:
       user_info_url: "https://api.github.com/user"
       scopes:
         - user:email
+    telegram:
+      client_id: "your-telegram-client-id"
+      client_secret: "your-telegram-client-secret"
+      redirect_url: "http://localhost:8080/api/v1/auth/oauth/telegram/callback"
+      auth_url: "https://oauth.telegram.org/auth"
+      token_url: "https://oauth.telegram.org/token"
+      scopes:
+        - openid
+        - profile
 
 redis:
   enabled: true

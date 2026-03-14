@@ -99,7 +99,8 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 	}
 
 	// Invalidate any existing reset tokens for this user
-	if err := h.db.Where("user_id = ? AND used_at IS NULL", user.ID).
+	if err := h.db.Model(&model.PasswordResetToken{}).
+		Where("user_id = ? AND used_at IS NULL", user.ID).
 		Updates(map[string]interface{}{
 			"used_at": time.Now(),
 		}).Error; err != nil {

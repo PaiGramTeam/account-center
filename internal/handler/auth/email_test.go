@@ -353,7 +353,15 @@ func TestRegisterEmail_WithCaptchaRequired_MissingTokenReturnsBadRequest(t *test
 	db := setupTestDB(t)
 	handler := setupTestHandler(db)
 	handler.cfg.Captcha.Turnstile.RequireOnRegister = true
-	handler.captchaVerifier = &stubCaptchaVerifier{enabled: true}
+	handler.captchaVerifier = &stubCaptchaVerifier{
+		enabled: true,
+		verify: func(_ context.Context, req captchaVerifyRequest) (*captchaVerifyResult, error) {
+			if req.Token == "" {
+				return &captchaVerifyResult{Success: false, ErrorCodes: []string{"missing-input-response"}}, nil
+			}
+			return &captchaVerifyResult{Success: true, Action: turnstileActionRegister}, nil
+		},
+	}
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -536,6 +544,9 @@ func TestLoginWithEmail_WithCaptchaRiskTrigger_RequiresCaptchaAfterFailures(t *t
 	handler.captchaVerifier = &stubCaptchaVerifier{
 		enabled: true,
 		verify: func(_ context.Context, req captchaVerifyRequest) (*captchaVerifyResult, error) {
+			if req.Token == "" {
+				return &captchaVerifyResult{Success: false, ErrorCodes: []string{"missing-input-response"}}, nil
+			}
 			assert.Equal(t, "login-token", req.Token)
 			assert.Equal(t, turnstileActionLogin, req.ExpectedAction)
 			return &captchaVerifyResult{Success: true, Action: turnstileActionLogin}, nil

@@ -25,6 +25,7 @@ import (
 
 	initmigrate "paigram/initialize/migrate"
 	"paigram/internal/config"
+	"paigram/internal/crypto"
 	"paigram/internal/email"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
@@ -59,6 +60,7 @@ type integrationStack struct {
 
 func newIntegrationStack(t *testing.T) *integrationStack {
 	t.Helper()
+	require.NoError(t, crypto.SetEncryptionKey([]byte("0123456789abcdef0123456789abcdef")))
 
 	env := loadIntegrationEnv(t)
 	stack := &integrationStack{Env: env}

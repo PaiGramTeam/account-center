@@ -235,6 +235,68 @@ func TestRegisterEmail_DuplicateEmail_ReturnsConflict(t *testing.T) {
 	assert.Equal(t, int64(1), userCount)
 }
 
+func TestRegisterEmail_InvalidPayload_ReturnsBadRequest(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/register", handler.RegisterEmail)
+
+	bodyBytes, err := json.Marshal(registerEmailRequest{
+		Email:       "not-an-email",
+		Password:    "short",
+		DisplayName: "",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+
+	var userCount int64
+	require.NoError(t, db.Model(&model.User{}).Count(&userCount).Error)
+	assert.Zero(t, userCount)
+}
+
+func TestRegisterEmail_EmptyDisplayName_UsesEmailLocalPart(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/register", handler.RegisterEmail)
+
+	bodyBytes, err := json.Marshal(map[string]any{
+		"email":        "fallback-name@example.com",
+		"password":     "Password123!",
+		"display_name": "   ",
+		"locale":       "",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	userID := uint64(resp["data"].(map[string]any)["user_id"].(float64))
+
+	var profile model.UserProfile
+	require.NoError(t, db.Where("user_id = ?", userID).First(&profile).Error)
+	assert.Equal(t, "fallback-name", profile.DisplayName)
+	assert.Equal(t, "en_US", profile.Locale)
+}
+
 func TestLoginWithEmail_Without2FA_Success(t *testing.T) {
 	db := setupTestDB(t)
 	handler := setupTestHandler(db)
@@ -294,6 +356,89 @@ func TestLoginWithEmail_RequiresVerifiedEmail_ReturnsForbidden(t *testing.T) {
 
 	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 	assert.Contains(t, w.Body.String(), "email not verified")
+
+	var sessionCount int64
+	require.NoError(t, db.Model(&model.UserSession{}).Count(&sessionCount).Error)
+	assert.Zero(t, sessionCount)
+}
+
+func TestLoginWithEmail_UnknownEmail_ReturnsUnauthorized(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/login", handler.LoginWithEmail)
+
+	bodyBytes, err := json.Marshal(loginEmailRequest{
+		Email:    "missing@example.com",
+		Password: "password123",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid credentials")
+}
+
+func TestLoginWithEmail_WrongPassword_ReturnsUnauthorized(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+	createTestUser(t, db, "test@example.com", "password123", true)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/login", handler.LoginWithEmail)
+
+	bodyBytes, err := json.Marshal(loginEmailRequest{
+		Email:    "test@example.com",
+		Password: "wrong-password",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid credentials")
+
+	var sessionCount int64
+	require.NoError(t, db.Model(&model.UserSession{}).Count(&sessionCount).Error)
+	assert.Zero(t, sessionCount)
+}
+
+func TestLoginWithEmail_DisabledUser_ReturnsForbidden(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+	user := createTestUser(t, db, "disabled@example.com", "password123", true)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.ID).Update("status", model.UserStatusSuspended).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/login", handler.LoginWithEmail)
+
+	bodyBytes, err := json.Marshal(loginEmailRequest{
+		Email:    "disabled@example.com",
+		Password: "password123",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "account is not allowed to login")
 
 	var sessionCount int64
 	require.NoError(t, db.Model(&model.UserSession{}).Count(&sessionCount).Error)

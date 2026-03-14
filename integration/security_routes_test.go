@@ -184,9 +184,17 @@ func TestTwoFactorLifecycle(t *testing.T) {
 	require.Len(t, newBackupCodes, 10)
 	assert.NotEqual(t, firstBackupCode, newBackupCodes[0].(string))
 
+	disableCode, err := totp.GenerateCodeCustom(secret, time.Now(), totp.ValidateOpts{
+		Period:    30,
+		Skew:      1,
+		Digits:    otp.DigitsSix,
+		Algorithm: otp.AlgorithmSHA1,
+	})
+	require.NoError(t, err)
+
 	disableRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/2fa/disable", userID), map[string]any{
 		"password": password,
-		"code":     newBackupCodes[0].(string),
+		"code":     disableCode,
 	}, headers)
 	require.Equal(t, http.StatusOK, disableRes.Code, disableRes.Body.String())
 

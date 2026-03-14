@@ -63,6 +63,26 @@ type AuthConfig struct {
 	PendingUserExpirySeconds      int                            `mapstructure:"pending_user_expiry"`
 	PasswordResetTokenTTLSeconds  int                            `mapstructure:"password_reset_ttl"`
 	RequireEmailVerificationLogin bool                           `mapstructure:"require_verified_email_login"`
+	Captcha                       AuthCaptchaConfig              `mapstructure:"captcha"`
+}
+
+// AuthCaptchaConfig holds CAPTCHA configuration for auth flows.
+type AuthCaptchaConfig struct {
+	Turnstile TurnstileConfig `mapstructure:"turnstile"`
+}
+
+// TurnstileConfig holds Cloudflare Turnstile verification settings.
+type TurnstileConfig struct {
+	Enabled                   bool   `mapstructure:"enabled"`
+	SiteKey                   string `mapstructure:"site_key"`
+	SecretKey                 string `mapstructure:"secret_key"`
+	VerifyURL                 string `mapstructure:"verify_url"`
+	ExpectedHostname          string `mapstructure:"expected_hostname"`
+	RequireOnRegister         bool   `mapstructure:"require_on_register"`
+	RequireOnLogin            bool   `mapstructure:"require_on_login"`
+	LoginFailureThreshold     int    `mapstructure:"login_failure_threshold"`
+	LoginFailureWindowSeconds int    `mapstructure:"login_failure_window"`
+	RequestTimeoutSeconds     int    `mapstructure:"request_timeout"`
 }
 
 // OAuthProviderConfig models third-party provider credentials.
@@ -254,6 +274,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.pending_user_expiry", 2592000)
 	v.SetDefault("auth.password_reset_ttl", 3600)
 	v.SetDefault("auth.require_verified_email_login", true)
+	v.SetDefault("auth.captcha.turnstile.enabled", false)
+	v.SetDefault("auth.captcha.turnstile.verify_url", "https://challenges.cloudflare.com/turnstile/v0/siteverify")
+	v.SetDefault("auth.captcha.turnstile.require_on_register", true)
+	v.SetDefault("auth.captcha.turnstile.require_on_login", false)
+	v.SetDefault("auth.captcha.turnstile.login_failure_threshold", 3)
+	v.SetDefault("auth.captcha.turnstile.login_failure_window", 900)
+	v.SetDefault("auth.captcha.turnstile.request_timeout", 5)
 
 	v.SetDefault("redis.enabled", false)
 	v.SetDefault("redis.addr", "127.0.0.1:6379")

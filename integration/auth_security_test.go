@@ -3,7 +3,9 @@
 package integration
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"testing"
 
@@ -12,6 +14,17 @@ import (
 
 	"paigram/internal/config"
 )
+
+func newTurnstileStubServer(t *testing.T, handler func(token, remoteIP string) map[string]any) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NoError(t, r.ParseForm())
+		payload := handler(r.Form.Get("response"), r.Form.Get("remoteip"))
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(payload))
+	}))
+}
 
 func TestAuthLoginRejectsUserEnumerationSignals(t *testing.T) {
 	stack := newIntegrationStack(t)
@@ -102,6 +115,90 @@ func TestAuthRegisterRateLimitByIP(t *testing.T) {
 		"locale":       "en_US",
 	}, nil, "198.51.100.21:12345")
 	require.Equal(t, http.StatusCreated, otherEmail.Code, otherEmail.Body.String())
+}
+
+func TestAuthRegisterRequiresTurnstile(t *testing.T) {
+	turnstile := newTurnstileStubServer(t, func(token, remoteIP string) map[string]any {
+		assert.Equal(t, "register-pass", token)
+		assert.Equal(t, "198.51.100.30", remoteIP)
+		return map[string]any{
+			"success": true,
+			"action":  "register",
+		}
+	})
+	defer turnstile.Close()
+
+	stack := newIntegrationStackWithConfig(t, func(cfg *config.Config) {
+		cfg.Auth.Captcha.Turnstile.Enabled = true
+		cfg.Auth.Captcha.Turnstile.SecretKey = "integration-secret"
+		cfg.Auth.Captcha.Turnstile.VerifyURL = turnstile.URL
+		cfg.Auth.Captcha.Turnstile.RequireOnRegister = true
+	})
+
+	missingCaptcha := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
+		"email":        "turnstile-missing@example.com",
+		"password":     "Password123!",
+		"display_name": "Missing Captcha",
+	}, nil, "198.51.100.30:12345")
+	require.Equal(t, http.StatusBadRequest, missingCaptcha.Code, missingCaptcha.Body.String())
+	assert.Contains(t, missingCaptcha.Body.String(), "CAPTCHA_REQUIRED")
+
+	validCaptcha := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
+		"email":         "turnstile-valid@example.com",
+		"password":      "Password123!",
+		"display_name":  "Valid Captcha",
+		"captcha_token": "register-pass",
+	}, nil, "198.51.100.30:12345")
+	require.Equal(t, http.StatusCreated, validCaptcha.Code, validCaptcha.Body.String())
+}
+
+func TestAuthLoginRequiresTurnstileAfterFailedAttempts(t *testing.T) {
+	turnstile := newTurnstileStubServer(t, func(token, remoteIP string) map[string]any {
+		assert.Equal(t, "login-pass", token)
+		assert.Equal(t, "198.51.100.40", remoteIP)
+		return map[string]any{
+			"success": true,
+			"action":  "login",
+		}
+	})
+	defer turnstile.Close()
+
+	stack := newIntegrationStackWithConfig(t, func(cfg *config.Config) {
+		cfg.Auth.Captcha.Turnstile.Enabled = true
+		cfg.Auth.Captcha.Turnstile.SecretKey = "integration-secret"
+		cfg.Auth.Captcha.Turnstile.VerifyURL = turnstile.URL
+		cfg.Auth.Captcha.Turnstile.RequireOnLogin = false
+		cfg.Auth.Captcha.Turnstile.LoginFailureThreshold = 2
+		cfg.Auth.Captcha.Turnstile.LoginFailureWindowSeconds = 900
+	})
+
+	_, _, _, email, _ := registerVerifyAndLogin(t, stack, "login-turnstile")
+	clientIP := "198.51.100.40:12345"
+
+	first := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"email":    email,
+		"password": "WrongPassword123!",
+	}, nil, clientIP)
+	second := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"email":    email,
+		"password": "WrongPassword123!",
+	}, nil, clientIP)
+	require.Equal(t, http.StatusUnauthorized, first.Code, first.Body.String())
+	require.Equal(t, http.StatusUnauthorized, second.Code, second.Body.String())
+
+	missingCaptcha := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"email":    email,
+		"password": "Password123!",
+	}, nil, clientIP)
+	require.Equal(t, http.StatusBadRequest, missingCaptcha.Code, missingCaptcha.Body.String())
+	assert.Contains(t, missingCaptcha.Body.String(), "CAPTCHA_REQUIRED")
+
+	validCaptcha := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+		"email":         email,
+		"password":      "Password123!",
+		"captcha_token": "login-pass",
+	}, nil, clientIP)
+	require.Equal(t, http.StatusOK, validCaptcha.Code, validCaptcha.Body.String())
 }
 
 func assertRetryAfterWithinRange(t *testing.T, value string, min int, max int) {

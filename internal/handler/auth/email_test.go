@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
@@ -25,6 +26,22 @@ import (
 	"paigram/internal/sessioncache"
 	"paigram/internal/testutil"
 )
+
+type stubCaptchaVerifier struct {
+	enabled bool
+	verify  func(ctx context.Context, req captchaVerifyRequest) (*captchaVerifyResult, error)
+}
+
+func (s *stubCaptchaVerifier) Enabled() bool {
+	return s != nil && s.enabled
+}
+
+func (s *stubCaptchaVerifier) Verify(ctx context.Context, req captchaVerifyRequest) (*captchaVerifyResult, error) {
+	if s.verify == nil {
+		return &captchaVerifyResult{Success: true}, nil
+	}
+	return s.verify(ctx, req)
+}
 
 func setupTestDB(t *testing.T) *gorm.DB {
 	// Initialize encryption for tests
@@ -68,10 +85,11 @@ func setupTestHandler(db *gorm.DB) *Handler {
 	}
 
 	return &Handler{
-		db:           db,
-		cfg:          cfg,
-		emailService: emailService,
-		sessionCache: sessionCache,
+		db:               db,
+		cfg:              cfg,
+		emailService:     emailService,
+		sessionCache:     sessionCache,
+		memory2FALimiter: newMemory2FARateLimiter(),
 	}
 }
 
@@ -297,6 +315,71 @@ func TestRegisterEmail_EmptyDisplayName_UsesEmailLocalPart(t *testing.T) {
 	assert.Equal(t, "en_US", profile.Locale)
 }
 
+func TestRegisterEmail_WithCaptchaRequired_Success(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+	handler.cfg.Captcha.Turnstile.RequireOnRegister = true
+	handler.captchaVerifier = &stubCaptchaVerifier{
+		enabled: true,
+		verify: func(_ context.Context, req captchaVerifyRequest) (*captchaVerifyResult, error) {
+			assert.Equal(t, "register-token", req.Token)
+			assert.Equal(t, turnstileActionRegister, req.ExpectedAction)
+			return &captchaVerifyResult{Success: true, Action: turnstileActionRegister}, nil
+		},
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/register", handler.RegisterEmail)
+
+	bodyBytes, err := json.Marshal(registerEmailRequest{
+		Email:        "captcha@example.com",
+		Password:     "Password123!",
+		DisplayName:  "Captcha User",
+		CaptchaToken: "register-token",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+}
+
+func TestRegisterEmail_WithCaptchaRequired_MissingTokenReturnsBadRequest(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+	handler.cfg.Captcha.Turnstile.RequireOnRegister = true
+	handler.captchaVerifier = &stubCaptchaVerifier{enabled: true}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/register", handler.RegisterEmail)
+
+	bodyBytes, err := json.Marshal(registerEmailRequest{
+		Email:       "captcha-missing@example.com",
+		Password:    "Password123!",
+		DisplayName: "Captcha Missing",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "CAPTCHA_REQUIRED")
+
+	var userCount int64
+	require.NoError(t, db.Model(&model.User{}).Count(&userCount).Error)
+	assert.Zero(t, userCount)
+}
+
 func TestLoginWithEmail_Without2FA_Success(t *testing.T) {
 	db := setupTestDB(t)
 	handler := setupTestHandler(db)
@@ -443,6 +526,67 @@ func TestLoginWithEmail_DisabledUser_ReturnsForbidden(t *testing.T) {
 	var sessionCount int64
 	require.NoError(t, db.Model(&model.UserSession{}).Count(&sessionCount).Error)
 	assert.Zero(t, sessionCount)
+}
+
+func TestLoginWithEmail_WithCaptchaRiskTrigger_RequiresCaptchaAfterFailures(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+	handler.cfg.Captcha.Turnstile.LoginFailureThreshold = 2
+	handler.cfg.Captcha.Turnstile.LoginFailureWindowSeconds = 900
+	handler.captchaVerifier = &stubCaptchaVerifier{
+		enabled: true,
+		verify: func(_ context.Context, req captchaVerifyRequest) (*captchaVerifyResult, error) {
+			assert.Equal(t, "login-token", req.Token)
+			assert.Equal(t, turnstileActionLogin, req.ExpectedAction)
+			return &captchaVerifyResult{Success: true, Action: turnstileActionLogin}, nil
+		},
+	}
+	createTestUser(t, db, "test@example.com", "password123", true)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/login", handler.LoginWithEmail)
+
+	for range 2 {
+		bodyBytes, err := json.Marshal(loginEmailRequest{
+			Email:    "test@example.com",
+			Password: "wrong-password",
+		})
+		require.NoError(t, err)
+
+		req := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(bodyBytes))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = "198.51.100.10:12345"
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	}
+
+	thirdBody, err := json.Marshal(loginEmailRequest{
+		Email:    "test@example.com",
+		Password: "password123",
+	})
+	require.NoError(t, err)
+	thirdReq := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(thirdBody))
+	thirdReq.Header.Set("Content-Type", "application/json")
+	thirdReq.RemoteAddr = "198.51.100.10:12345"
+	thirdRes := httptest.NewRecorder()
+	router.ServeHTTP(thirdRes, thirdReq)
+	require.Equal(t, http.StatusBadRequest, thirdRes.Code, thirdRes.Body.String())
+	assert.Contains(t, thirdRes.Body.String(), "CAPTCHA_REQUIRED")
+
+	validBody, err := json.Marshal(loginEmailRequest{
+		Email:        "test@example.com",
+		Password:     "password123",
+		CaptchaToken: "login-token",
+	})
+	require.NoError(t, err)
+	validReq := httptest.NewRequest(http.MethodPost, "/auth/login", bytes.NewReader(validBody))
+	validReq.Header.Set("Content-Type", "application/json")
+	validReq.RemoteAddr = "198.51.100.10:12345"
+	validRes := httptest.NewRecorder()
+	router.ServeHTTP(validRes, validReq)
+	require.Equal(t, http.StatusOK, validRes.Code, validRes.Body.String())
 }
 
 func TestVerifyEmail_Success_ActivatesPendingUser(t *testing.T) {

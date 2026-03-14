@@ -82,12 +82,13 @@ func newIntegrationStack(t *testing.T) *integrationStack {
 		AutoSeed:      false,
 	}
 
+	migrationDB := openMySQLDatabase(t, stack.DatabaseCfg)
+	runMigrations(t, migrationDB, stack.DatabaseCfg)
+
 	stack.SQLDB = openMySQLDatabase(t, stack.DatabaseCfg)
 	stack.cleanup = append(stack.cleanup, func() {
 		_ = stack.SQLDB.Close()
 	})
-
-	runMigrations(t, stack.SQLDB, stack.DatabaseCfg)
 
 	var err error
 	stack.DB, err = gorm.Open(gormmysql.Open(buildMySQLDSN(stack.DatabaseCfg)), &gorm.Config{})

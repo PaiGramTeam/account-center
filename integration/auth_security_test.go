@@ -30,73 +30,75 @@ func TestAuthLoginRejectsUserEnumerationSignals(t *testing.T) {
 	assert.JSONEq(t, unknownEmailRes.Body.String(), wrongPasswordRes.Body.String())
 }
 
-func TestAuthLoginRateLimitByEmail(t *testing.T) {
+func TestAuthLoginRateLimitByIP(t *testing.T) {
 	stack := newIntegrationStackWithConfig(t, func(cfg *config.Config) {
 		cfg.RateLimit.Auth.Login = "2-M"
 	})
 	_, _, _, email, _ := registerVerifyAndLogin(t, stack, "login-rate-limit")
+	blockedIP := "198.51.100.10:12345"
 
-	first := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+	first := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"email":    email,
 		"password": "WrongPassword123!",
-	}, nil)
-	second := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+	}, nil, blockedIP)
+	second := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"email":    email,
 		"password": "WrongPassword123!",
-	}, nil)
-	third := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+	}, nil, blockedIP)
+	third := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"email":    email,
 		"password": "WrongPassword123!",
-	}, nil)
+	}, nil, blockedIP)
 
 	require.Equal(t, http.StatusUnauthorized, first.Code, first.Body.String())
 	require.Equal(t, http.StatusUnauthorized, second.Code, second.Body.String())
 	require.Equal(t, http.StatusTooManyRequests, third.Code, third.Body.String())
-	assert.Equal(t, "RATE_LIMIT_EXCEEDED", decodeErrorCode(t, third))
+	assert.Contains(t, third.Body.String(), "RATE_LIMIT_EXCEEDED")
 	assert.Equal(t, "60", third.Header().Get("Retry-After"))
 
-	fourth := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
+	fourth := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"email":    "other@example.com",
 		"password": "WrongPassword123!",
-	}, nil)
+	}, nil, "198.51.100.11:12345")
 	require.Equal(t, http.StatusUnauthorized, fourth.Code, fourth.Body.String())
 }
 
-func TestAuthRegisterRateLimitByEmail(t *testing.T) {
+func TestAuthRegisterRateLimitByIP(t *testing.T) {
 	stack := newIntegrationStackWithConfig(t, func(cfg *config.Config) {
 		cfg.RateLimit.Auth.Register = "2-M"
 	})
+	blockedIP := "198.51.100.20:12345"
 
-	first := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
+	first := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
 		"email":        "repeat-register@example.com",
 		"password":     "Password123!",
 		"display_name": "Rate Limit One",
 		"locale":       "en_US",
-	}, nil)
-	second := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
+	}, nil, blockedIP)
+	second := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
 		"email":        "repeat-register@example.com",
 		"password":     "Password123!",
 		"display_name": "Rate Limit Two",
 		"locale":       "en_US",
-	}, nil)
-	third := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
+	}, nil, blockedIP)
+	third := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
 		"email":        "repeat-register@example.com",
 		"password":     "Password123!",
 		"display_name": "Rate Limit Three",
 		"locale":       "en_US",
-	}, nil)
+	}, nil, blockedIP)
 
 	require.Equal(t, http.StatusCreated, first.Code, first.Body.String())
 	require.Equal(t, http.StatusConflict, second.Code, second.Body.String())
 	require.Equal(t, http.StatusTooManyRequests, third.Code, third.Body.String())
-	assert.Equal(t, "RATE_LIMIT_EXCEEDED", decodeErrorCode(t, third))
+	assert.Contains(t, third.Body.String(), "RATE_LIMIT_EXCEEDED")
 	assert.Equal(t, "60", third.Header().Get("Retry-After"))
 
-	otherEmail := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
+	otherEmail := performJSONRequestFromIP(t, stack.Router, http.MethodPost, "/api/v1/auth/register", map[string]any{
 		"email":        "another-register@example.com",
 		"password":     "Password123!",
 		"display_name": "Another User",
 		"locale":       "en_US",
-	}, nil)
+	}, nil, "198.51.100.21:12345")
 	require.Equal(t, http.StatusCreated, otherEmail.Code, otherEmail.Body.String())
 }

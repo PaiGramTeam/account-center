@@ -59,6 +59,10 @@ type integrationStack struct {
 }
 
 func newIntegrationStack(t *testing.T) *integrationStack {
+	return newIntegrationStackWithConfig(t, nil)
+}
+
+func newIntegrationStackWithConfig(t *testing.T, mutate func(*config.Config)) *integrationStack {
 	t.Helper()
 	require.NoError(t, crypto.SetEncryptionKey([]byte("0123456789abcdef0123456789abcdef")))
 
@@ -115,7 +119,12 @@ func newIntegrationStack(t *testing.T) *integrationStack {
 	rateLimitStore, err := middleware.NewRedisStore(stack.Redis, stack.RedisPrefix+":ratelimit")
 	require.NoError(t, err)
 
-	stack.Router = router.New(newTestConfig(env, stack.RedisPrefix), sessionStore, stack.DB, rateLimitStore, stack.Email)
+	testCfg := newTestConfig(env, stack.RedisPrefix)
+	if mutate != nil {
+		mutate(testCfg)
+	}
+
+	stack.Router = router.New(testCfg, sessionStore, stack.DB, rateLimitStore, stack.Email)
 
 	t.Cleanup(func() {
 		for i := len(stack.cleanup) - 1; i >= 0; i-- {

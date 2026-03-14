@@ -321,6 +321,10 @@ func migrationsDir(t *testing.T) string {
 }
 
 func performJSONRequest(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
+	return performJSONRequestFromIP(t, handler, method, path, body, headers, "192.0.2.1:12345")
+}
+
+func performJSONRequestFromIP(t *testing.T, handler http.Handler, method, path string, body any, headers map[string]string, remoteAddr string) *httptest.ResponseRecorder {
 	t.Helper()
 
 	var reader *strings.Reader
@@ -333,6 +337,7 @@ func performJSONRequest(t *testing.T, handler http.Handler, method, path string,
 	}
 
 	req := httptest.NewRequest(method, path, reader)
+	req.RemoteAddr = remoteAddr
 	req.Header.Set("Content-Type", "application/json")
 	for key, value := range headers {
 		req.Header.Set(key, value)

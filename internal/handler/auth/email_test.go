@@ -69,7 +69,7 @@ func setupTestHandler(db *gorm.DB) *Handler {
 }
 
 func createTestUser(t *testing.T, db *gorm.DB, email, password string, verified bool) *model.User {
-	passwordHash, err := hashPassword(password)
+	passwordHash, err := hashPassword(password, DefaultBcryptCost)
 	require.NoError(t, err)
 
 	user := model.User{

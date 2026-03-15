@@ -2,9 +2,15 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
@@ -25,6 +31,60 @@ import (
 	"paigram/internal/sessioncache"
 	"paigram/internal/worker"
 )
+
+type httpShutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
+type grpcStopper interface {
+	Stop()
+}
+
+type shutdowner interface {
+	Shutdown()
+}
+
+type closer interface {
+	Close() error
+}
+
+type shutdownTargets struct {
+	httpServer     httpShutdowner
+	grpcServer     grpcStopper
+	asynqServer    shutdowner
+	asynqScheduler shutdowner
+	emailService   closer
+}
+
+func shutdownServices(ctx context.Context, targets shutdownTargets) error {
+	var errs []error
+
+	if targets.httpServer != nil {
+		if err := targets.httpServer.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutdown http server: %w", err))
+		}
+	}
+
+	if targets.grpcServer != nil {
+		targets.grpcServer.Stop()
+	}
+
+	if targets.asynqServer != nil {
+		targets.asynqServer.Shutdown()
+	}
+
+	if targets.asynqScheduler != nil {
+		targets.asynqScheduler.Shutdown()
+	}
+
+	if targets.emailService != nil {
+		if err := targets.emailService.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close email service: %w", err))
+		}
+	}
+
+	return errors.Join(errs...)
+}
 
 // serveCmd represents the serve command
 var serveCmd = &cobra.Command{
@@ -48,6 +108,9 @@ func init() {
 }
 
 func runServer() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	cfg := config.MustLoad("config")
 	defer logging.Sync()
 
@@ -58,6 +121,11 @@ func runServer() {
 	}
 
 	db := database.MustConnect(cfg.Database)
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatalf("database handle initialization failed: %v", err)
+	}
+	defer sqlDB.Close()
 
 	var sessionStore sessioncache.Store = sessioncache.NewNoopStore()
 	var redisClient *redis.Client
@@ -77,13 +145,10 @@ func runServer() {
 				log.Fatalf("rate limit store initialization failed: %v", err)
 			}
 		}
-
-		defer redisClient.Close()
 	}
 
 	// Initialize email service singleton
 	var emailService *email.Service
-	var err error
 	if redisClient != nil {
 		emailService, err = email.NewServiceWithRedis(cfg.Email, redisClient)
 	} else {
@@ -92,11 +157,10 @@ func runServer() {
 	if err != nil {
 		log.Fatalf("email service initialization failed: %v", err)
 	}
-	defer emailService.Close()
 
 	// Start email queue if async is enabled
 	if cfg.Email.UseAsyncQueue {
-		if err := emailService.StartQueue(context.Background()); err != nil {
+		if err := emailService.StartQueue(ctx); err != nil {
 			log.Fatalf("failed to start email queue: %v", err)
 		}
 		log.Printf("Email queue started (backend: %s)", cfg.Email.QueueBackend)
@@ -104,15 +168,41 @@ func runServer() {
 
 	// Create wait group for graceful shutdown
 	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+
+	var httpServer *http.Server
+	var grpcServer *server.GRPCServer
+	var asynqServer shutdowner
+	var asynqScheduler shutdowner
+	shutdown := sync.OnceFunc(func() {
+		log.Println("Shutting down services...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		if err := shutdownServices(shutdownCtx, shutdownTargets{
+			httpServer:     httpServer,
+			grpcServer:     grpcServer,
+			asynqServer:    asynqServer,
+			asynqScheduler: asynqScheduler,
+			emailService:   emailService,
+		}); err != nil {
+			log.Printf("Graceful shutdown completed with errors: %v", err)
+		}
+		if redisClient != nil {
+			if err := redisClient.Close(); err != nil {
+				log.Printf("Redis close error: %v", err)
+			}
+		}
+	})
 
 	// Start gRPC server if enabled
 	if cfg.GRPC.Enabled {
-		grpcServer := server.NewGRPCServer(cfg.GRPC.Port, db, redisClient, cfg)
+		grpcServer = server.NewGRPCServer(cfg.GRPC.Port, db, redisClient, cfg)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if err := grpcServer.Start(); err != nil {
-				log.Printf("gRPC server error: %v", err)
+				errCh <- fmt.Errorf("gRPC server: %w", err)
 			}
 		}()
 		log.Printf("gRPC server started on port %d", cfg.GRPC.Port)
@@ -124,36 +214,38 @@ func runServer() {
 		geoService := geolocation.NewService()
 		authHandler := authhandler.NewHandler(db, cfg.Auth, emailService, cfg.Security, sessionStore, geoService)
 
-		asynqServer, asynqScheduler, err := worker.StartAsynqServer(cfg, redisClient, db, authHandler)
+		asynqServer, asynqScheduler, err = worker.StartAsynqServer(cfg, redisClient, db, authHandler)
 		if err != nil {
 			log.Printf("WARNING: Failed to start Asynq worker: %v", err)
 			log.Println("Background tasks (OAuth token refresh) will not run")
-		} else {
-			defer func() {
-				if asynqServer != nil {
-					asynqServer.Shutdown()
-				}
-				if asynqScheduler != nil {
-					asynqScheduler.Shutdown()
-				}
-			}()
 		}
 	}
 
 	// Start HTTP server
 	engine := router.New(cfg, sessionStore, db, rateLimitStore, emailService)
 	addr := fmt.Sprintf("%s:%d", cfg.App.Host, cfg.App.Port)
+	httpServer = &http.Server{
+		Addr:    addr,
+		Handler: engine,
+	}
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := engine.Run(addr); err != nil {
-			log.Printf("HTTP server error: %v", err)
+		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("HTTP server: %w", err)
 		}
 	}()
 	log.Printf("HTTP server started on %s", addr)
 
-	// Wait for all servers to complete
+	select {
+	case <-ctx.Done():
+		log.Printf("Received shutdown signal: %v", ctx.Err())
+	case err := <-errCh:
+		log.Printf("Server exited with error: %v", err)
+	}
+
+	shutdown()
 	wg.Wait()
 }
 

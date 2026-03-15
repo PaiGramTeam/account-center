@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -26,6 +28,11 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&model.UserCredential{},
 		&model.UserEmail{},
 		&model.UserSession{},
+		&model.UserTwoFactor{},
+		&model.Role{},
+		&model.Permission{},
+		&model.UserRole{},
+		&model.RolePermission{},
 	)
 
 	return db
@@ -34,6 +41,9 @@ func setupTestDB(t *testing.T) *gorm.DB {
 func TestHandler_CreateUser(t *testing.T) {
 	db := setupTestDB(t)
 	handler := NewHandler(db)
+
+	role := model.Role{Name: "user", DisplayName: "User", Description: "default user role"}
+	require.NoError(t, db.Create(&role).Error)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -52,9 +62,21 @@ func TestHandler_CreateUser(t *testing.T) {
 				DisplayName: "Test User",
 				Password:    "Password123",
 				Status:      "active",
+				Roles:       []string{"user"},
 			},
 			wantStatus: http.StatusCreated,
 			wantErr:    false,
+		},
+		{
+			name: "role not found",
+			body: CreateUserRequest{
+				Email:       "missing-role@example.com",
+				DisplayName: "Missing Role",
+				Password:    "Password123",
+				Roles:       []string{"missing"},
+			},
+			wantStatus: http.StatusBadRequest,
+			wantErr:    true,
 		},
 		{
 			name: "duplicate email",
@@ -106,6 +128,11 @@ func TestHandler_CreateUser(t *testing.T) {
 				err := json.Unmarshal(w.Body.Bytes(), &response)
 				require.NoError(t, err)
 				assert.NotNil(t, response["data"])
+
+				data := response["data"].(map[string]interface{})
+				if roles, ok := data["roles"].([]interface{}); ok {
+					assert.Equal(t, []interface{}{"user"}, roles)
+				}
 			}
 		})
 	}
@@ -136,6 +163,10 @@ func TestHandler_ListUsers(t *testing.T) {
 			IsPrimary: true,
 		}
 		require.NoError(t, db.Create(&email).Error)
+
+		role := model.Role{Name: fmt.Sprintf("role-%d", i), DisplayName: fmt.Sprintf("Role %d", i), Description: "test role"}
+		require.NoError(t, db.Create(&role).Error)
+		require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: role.ID, GrantedBy: user.ID}).Error)
 	}
 
 	gin.SetMode(gin.TestMode)
@@ -194,6 +225,8 @@ func TestHandler_ListUsers(t *testing.T) {
 			require.True(t, ok)
 			assert.Equal(t, tt.wantCount, len(items))
 			assert.Equal(t, float64(25), pagination["total"])
+			first := items[0].(map[string]interface{})
+			assert.NotEmpty(t, first["roles"])
 		})
 	}
 }
@@ -223,6 +256,12 @@ func TestHandler_UpdateUser(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&email).Error)
 
+	roleUser := model.Role{Name: "user", DisplayName: "User", Description: "basic role"}
+	roleAdmin := model.Role{Name: "admin", DisplayName: "Admin", Description: "admin role"}
+	require.NoError(t, db.Create(&roleUser).Error)
+	require.NoError(t, db.Create(&roleAdmin).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: roleUser.ID, GrantedBy: user.ID}).Error)
+
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handler.RegisterRoutes(router.Group("/users"))
@@ -246,6 +285,23 @@ func TestHandler_UpdateUser(t *testing.T) {
 			userID: user.ID,
 			body: UpdateUserRequest{
 				Status: "suspended",
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:   "update locale and roles",
+			userID: user.ID,
+			body: UpdateUserRequest{
+				Locale: "zh_CN",
+				Roles:  []string{"admin"},
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:   "clear roles",
+			userID: user.ID,
+			body: UpdateUserRequest{
+				Roles: []string{},
 			},
 			wantStatus: http.StatusOK,
 		},
@@ -281,6 +337,51 @@ func TestHandler_UpdateUser(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, w.Code)
 		})
 	}
+
+	var updatedProfile model.UserProfile
+	require.NoError(t, db.Where("user_id = ?", user.ID).First(&updatedProfile).Error)
+	assert.Equal(t, "zh_CN", updatedProfile.Locale)
+
+	var userRoleCount int64
+	require.NoError(t, db.Model(&model.UserRole{}).Where("user_id = ?", user.ID).Count(&userRoleCount).Error)
+	assert.Zero(t, userRoleCount)
+}
+
+func TestHandler_GetUserAggregatesRolesPermissionsAndSecurity(t *testing.T) {
+	db := setupTestDB(t)
+	handler := NewHandler(db)
+
+	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.UserProfile{UserID: user.ID, DisplayName: "Aggregate User", Locale: "en_US"}).Error)
+	require.NoError(t, db.Create(&model.UserEmail{UserID: user.ID, Email: "aggregate@example.com", IsPrimary: true}).Error)
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&model.UserSession{UserID: user.ID, AccessTokenHash: strings.Repeat("a", 64), RefreshTokenHash: strings.Repeat("b", 64), AccessExpiry: now.Add(time.Hour), RefreshExpiry: now.Add(24 * time.Hour)}).Error)
+	require.NoError(t, db.Create(&model.UserTwoFactor{UserID: user.ID, Secret: "secret", EnabledAt: now}).Error)
+
+	role := model.Role{Name: "auditor", DisplayName: "Auditor", Description: "auditor role"}
+	permission := model.Permission{Name: model.PermAuditRead, Resource: model.ResourceAudit, Action: model.ActionRead, Description: "read audit logs"}
+	require.NoError(t, db.Create(&role).Error)
+	require.NoError(t, db.Create(&permission).Error)
+	require.NoError(t, db.Create(&model.RolePermission{RoleID: role.ID, PermissionID: permission.ID}).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: role.ID, GrantedBy: user.ID}).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/users"))
+
+	req := httptest.NewRequest(http.MethodGet, "/users/"+strconv.FormatUint(user.ID, 10), nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp response.Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp.Data.(map[string]interface{})
+	assert.Equal(t, []interface{}{"auditor"}, data["roles"])
+	assert.Equal(t, []interface{}{model.PermAuditRead}, data["permissions"])
+	assert.Equal(t, true, data["two_factor_enabled"])
+	assert.Equal(t, float64(1), data["active_session_count"])
 }
 
 func TestHandler_DeleteUser(t *testing.T) {

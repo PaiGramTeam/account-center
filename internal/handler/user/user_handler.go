@@ -129,6 +129,17 @@ func (h *Handler) ListUsers(c *gin.Context) {
 		return
 	}
 
+	userIDs := make([]uint64, 0, len(users))
+	for _, user := range users {
+		userIDs = append(userIDs, user.ID)
+	}
+
+	rolesByUserID, err := h.loadRoleNamesByUserIDs(h.db, userIDs)
+	if err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load user roles", nil)
+		return
+	}
+
 	results := make([]UserListItem, 0, len(users))
 	for _, user := range users {
 		results = append(results, UserListItem{
@@ -137,6 +148,7 @@ func (h *Handler) ListUsers(c *gin.Context) {
 			PrimaryLoginType: user.PrimaryLoginType,
 			DisplayName:      user.Profile.DisplayName,
 			PrimaryEmail:     primaryEmail(user.Emails),
+			Roles:            rolesByUserID[user.ID],
 			LastLoginAt:      shared.NullTimePtr(user.LastLoginAt),
 			CreatedAt:        user.CreatedAt,
 		})
@@ -177,28 +189,10 @@ func (h *Handler) GetUser(c *gin.Context) {
 		return
 	}
 
-	emails := make([]UserEmailPayload, 0, len(user.Emails))
-	for _, email := range user.Emails {
-		emails = append(emails, UserEmailPayload{
-			Email:      email.Email,
-			IsPrimary:  email.IsPrimary,
-			VerifiedAt: shared.NullTimePtr(email.VerifiedAt),
-		})
-	}
-
-	userData := UserDetail{
-		ID:               user.ID,
-		Status:           user.Status,
-		PrimaryLoginType: user.PrimaryLoginType,
-		DisplayName:      user.Profile.DisplayName,
-		AvatarURL:        user.Profile.AvatarURL,
-		Bio:              user.Profile.Bio,
-		Locale:           user.Profile.Locale,
-		PrimaryEmail:     primaryEmail(user.Emails),
-		Emails:           emails,
-		LastLoginAt:      shared.NullTimePtr(user.LastLoginAt),
-		CreatedAt:        user.CreatedAt,
-		UpdatedAt:        user.UpdatedAt,
+	userData, err := h.buildUserDetail(h.db, user)
+	if err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to build user detail", nil)
+		return
 	}
 
 	response.Success(c, userData)
@@ -214,6 +208,123 @@ func primaryEmail(emails []model.UserEmail) string {
 		return emails[0].Email
 	}
 	return ""
+}
+
+func (h *Handler) loadRoleNames(db *gorm.DB, userID uint64) ([]string, error) {
+	var userRoles []model.UserRole
+	if err := db.Where("user_id = ?", userID).Preload("Role").Order("created_at ASC").Find(&userRoles).Error; err != nil {
+		return nil, err
+	}
+
+	roles := make([]string, 0, len(userRoles))
+	for _, userRole := range userRoles {
+		if userRole.Role.Name != "" {
+			roles = append(roles, userRole.Role.Name)
+		}
+	}
+
+	return roles, nil
+}
+
+func (h *Handler) loadRoleNamesByUserIDs(db *gorm.DB, userIDs []uint64) (map[uint64][]string, error) {
+	result := make(map[uint64][]string, len(userIDs))
+	if len(userIDs) == 0 {
+		return result, nil
+	}
+
+	var userRoles []model.UserRole
+	if err := db.Where("user_id IN ?", userIDs).Preload("Role").Order("created_at ASC").Find(&userRoles).Error; err != nil {
+		return nil, err
+	}
+
+	for _, userRole := range userRoles {
+		if userRole.Role.Name == "" {
+			continue
+		}
+		result[userRole.UserID] = append(result[userRole.UserID], userRole.Role.Name)
+	}
+
+	return result, nil
+}
+
+func (h *Handler) loadPermissionNames(db *gorm.DB, userID uint64) ([]string, error) {
+	var permissions []model.Permission
+	err := db.Distinct().
+		Model(&model.Permission{}).
+		Joins("JOIN role_permissions ON role_permissions.permission_id = permissions.id").
+		Joins("JOIN user_roles ON user_roles.role_id = role_permissions.role_id").
+		Where("user_roles.user_id = ?", userID).
+		Order("permissions.name ASC").
+		Find(&permissions).Error
+	if err != nil {
+		return nil, err
+	}
+
+	permissionNames := make([]string, 0, len(permissions))
+	for _, permission := range permissions {
+		permissionNames = append(permissionNames, permission.Name)
+	}
+
+	return permissionNames, nil
+}
+
+func (h *Handler) loadSecurityMetadata(db *gorm.DB, userID uint64) (bool, int64, error) {
+	var twoFactorCount int64
+	if err := db.Model(&model.UserTwoFactor{}).Where("user_id = ?", userID).Count(&twoFactorCount).Error; err != nil {
+		return false, 0, err
+	}
+
+	var activeSessionCount int64
+	if err := db.Model(&model.UserSession{}).Where("user_id = ? AND revoked_at IS NULL", userID).Count(&activeSessionCount).Error; err != nil {
+		return false, 0, err
+	}
+
+	return twoFactorCount > 0, activeSessionCount, nil
+}
+
+func (h *Handler) buildUserDetail(db *gorm.DB, user model.User) (UserDetail, error) {
+	emails := make([]UserEmailPayload, 0, len(user.Emails))
+	for _, email := range user.Emails {
+		emails = append(emails, UserEmailPayload{
+			Email:      email.Email,
+			IsPrimary:  email.IsPrimary,
+			VerifiedAt: shared.NullTimePtr(email.VerifiedAt),
+		})
+	}
+
+	roles, err := h.loadRoleNames(db, user.ID)
+	if err != nil {
+		return UserDetail{}, err
+	}
+
+	permissions, err := h.loadPermissionNames(db, user.ID)
+	if err != nil {
+		return UserDetail{}, err
+	}
+
+	twoFactorEnabled, activeSessionCount, err := h.loadSecurityMetadata(db, user.ID)
+	if err != nil {
+		return UserDetail{}, err
+	}
+
+	return UserDetail{
+		ID:                 user.ID,
+		Status:             user.Status,
+		PrimaryLoginType:   user.PrimaryLoginType,
+		DisplayName:        user.Profile.DisplayName,
+		AvatarURL:          user.Profile.AvatarURL,
+		Bio:                user.Profile.Bio,
+		Locale:             user.Profile.Locale,
+		PrimaryEmail:       primaryEmail(user.Emails),
+		Emails:             emails,
+		Roles:              roles,
+		Permissions:        permissions,
+		TwoFactorEnabled:   twoFactorEnabled,
+		ActiveSessionCount: activeSessionCount,
+		LastLoginAt:        shared.NullTimePtr(user.LastLoginAt),
+		CreatedAt:          user.CreatedAt,
+		UpdatedAt:          user.UpdatedAt,
+	}, nil
 }
 
 // SessionResponse represents a user session in management APIs.
@@ -518,6 +629,8 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		locale = "en_US"
 	}
 
+	actorID, _ := middleware.GetUserID(c)
+
 	// Create user in transaction
 	var user model.User
 	err = h.db.Transaction(func(tx *gorm.DB) error {
@@ -558,37 +671,44 @@ func (h *Handler) CreateUser(c *gin.Context) {
 			return err
 		}
 
+		if req.Roles != nil {
+			var roles []model.Role
+			if len(req.Roles) > 0 {
+				if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
+					return err
+				}
+				if len(roles) != len(req.Roles) {
+					return errors.New("one or more roles not found")
+				}
+
+				for _, role := range roles {
+					userRole := model.UserRole{UserID: user.ID, RoleID: role.ID, GrantedBy: actorID}
+					if err := tx.Create(&userRole).Error; err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 		// Load created user with associations
 		return tx.Preload("Profile").Preload("Emails").First(&user, user.ID).Error
 	})
 
 	if err != nil {
+		if err.Error() == "one or more roles not found" {
+			response.BadRequestWithCode(c, response.ErrCodeRoleNotFound, "one or more roles not found", map[string]string{
+				"roles": strings.Join(req.Roles, ", "),
+			})
+			return
+		}
 		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to create user", nil)
 		return
 	}
 
-	emails := make([]UserEmailPayload, 0, len(user.Emails))
-	for _, email := range user.Emails {
-		emails = append(emails, UserEmailPayload{
-			Email:      email.Email,
-			IsPrimary:  email.IsPrimary,
-			VerifiedAt: shared.NullTimePtr(email.VerifiedAt),
-		})
-	}
-
-	userData := UserDetail{
-		ID:               user.ID,
-		Status:           user.Status,
-		PrimaryLoginType: user.PrimaryLoginType,
-		DisplayName:      user.Profile.DisplayName,
-		AvatarURL:        user.Profile.AvatarURL,
-		Bio:              user.Profile.Bio,
-		Locale:           user.Profile.Locale,
-		PrimaryEmail:     primaryEmail(user.Emails),
-		Emails:           emails,
-		LastLoginAt:      shared.NullTimePtr(user.LastLoginAt),
-		CreatedAt:        user.CreatedAt,
-		UpdatedAt:        user.UpdatedAt,
+	userData, err := h.buildUserDetail(h.db, user)
+	if err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to build user detail", nil)
+		return
 	}
 
 	response.Created(c, userData)
@@ -659,15 +779,25 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 			}
 		}
 
-		// Update roles if provided
-		if len(req.Roles) > 0 {
-			// Verify all roles exist
-			var roles []model.Role
-			if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
+		if req.Locale != "" {
+			if err := tx.Model(&model.UserProfile{}).
+				Where("user_id = ?", user.ID).
+				Update("locale", strings.TrimSpace(req.Locale)).Error; err != nil {
 				return err
 			}
-			if len(roles) != len(req.Roles) {
-				return errors.New("one or more roles not found")
+		}
+
+		// Update roles if provided
+		if req.Roles != nil {
+			// Verify all roles exist
+			var roles []model.Role
+			if len(req.Roles) > 0 {
+				if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
+					return err
+				}
+				if len(roles) != len(req.Roles) {
+					return errors.New("one or more roles not found")
+				}
 			}
 
 			// Delete existing role assignments
@@ -676,11 +806,12 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 			}
 
 			// Create new role assignments
+			actorID, _ := middleware.GetUserID(c)
 			for _, role := range roles {
 				userRole := model.UserRole{
-					UserID: user.ID,
-					RoleID: role.ID,
-					// GrantedBy should be set from the current user context
+					UserID:    user.ID,
+					RoleID:    role.ID,
+					GrantedBy: actorID,
 				}
 				if err := tx.Create(&userRole).Error; err != nil {
 					return err
@@ -710,28 +841,10 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	emails := make([]UserEmailPayload, 0, len(user.Emails))
-	for _, email := range user.Emails {
-		emails = append(emails, UserEmailPayload{
-			Email:      email.Email,
-			IsPrimary:  email.IsPrimary,
-			VerifiedAt: shared.NullTimePtr(email.VerifiedAt),
-		})
-	}
-
-	userData := UserDetail{
-		ID:               user.ID,
-		Status:           user.Status,
-		PrimaryLoginType: user.PrimaryLoginType,
-		DisplayName:      user.Profile.DisplayName,
-		AvatarURL:        user.Profile.AvatarURL,
-		Bio:              user.Profile.Bio,
-		Locale:           user.Profile.Locale,
-		PrimaryEmail:     primaryEmail(user.Emails),
-		Emails:           emails,
-		LastLoginAt:      shared.NullTimePtr(user.LastLoginAt),
-		CreatedAt:        user.CreatedAt,
-		UpdatedAt:        user.UpdatedAt,
+	userData, err := h.buildUserDetail(h.db, user)
+	if err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to build user detail", nil)
+		return
 	}
 
 	response.Success(c, userData)

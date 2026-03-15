@@ -48,6 +48,7 @@ type UserListItem struct {
 	PrimaryLoginType model.LoginType  `json:"primary_login_type"`
 	DisplayName      string           `json:"display_name"`
 	PrimaryEmail     string           `json:"primary_email"`
+	Roles            []string         `json:"roles,omitempty"`
 	LastLoginAt      *time.Time       `json:"last_login_at,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
 }
@@ -112,18 +113,22 @@ type swaggerUserListResponse struct {
 
 // swagger:model userDetail
 type UserDetail struct {
-	ID               uint64             `json:"id"`
-	Status           model.UserStatus   `json:"status"`
-	PrimaryLoginType model.LoginType    `json:"primary_login_type"`
-	DisplayName      string             `json:"display_name"`
-	AvatarURL        string             `json:"avatar_url,omitempty"`
-	Bio              string             `json:"bio,omitempty"`
-	Locale           string             `json:"locale,omitempty"`
-	PrimaryEmail     string             `json:"primary_email"`
-	Emails           []UserEmailPayload `json:"emails"`
-	LastLoginAt      *time.Time         `json:"last_login_at,omitempty"`
-	CreatedAt        time.Time          `json:"created_at"`
-	UpdatedAt        time.Time          `json:"updated_at"`
+	ID                 uint64             `json:"id"`
+	Status             model.UserStatus   `json:"status"`
+	PrimaryLoginType   model.LoginType    `json:"primary_login_type"`
+	DisplayName        string             `json:"display_name"`
+	AvatarURL          string             `json:"avatar_url,omitempty"`
+	Bio                string             `json:"bio,omitempty"`
+	Locale             string             `json:"locale,omitempty"`
+	PrimaryEmail       string             `json:"primary_email"`
+	Emails             []UserEmailPayload `json:"emails"`
+	Roles              []string           `json:"roles,omitempty"`
+	Permissions        []string           `json:"permissions,omitempty"`
+	TwoFactorEnabled   bool               `json:"two_factor_enabled"`
+	ActiveSessionCount int64              `json:"active_session_count"`
+	LastLoginAt        *time.Time         `json:"last_login_at,omitempty"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
 }
 
 // swagger:model userDetailResponse
@@ -212,6 +217,9 @@ type UpdateUserRequest struct {
 	// User roles
 	// example: ["user", "moderator"]
 	Roles []string `json:"roles,omitempty"`
+	// User locale
+	// example: en_US
+	Locale string `json:"locale,omitempty"`
 }
 
 // swagger:model updateUserResponse

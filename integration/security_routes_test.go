@@ -250,6 +250,123 @@ func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
 	assert.Equal(t, "revoked by admin", revokedSession.RevokedReason)
 }
 
+func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "self-service")
+	headers := authHeaders(accessToken)
+
+	loginLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/login-logs", userID), nil, headers)
+	require.Equal(t, http.StatusOK, loginLogsRes.Code, loginLogsRes.Body.String())
+
+	loginLogsData := decodeResponseData(t, loginLogsRes)
+	logItems, ok := loginLogsData["data"].([]any)
+	require.True(t, ok, "expected login log list, got %T", loginLogsData["data"])
+	require.NotEmpty(t, logItems)
+
+	firstLog, ok := logItems[0].(map[string]any)
+	require.True(t, ok, "expected first login log entry map, got %T", logItems[0])
+	assert.Equal(t, float64(userID), firstLog["user_id"])
+	assert.Equal(t, "success", firstLog["status"])
+	assert.NotEmpty(t, firstLog["device"])
+
+	otherUserID, _, _, _, _ := registerVerifyAndLogin(t, stack, "self-service-target")
+	forbiddenLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/login-logs", otherUserID), nil, headers)
+	require.Equal(t, http.StatusForbidden, forbiddenLogsRes.Code, forbiddenLogsRes.Body.String())
+	assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, forbiddenLogsRes))
+
+	currentSession := requireSessionForRefreshToken(t, stack.DB, refreshToken)
+	revokeSelfRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", userID, currentSession.ID), nil, headers)
+	require.Equal(t, http.StatusOK, revokeSelfRes.Code, revokeSelfRes.Body.String())
+
+	var revokedSession model.UserSession
+	require.NoError(t, stack.DB.First(&revokedSession, currentSession.ID).Error)
+	assert.True(t, revokedSession.RevokedAt.Valid)
+	assert.Equal(t, "revoked by user", revokedSession.RevokedReason)
+
+	revokeAgainRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", userID, currentSession.ID), nil, headers)
+	require.Equal(t, http.StatusOK, revokeAgainRes.Code, revokeAgainRes.Body.String())
+	revokeAgainData := decodeResponseData(t, revokeAgainRes)
+	assert.Equal(t, "session already revoked", revokeAgainData["message"])
+}
+
+func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "mutator")
+	headers := authHeaders(actorAccessToken)
+
+	memberRole := model.Role{
+		Name:        fmt.Sprintf("member-%d", time.Now().UnixNano()),
+		DisplayName: "Member",
+		Description: "member role",
+	}
+	adminRole := model.Role{
+		Name:        fmt.Sprintf("manager-%d", time.Now().UnixNano()),
+		DisplayName: "Manager",
+		Description: "manager role",
+	}
+	require.NoError(t, stack.DB.Create(&memberRole).Error)
+	require.NoError(t, stack.DB.Create(&adminRole).Error)
+
+	createBody := map[string]any{
+		"email":        fmt.Sprintf("managed-%d@example.com", time.Now().UnixNano()),
+		"display_name": "Managed User",
+		"password":     "ManagedPass123!",
+		"status":       "active",
+		"locale":       "zh_CN",
+		"roles":        []string{memberRole.Name},
+	}
+
+	createDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBody, headers)
+	require.Equal(t, http.StatusForbidden, createDenied.Code, createDenied.Body.String())
+
+	grantPermissionsToUser(t, stack, actorID, model.PermUserWrite, model.PermRoleRead, model.PermPermissionRead, model.PermUserRead)
+
+	createAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBody, headers)
+	require.Equal(t, http.StatusCreated, createAllowed.Code, createAllowed.Body.String())
+	createdUserData := decodeResponseData(t, createAllowed)
+	createdUserID := uint64(createdUserData["id"].(float64))
+	assert.Equal(t, "zh_CN", createdUserData["locale"])
+	roles, ok := createdUserData["roles"].([]any)
+	require.True(t, ok, "expected created roles list, got %T", createdUserData["roles"])
+	require.Len(t, roles, 1)
+	assert.Equal(t, memberRole.Name, roles[0])
+
+	getRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/roles", createdUserID), nil, headers)
+	require.Equal(t, http.StatusOK, getRolesRes.Code, getRolesRes.Body.String())
+	getRolesData := decodeResponseData(t, getRolesRes)
+	roleItems, ok := getRolesData["data"].([]any)
+	require.True(t, ok, "expected paginated role payload, got %T", getRolesData["data"])
+	require.Len(t, roleItems, 1)
+
+	updateDeniedHeaders := authHeaders(actorAccessToken)
+	updateDenied := performJSONRequest(t, stack.Router, http.MethodPatch, fmt.Sprintf("/api/v1/users/%d", createdUserID), map[string]any{
+		"display_name": "Managed User Updated",
+		"locale":       "en_US",
+		"roles":        []string{adminRole.Name},
+	}, updateDeniedHeaders)
+	require.Equal(t, http.StatusOK, updateDenied.Code, updateDenied.Body.String())
+
+	updatedData := decodeResponseData(t, updateDenied)
+	updatedRoles, ok := updatedData["roles"].([]any)
+	require.True(t, ok, "expected updated roles list, got %T", updatedData["roles"])
+	require.Len(t, updatedRoles, 1)
+	assert.Equal(t, adminRole.Name, updatedRoles[0])
+	assert.Equal(t, "en_US", updatedData["locale"])
+
+	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d", createdUserID), nil, headers)
+	require.Equal(t, http.StatusForbidden, deleteDenied.Code, deleteDenied.Body.String())
+
+	grantPermissionsToUser(t, stack, actorID, model.PermUserDelete)
+	deleteAllowed := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d", createdUserID), nil, headers)
+	require.Equal(t, http.StatusOK, deleteAllowed.Code, deleteAllowed.Body.String())
+
+	var deletedUser model.User
+	require.NoError(t, stack.DB.Unscoped().First(&deletedUser, createdUserID).Error)
+	assert.True(t, deletedUser.DeletedAt.Valid)
+}
+
 func TestTwoFactorLifecycle(t *testing.T) {
 	stack := newIntegrationStack(t)
 

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"paigram/internal/model"
+	"paigram/internal/response"
 )
 
 func TestAuthPasswordResetRoutesReachableWhenRateLimitEnabled(t *testing.T) {
@@ -144,6 +145,109 @@ func TestAdminRoutesRequireAdminRole(t *testing.T) {
 		"password": "ResetByAdmin123!",
 	}, map[string]string{"User-Agent": "IntegrationSecurityRoutes/1.0"})
 	require.Equal(t, http.StatusOK, loginRes.Code, loginRes.Body.String())
+}
+
+func TestManagementCatalogRoutesRequirePermissions(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "catalog-actor")
+	headers := authHeaders(actorAccessToken)
+
+	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
+		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
+		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
+	}
+
+	grantPermissionsToUser(t, stack, actorID, model.PermRoleRead, model.PermPermissionRead)
+
+	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
+		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
+		require.Equal(t, http.StatusOK, res.Code, "%s => %s", path, res.Body.String())
+	}
+
+	createRoleDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/roles", map[string]any{
+		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
+		"display_name": "Operations",
+		"description":  "ops role",
+	}, headers)
+	require.Equal(t, http.StatusForbidden, createRoleDenied.Code, createRoleDenied.Body.String())
+
+	createPermissionDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/permissions", map[string]any{
+		"name":        fmt.Sprintf("report:%d", time.Now().UnixNano()),
+		"resource":    "report",
+		"action":      "read",
+		"description": "report read",
+	}, headers)
+	require.Equal(t, http.StatusForbidden, createPermissionDenied.Code, createPermissionDenied.Body.String())
+
+	grantPermissionsToUser(t, stack, actorID, model.PermRoleWrite, model.PermPermissionWrite)
+
+	createRoleAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/roles", map[string]any{
+		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
+		"display_name": "Operations",
+		"description":  "ops role",
+	}, headers)
+	require.Equal(t, http.StatusCreated, createRoleAllowed.Code, createRoleAllowed.Body.String())
+
+	createPermissionAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/permissions", map[string]any{
+		"name":        fmt.Sprintf("report:read:%d", time.Now().UnixNano()),
+		"resource":    "report",
+		"action":      "read",
+		"description": "report read",
+	}, headers)
+	require.Equal(t, http.StatusCreated, createPermissionAllowed.Code, createPermissionAllowed.Body.String())
+}
+
+func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	viewerID, viewerAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "session-viewer")
+	targetID, _, _, _, _ := registerVerifyAndLogin(t, stack, "session-target")
+
+	var targetSession model.UserSession
+	require.NoError(t, stack.DB.Where("user_id = ?", targetID).Order("created_at DESC").First(&targetSession).Error)
+
+	headers := authHeaders(viewerAccessToken)
+
+	for _, path := range []string{
+		fmt.Sprintf("/api/v1/users/%d/sessions", targetID),
+		fmt.Sprintf("/api/v1/users/%d/security-summary", targetID),
+	} {
+		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
+		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
+	}
+
+	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", targetID, targetSession.ID), nil, headers)
+	require.Equal(t, http.StatusForbidden, deleteDenied.Code, deleteDenied.Body.String())
+
+	grantPermissionsToUser(t, stack, viewerID, model.PermUserRead, model.PermUserManage)
+
+	sessionsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/sessions", targetID), nil, headers)
+	require.Equal(t, http.StatusOK, sessionsRes.Code, sessionsRes.Body.String())
+
+	var sessionsPayload response.Response
+	require.NoError(t, json.Unmarshal(sessionsRes.Body.Bytes(), &sessionsPayload))
+	sessionsData, ok := sessionsPayload.Data.(map[string]any)
+	require.True(t, ok, "expected sessions response data map, got %T", sessionsPayload.Data)
+	items, ok := sessionsData["data"].([]any)
+	require.True(t, ok, "expected sessions data slice, got %T", sessionsData["data"])
+	require.NotEmpty(t, items)
+
+	summaryRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/security-summary", targetID), nil, headers)
+	require.Equal(t, http.StatusOK, summaryRes.Code, summaryRes.Body.String())
+	summaryData := decodeResponseData(t, summaryRes)
+	assert.Equal(t, float64(targetID), summaryData["user_id"])
+	assert.Contains(t, summaryData, "active_session_count")
+	assert.Contains(t, summaryData, "device_count")
+	assert.Contains(t, summaryData, "failed_logins_last_30_days")
+
+	revokeRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", targetID, targetSession.ID), nil, headers)
+	require.Equal(t, http.StatusOK, revokeRes.Code, revokeRes.Body.String())
+
+	var revokedSession model.UserSession
+	require.NoError(t, stack.DB.First(&revokedSession, targetSession.ID).Error)
+	assert.True(t, revokedSession.RevokedAt.Valid)
+	assert.Equal(t, "revoked by admin", revokedSession.RevokedReason)
 }
 
 func TestTwoFactorLifecycle(t *testing.T) {

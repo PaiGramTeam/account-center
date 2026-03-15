@@ -269,55 +269,55 @@ func TestHandler_UpdateUser(t *testing.T) {
 	tests := []struct {
 		name       string
 		userID     uint64
-		body       UpdateUserRequest
+		body       interface{}
 		wantStatus int
 	}{
 		{
 			name:   "update display name",
 			userID: user.ID,
-			body: UpdateUserRequest{
-				DisplayName: "Updated Name",
+			body: map[string]interface{}{
+				"display_name": "Updated Name",
 			},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:   "update status",
 			userID: user.ID,
-			body: UpdateUserRequest{
-				Status: "suspended",
+			body: map[string]interface{}{
+				"status": "suspended",
 			},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:   "update locale and roles",
 			userID: user.ID,
-			body: UpdateUserRequest{
-				Locale: "zh_CN",
-				Roles:  []string{"admin"},
+			body: map[string]interface{}{
+				"locale": "zh_CN",
+				"roles":  []string{"admin"},
 			},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:   "clear roles",
 			userID: user.ID,
-			body: UpdateUserRequest{
-				Roles: []string{},
+			body: map[string]interface{}{
+				"roles": []string{},
 			},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:   "invalid user id",
 			userID: 99999,
-			body: UpdateUserRequest{
-				DisplayName: "Name",
+			body: map[string]interface{}{
+				"display_name": "Name",
 			},
 			wantStatus: http.StatusNotFound,
 		},
 		{
 			name:   "invalid status",
 			userID: user.ID,
-			body: UpdateUserRequest{
-				Status: "invalid_status",
+			body: map[string]interface{}{
+				"status": "invalid_status",
 			},
 			wantStatus: http.StatusBadRequest,
 		},

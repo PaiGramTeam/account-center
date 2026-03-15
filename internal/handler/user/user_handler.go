@@ -1,15 +1,21 @@
 package user
 
 import (
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"paigram/internal/handler/shared"
+	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
 )
@@ -208,6 +214,222 @@ func primaryEmail(emails []model.UserEmail) string {
 		return emails[0].Email
 	}
 	return ""
+}
+
+// SessionResponse represents a user session in management APIs.
+type SessionResponse struct {
+	ID            uint64     `json:"id"`
+	DeviceID      string     `json:"device_id,omitempty"`
+	DeviceName    string     `json:"device_name,omitempty"`
+	DeviceType    string     `json:"device_type,omitempty"`
+	IP            string     `json:"ip,omitempty"`
+	Location      string     `json:"location,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	LastActiveAt  *time.Time `json:"last_active_at,omitempty"`
+	AccessExpiry  time.Time  `json:"access_expiry"`
+	RefreshExpiry time.Time  `json:"refresh_expiry"`
+	IsCurrent     bool       `json:"is_current"`
+}
+
+// SecuritySummary captures a user's security posture for management UIs.
+type SecuritySummary struct {
+	UserID                 uint64     `json:"user_id"`
+	TwoFactorEnabled       bool       `json:"two_factor_enabled"`
+	ActiveSessionCount     int64      `json:"active_session_count"`
+	DeviceCount            int64      `json:"device_count"`
+	FailedLoginsLast30Days int64      `json:"failed_logins_last_30_days"`
+	LastLoginAt            *time.Time `json:"last_login_at,omitempty"`
+	LastLoginIP            string     `json:"last_login_ip,omitempty"`
+	LastLoginDevice        string     `json:"last_login_device,omitempty"`
+	LastLoginLocation      string     `json:"last_login_location,omitempty"`
+}
+
+func hashBearerToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", hash[:])
+}
+
+func buildDeviceID(userAgent, clientIP string) string {
+	if userAgent == "" && clientIP == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(userAgent + clientIP))
+	return base64.URLEncoding.EncodeToString(hash[:])[:22]
+}
+
+// GetUserSessions returns a user's active sessions with pagination.
+func (h *Handler) GetUserSessions(c *gin.Context) {
+	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidUserID, "invalid user id", nil)
+		return
+	}
+
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	var total int64
+	query := h.db.Model(&model.UserSession{}).Where("user_id = ? AND revoked_at IS NULL", userID)
+	if err := query.Count(&total).Error; err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to count user sessions", nil)
+		return
+	}
+
+	var sessions []model.UserSession
+	offset := (page - 1) * pageSize
+	if err := query.Order("created_at DESC").Limit(pageSize).Offset(offset).Find(&sessions).Error; err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to fetch user sessions", nil)
+		return
+	}
+
+	var devices []model.UserDevice
+	deviceMap := make(map[string]model.UserDevice, len(devices))
+	if err := h.db.Where("user_id = ?", userID).Find(&devices).Error; err == nil {
+		for _, device := range devices {
+			deviceMap[device.DeviceID] = device
+		}
+	}
+
+	currentUserID, _ := middleware.GetUserID(c)
+	authHeader := c.GetHeader("Authorization")
+	currentTokenHash := ""
+	if len(authHeader) > 7 && strings.HasPrefix(authHeader, "Bearer ") && currentUserID == userID {
+		currentTokenHash = hashBearerToken(authHeader[7:])
+	}
+
+	result := make([]SessionResponse, 0, len(sessions))
+	for _, session := range sessions {
+		item := SessionResponse{
+			ID:            session.ID,
+			IP:            session.ClientIP,
+			CreatedAt:     session.CreatedAt,
+			AccessExpiry:  session.AccessExpiry,
+			RefreshExpiry: session.RefreshExpiry,
+			IsCurrent:     session.AccessTokenHash == currentTokenHash && currentTokenHash != "",
+		}
+
+		deviceID := buildDeviceID(session.UserAgent, session.ClientIP)
+		if device, ok := deviceMap[deviceID]; ok {
+			item.DeviceID = device.DeviceID
+			item.DeviceName = device.DeviceName
+			item.DeviceType = device.DeviceType
+			item.Location = device.Location
+			lastActive := device.LastActiveAt
+			item.LastActiveAt = &lastActive
+		}
+
+		result = append(result, item)
+	}
+
+	response.SuccessWithPagination(c, result, total, page, pageSize)
+}
+
+// RevokeUserSession revokes a specific user session.
+func (h *Handler) RevokeUserSession(c *gin.Context) {
+	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidUserID, "invalid user id", nil)
+		return
+	}
+
+	sessionID, err := strconv.ParseUint(strings.TrimSpace(c.Param("sessionId")), 10, 64)
+	if err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid session id", nil)
+		return
+	}
+
+	var session model.UserSession
+	if err := h.db.Where("id = ? AND user_id = ?", sessionID, userID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.NotFoundWithCode(c, response.ErrCodeUserNotFound, "session not found", nil)
+			return
+		}
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load session", nil)
+		return
+	}
+
+	if session.RevokedAt.Valid {
+		response.Success(c, gin.H{"message": "session already revoked"})
+		return
+	}
+
+	actorID, _ := middleware.GetUserID(c)
+	reason := "revoked by admin"
+	if actorID == userID {
+		reason = "revoked by user"
+	}
+
+	now := time.Now().UTC()
+	updates := map[string]any{
+		"revoked_at":     sql.NullTime{Time: now, Valid: true},
+		"revoked_reason": reason,
+	}
+	if err := h.db.Model(&session).Updates(updates).Error; err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to revoke session", nil)
+		return
+	}
+
+	response.Success(c, gin.H{"message": "session revoked successfully"})
+}
+
+// GetSecuritySummary returns security-related summary data for a user.
+func (h *Handler) GetSecuritySummary(c *gin.Context) {
+	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidUserID, "invalid user id", nil)
+		return
+	}
+
+	summary := SecuritySummary{UserID: userID}
+
+	var twoFactor model.UserTwoFactor
+	err = h.db.Where("user_id = ?", userID).First(&twoFactor).Error
+	if err == nil {
+		summary.TwoFactorEnabled = true
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load 2fa status", nil)
+		return
+	}
+
+	if err := h.db.Model(&model.UserSession{}).Where("user_id = ? AND revoked_at IS NULL", userID).Count(&summary.ActiveSessionCount).Error; err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to count active sessions", nil)
+		return
+	}
+
+	if err := h.db.Model(&model.UserDevice{}).Where("user_id = ?", userID).Count(&summary.DeviceCount).Error; err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to count user devices", nil)
+		return
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -30)
+	if err := h.db.Model(&model.LoginLog{}).Where("user_id = ? AND status = ? AND created_at >= ?", userID, "failed", since).Count(&summary.FailedLoginsLast30Days).Error; err != nil {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to count failed logins", nil)
+		return
+	}
+
+	var lastLogin model.LoginLog
+	err = h.db.Where("user_id = ? AND status = ?", userID, "success").Order("created_at DESC").First(&lastLogin).Error
+	if err == nil {
+		summary.LastLoginAt = &lastLogin.CreatedAt
+		summary.LastLoginIP = lastLogin.IP
+		summary.LastLoginDevice = lastLogin.Device
+		summary.LastLoginLocation = lastLogin.Location
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load latest login", nil)
+		return
+	}
+
+	response.Success(c, summary)
 }
 
 // swagger:route POST /api/v1/users users createUser

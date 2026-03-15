@@ -12,7 +12,9 @@ import (
 	"paigram/internal/email"
 	"paigram/internal/geolocation"
 	authhandler "paigram/internal/handler/auth"
+	permissionhandler "paigram/internal/handler/permission"
 	profilehandler "paigram/internal/handler/profile"
+	rolehandler "paigram/internal/handler/role"
 	securityhandler "paigram/internal/handler/security"
 	sessionhandler "paigram/internal/handler/session"
 	userhandler "paigram/internal/handler/user"
@@ -214,6 +216,15 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 
 		// Get user permissions - self or requires permission:read permission
 		users.GET("/:id/permissions", middleware.SelfOrPermission(permMgr, model.PermPermissionRead), userHandler.GetUserPermissions)
+
+		// Get user sessions - self or requires user:manage permission
+		users.GET("/:id/sessions", middleware.SelfOrPermission(permMgr, model.PermUserManage), userHandler.GetUserSessions)
+
+		// Revoke a user session - self or requires user:manage permission
+		users.DELETE("/:id/sessions/:sessionId", middleware.SelfOrPermission(permMgr, model.PermUserManage), userHandler.RevokeUserSession)
+
+		// Get user security summary - self or requires user:read permission
+		users.GET("/:id/security-summary", middleware.SelfOrPermission(permMgr, model.PermUserRead), userHandler.GetSecuritySummary)
 	}
 
 	// Login log routes (under /users path)
@@ -267,6 +278,29 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	sessions := protected.Group("/sessions")
 	{
 		sessionHandler.RegisterRoutes(sessions)
+	}
+
+	// Role management routes
+	roleHandler := rolehandler.NewHandler(db, permMgr)
+	roles := protected.Group("/roles")
+	{
+		roles.GET("", middleware.PermissionMiddleware(permMgr, model.PermRoleRead), roleHandler.ListRoles)
+		roles.GET("/:id", middleware.PermissionMiddleware(permMgr, model.PermRoleRead), roleHandler.GetRole)
+		roles.POST("", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.CreateRole)
+		roles.PUT("/:id", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.UpdateRole)
+		roles.DELETE("/:id", middleware.PermissionMiddleware(permMgr, model.PermRoleDelete), roleHandler.DeleteRole)
+		roles.POST("/:id/permissions", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.AssignPermissionToRole)
+		roles.DELETE("/:id/permissions/:permissionId", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.RemovePermissionFromRole)
+	}
+
+	// Permission management routes
+	permissionHandler := permissionhandler.NewHandler(db, permMgr)
+	permissions := protected.Group("/permissions")
+	{
+		permissions.GET("", middleware.PermissionMiddleware(permMgr, model.PermPermissionRead), permissionHandler.ListPermissions)
+		permissions.GET("/:id", middleware.PermissionMiddleware(permMgr, model.PermPermissionRead), permissionHandler.GetPermission)
+		permissions.POST("", middleware.PermissionMiddleware(permMgr, model.PermPermissionWrite), permissionHandler.CreatePermission)
+		permissions.DELETE("/:id", middleware.PermissionMiddleware(permMgr, model.PermPermissionDelete), permissionHandler.DeletePermission)
 	}
 
 	// swagger:route GET / general getRoot

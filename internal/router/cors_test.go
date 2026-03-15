@@ -73,7 +73,7 @@ func TestNewCORSMiddlewareRejectsUnknownOrigin(t *testing.T) {
 
 	engine.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusForbidden, w.Code)
 	assert.Empty(t, w.Header().Get("Access-Control-Allow-Origin"))
 	assert.Empty(t, w.Header().Get("Access-Control-Allow-Credentials"))
 }

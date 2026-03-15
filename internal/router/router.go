@@ -39,6 +39,14 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	engine := gin.New()
 	engine.Use(gin.Recovery(), gin.Logger())
 
+	corsMiddleware, err := newCORSMiddleware(appCfg.CORS)
+	if err != nil {
+		log.Printf("[SECURITY WARNING] Failed to configure CORS middleware: %v", err)
+	} else if corsMiddleware != nil {
+		engine.Use(corsMiddleware)
+		log.Printf("[SECURITY] CORS enabled for %v", appCfg.CORS.AllowOrigins)
+	}
+
 	// SECURITY: Configure trusted proxies to prevent IP spoofing
 	// This is critical for rate limiting based on IP address
 	if len(appCfg.TrustedProxies) > 0 {

@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"log"
-	"time"
 
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
@@ -115,24 +114,17 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 	}
 	log.Printf("[Asynq] Registered periodic task: clean_expired_bot_tokens (entry_id=%s)", entryID3)
 
-	// Start server in background
-	go func() {
-		log.Println("[Asynq] Worker server starting...")
-		if err := srv.Run(mux); err != nil {
-			log.Fatalf("[Asynq] Server error: %v", err)
-		}
-	}()
+	log.Println("[Asynq] Worker server starting...")
+	if err := srv.Start(mux); err != nil {
+		return nil, nil, err
+	}
 
-	// Start scheduler in background
-	go func() {
-		log.Println("[Asynq] Scheduler starting...")
-		if err := scheduler.Run(); err != nil {
-			log.Fatalf("[Asynq] Scheduler error: %v", err)
-		}
-	}()
+	log.Println("[Asynq] Scheduler starting...")
+	if err := scheduler.Start(); err != nil {
+		srv.Shutdown()
+		return nil, nil, err
+	}
 
-	// Give it a moment to start
-	time.Sleep(100 * time.Millisecond)
 	log.Println("[Asynq] Worker and scheduler started successfully")
 
 	return srv, scheduler, nil

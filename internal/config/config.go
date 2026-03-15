@@ -22,13 +22,27 @@ type Config struct {
 
 // AppConfig holds HTTP server configuration.
 type AppConfig struct {
-	Name           string   `mapstructure:"name"`
-	Host           string   `mapstructure:"host"`
-	Port           int      `mapstructure:"port"`
-	Mode           string   `mapstructure:"mode"`
-	TrustedProxies []string `mapstructure:"trusted_proxies"` // Trusted proxy CIDR ranges for X-Forwarded-For
-	RealIPHeader   string   `mapstructure:"real_ip_header"`  // Custom header for real IP (e.g., "CF-Connecting-IP")
-	IPv6Subnet     int      `mapstructure:"ipv6_subnet"`     // IPv6 subnet prefix length for rate limiting (default: 64)
+	Name           string     `mapstructure:"name"`
+	Host           string     `mapstructure:"host"`
+	Port           int        `mapstructure:"port"`
+	Mode           string     `mapstructure:"mode"`
+	TrustedProxies []string   `mapstructure:"trusted_proxies"` // Trusted proxy CIDR ranges for X-Forwarded-For
+	RealIPHeader   string     `mapstructure:"real_ip_header"`  // Custom header for real IP (e.g., "CF-Connecting-IP")
+	IPv6Subnet     int        `mapstructure:"ipv6_subnet"`     // IPv6 subnet prefix length for rate limiting (default: 64)
+	CORS           CORSConfig `mapstructure:"cors"`
+}
+
+// CORSConfig holds HTTP CORS configuration.
+type CORSConfig struct {
+	Enabled             bool     `mapstructure:"enabled"`
+	AllowOrigins        []string `mapstructure:"allow_origins"`
+	AllowMethods        []string `mapstructure:"allow_methods"`
+	AllowHeaders        []string `mapstructure:"allow_headers"`
+	ExposeHeaders       []string `mapstructure:"expose_headers"`
+	AllowCredentials    bool     `mapstructure:"allow_credentials"`
+	AllowWildcard       bool     `mapstructure:"allow_wildcard"`
+	AllowPrivateNetwork bool     `mapstructure:"allow_private_network"`
+	MaxAgeSeconds       int      `mapstructure:"max_age"`
 }
 
 // DatabaseConfig holds MySQL connection configuration.
@@ -253,6 +267,14 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("app.real_ip_header", "") // Empty means use X-Forwarded-For via TrustedProxies
 	v.SetDefault("app.ipv6_subnet", 64)    // /64 subnet (typical home/business allocation)
+	v.SetDefault("app.cors.enabled", false)
+	v.SetDefault("app.cors.allow_methods", []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+	v.SetDefault("app.cors.allow_headers", []string{"Origin", "Content-Type", "Accept", "Authorization"})
+	v.SetDefault("app.cors.expose_headers", []string{})
+	v.SetDefault("app.cors.allow_credentials", false)
+	v.SetDefault("app.cors.allow_wildcard", false)
+	v.SetDefault("app.cors.allow_private_network", false)
+	v.SetDefault("app.cors.max_age", 43200)
 
 	v.SetDefault("database.config", "charset=utf8mb4&parseTime=True&loc=Asia%2FShanghai")
 	v.SetDefault("database.migrations_dir", "initialize/migrate/sql")

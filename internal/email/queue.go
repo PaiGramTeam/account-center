@@ -13,6 +13,8 @@ import (
 	"paigram/internal/logging"
 )
 
+const queueCoalesceDelay = 10 * time.Millisecond
+
 // priorityMessage wraps a message with priority and timestamp
 type priorityMessage struct {
 	msg       *Message
@@ -168,17 +170,45 @@ func (q *MemoryQueue) process(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-q.notifyCh:
-			q.processNext(ctx)
+			q.coalesceNotifications(ctx)
+			q.drainQueue(ctx)
+		}
+	}
+}
+
+func (q *MemoryQueue) coalesceNotifications(ctx context.Context) {
+	timer := time.NewTimer(queueCoalesceDelay)
+	defer timer.Stop()
+
+	select {
+	case <-q.stopCh:
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+
+	for {
+		select {
+		case <-q.notifyCh:
+		default:
+			return
+		}
+	}
+}
+
+func (q *MemoryQueue) drainQueue(ctx context.Context) {
+	for {
+		if !q.processNext(ctx) {
+			return
 		}
 	}
 }
 
 // processNext processes the next message in the queue
-func (q *MemoryQueue) processNext(ctx context.Context) {
+func (q *MemoryQueue) processNext(ctx context.Context) bool {
 	q.queueMu.Lock()
 	if len(q.queue) == 0 {
 		q.queueMu.Unlock()
-		return
+		return false
 	}
 
 	pm := heap.Pop(&q.queue).(*priorityMessage)
@@ -188,17 +218,10 @@ func (q *MemoryQueue) processNext(ctx context.Context) {
 	// Send with retry
 	q.sendWithRetry(ctx, pm.msg)
 
-	// Check if there are more messages
 	q.queueMu.Lock()
 	hasMore := len(q.queue) > 0
 	q.queueMu.Unlock()
-
-	if hasMore {
-		select {
-		case q.notifyCh <- struct{}{}:
-		default:
-		}
-	}
+	return hasMore
 }
 
 // sendWithRetry sends a message with exponential backoff retry logic

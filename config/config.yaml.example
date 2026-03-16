@@ -205,7 +205,7 @@ sentry:
   enabled: false
   dsn: ""
   environment: "development"
-  release: ""  # Optional fallback when build metadata cannot provide a release
+  release: ""  # Optional fallback when injected build version and Go build metadata are unavailable
   debug: false
   attach_stacktrace: true
   sample_rate: 1.0

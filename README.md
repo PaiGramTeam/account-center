@@ -109,9 +109,11 @@ go run main.go seed all --with-admin
 go run main.go
 
 # 生产模式
-go build -tags release -o paigram main.go
+go build -tags release -ldflags "-X 'paigram/internal/buildinfo.Version=v1.0.0' -X 'paigram/internal/buildinfo.Commit=$(git rev-parse HEAD)'" -o paigram main.go
 ./paigram
 ```
+
+如果启用了 Sentry，`release` 会优先使用构建时注入的 `Version`/`Commit`；只有程序自身拿不到版本信息时，才会回退到 `sentry.release` 配置。
 
 ### 使用 CLI
 

@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 
+	"paigram/internal/buildinfo"
 	"paigram/internal/config"
 )
 
@@ -30,6 +31,15 @@ func TestShouldCaptureGRPCStatus(t *testing.T) {
 }
 
 func TestResolveReleaseFallsBackToConfig(t *testing.T) {
+	originalVersion := buildinfo.Version
+	originalCommit := buildinfo.Commit
+	buildinfo.Version = ""
+	buildinfo.Commit = ""
+	defer func() {
+		buildinfo.Version = originalVersion
+		buildinfo.Commit = originalCommit
+	}()
+
 	buildRelease := releaseFromBuildInfo()
 	resolved := resolveRelease(config.SentryConfig{Release: "configured-release"})
 
@@ -39,6 +49,19 @@ func TestResolveReleaseFallsBackToConfig(t *testing.T) {
 	}
 
 	require.Equal(t, "configured-release", resolved)
+}
+
+func TestResolveReleasePrefersInjectedBuildInfo(t *testing.T) {
+	originalVersion := buildinfo.Version
+	originalCommit := buildinfo.Commit
+	buildinfo.Version = "v1.2.3"
+	buildinfo.Commit = "abcdef1234567890"
+	defer func() {
+		buildinfo.Version = originalVersion
+		buildinfo.Commit = originalCommit
+	}()
+
+	require.Equal(t, "v1.2.3+abcdef123456", resolveRelease(config.SentryConfig{Release: "configured-release"}))
 }
 
 func TestBuildSetting(t *testing.T) {

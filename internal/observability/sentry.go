@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	"paigram/internal/buildinfo"
 	"paigram/internal/config"
 )
 
@@ -295,6 +296,9 @@ func firstMetadataValue(md metadata.MD, key string) string {
 }
 
 func resolveRelease(cfg config.SentryConfig) string {
+	if release := buildinfo.Release(); release != "" {
+		return release
+	}
 	if release := releaseFromBuildInfo(); release != "" {
 		return release
 	}

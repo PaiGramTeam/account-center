@@ -4,12 +4,14 @@ import (
 	"context"
 	"log"
 
+	sentry "github.com/getsentry/sentry-go"
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
 	"paigram/internal/handler/auth"
+	"paigram/internal/observability"
 	"paigram/internal/tasks"
 )
 
@@ -57,6 +59,20 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 			StrictPriority: false, // Don't starve low-priority queues
 			// Error handler
 			ErrorHandler: asynq.ErrorHandlerFunc(func(ctx context.Context, task *asynq.Task, err error) {
+				observability.CaptureException(err, func(scope *sentry.Scope) {
+					scope.SetTag("component", "asynq")
+					scope.SetTag("task.type", task.Type())
+					scope.SetExtra("task.payload", string(task.Payload()))
+					if retryCount, ok := asynq.GetRetryCount(ctx); ok {
+						scope.SetExtra("task.retry_count", retryCount)
+					}
+					if maxRetry, ok := asynq.GetMaxRetry(ctx); ok {
+						scope.SetExtra("task.max_retry", maxRetry)
+					}
+					if queueName, ok := asynq.GetQueueName(ctx); ok {
+						scope.SetTag("task.queue", queueName)
+					}
+				})
 				log.Printf("[Asynq] Task failed: type=%s, payload=%s, error=%v",
 					task.Type(), string(task.Payload()), err)
 			}),

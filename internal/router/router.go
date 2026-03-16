@@ -20,6 +20,7 @@ import (
 	userhandler "paigram/internal/handler/user"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
+	"paigram/internal/observability"
 	"paigram/internal/permission"
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
@@ -37,6 +38,12 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	gin.SetMode(appCfg.Mode)
 
 	engine := gin.New()
+	if sentryMiddleware := observability.GinMiddleware(cfg.Sentry); sentryMiddleware != nil {
+		engine.Use(sentryMiddleware)
+	}
+	if scopeMiddleware := observability.GinScopeMiddleware(); scopeMiddleware != nil {
+		engine.Use(scopeMiddleware)
+	}
 	engine.Use(gin.Recovery(), gin.Logger())
 
 	corsMiddleware, err := newCORSMiddleware(appCfg.CORS)

@@ -18,6 +18,7 @@ type Config struct {
 	RateLimit RateLimitConfig `mapstructure:"rate_limit"`
 	Email     EmailConfig     `mapstructure:"email"`
 	Security  SecurityConfig  `mapstructure:"security"`
+	Sentry    SentryConfig    `mapstructure:"sentry"`
 }
 
 // AppConfig holds HTTP server configuration.
@@ -187,6 +188,19 @@ type SecurityConfig struct {
 	BcryptCost                int    `mapstructure:"bcrypt_cost"`                  // Bcrypt hashing cost (default: 12, min: 10, max: 31)
 }
 
+// SentryConfig holds Sentry error reporting configuration.
+type SentryConfig struct {
+	Enabled          bool    `mapstructure:"enabled"`
+	DSN              string  `mapstructure:"dsn"`
+	Environment      string  `mapstructure:"environment"`
+	Release          string  `mapstructure:"release"`
+	Debug            bool    `mapstructure:"debug"`
+	AttachStacktrace bool    `mapstructure:"attach_stacktrace"`
+	SampleRate       float64 `mapstructure:"sample_rate"`
+	TracesSampleRate float64 `mapstructure:"traces_sample_rate"`
+	FlushTimeout     int     `mapstructure:"flush_timeout"`
+}
+
 var (
 	cfg     *Config
 	cfgOnce sync.Once
@@ -338,6 +352,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.bcrypt_cost", 12)
 	v.SetDefault("security.suspicious_login_detection", false)
 	v.SetDefault("security.suspicious_login_email_alert", false)
+
+	v.SetDefault("sentry.enabled", false)
+	v.SetDefault("sentry.dsn", "")
+	v.SetDefault("sentry.environment", "development")
+	v.SetDefault("sentry.release", "")
+	v.SetDefault("sentry.debug", false)
+	v.SetDefault("sentry.attach_stacktrace", true)
+	v.SetDefault("sentry.sample_rate", 1.0)
+	v.SetDefault("sentry.traces_sample_rate", 0.0)
+	v.SetDefault("sentry.flush_timeout", 2)
 }
 
 // GetBcryptCost returns the bcrypt cost with validation

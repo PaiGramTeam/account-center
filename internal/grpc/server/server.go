@@ -12,6 +12,7 @@ import (
 
 	"paigram/internal/config"
 	"paigram/internal/grpc/interceptor"
+	"paigram/internal/observability"
 )
 
 // GRPCServer represents the gRPC server
@@ -36,9 +37,11 @@ func NewGRPCServer(port int, db *gorm.DB, redisClient *redis.Client, cfg *config
 	// Create gRPC server with interceptors
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(
+			observability.UnaryServerInterceptor(),
 			authInterceptor.Unary(),
 		),
 		grpc.ChainStreamInterceptor(
+			observability.StreamServerInterceptor(),
 			authInterceptor.Stream(),
 		),
 	}

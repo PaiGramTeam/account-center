@@ -199,3 +199,15 @@ security:
   # - Low: Single new factor (e.g., new device)
   # - Medium: Two new factors (e.g., new device + new location)
   # - High: Impossible travel or 3+ new factors
+
+# Sentry Error Reporting
+sentry:
+  enabled: false
+  dsn: ""
+  environment: "development"
+  release: ""  # Optional fallback when build metadata cannot provide a release
+  debug: false
+  attach_stacktrace: true
+  sample_rate: 1.0
+  traces_sample_rate: 0.0
+  flush_timeout: 2

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	sentry "github.com/getsentry/sentry-go"
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/cobra"
 	"github.com/ulule/limiter/v3"
@@ -27,6 +28,7 @@ import (
 	authhandler "paigram/internal/handler/auth"
 	"paigram/internal/logging"
 	"paigram/internal/middleware"
+	"paigram/internal/observability"
 	"paigram/internal/router"
 	"paigram/internal/sessioncache"
 	"paigram/internal/worker"
@@ -86,6 +88,15 @@ func shutdownServices(ctx context.Context, targets shutdownTargets) error {
 	return errors.Join(errs...)
 }
 
+func fatalStartup(cfg config.SentryConfig, format string, args ...interface{}) {
+	message := fmt.Sprintf(format, args...)
+	observability.CaptureMessage(message, func(scope *sentry.Scope) {
+		scope.SetTag("component", "startup")
+	})
+	observability.Flush(cfg)
+	log.Fatalf("%s", message)
+}
+
 // serveCmd represents the serve command
 var serveCmd = &cobra.Command{
 	Use:   "serve",
@@ -112,6 +123,9 @@ func runServer() {
 	defer stop()
 
 	cfg := config.MustLoad("config")
+	if err := observability.Init(cfg.Sentry); err != nil {
+		log.Fatalf("sentry initialization failed: %v", err)
+	}
 	defer logging.Sync()
 
 	// Initialize encryption for 2FA secrets
@@ -120,10 +134,13 @@ func runServer() {
 		log.Printf("2FA will not work properly. Please set ENCRYPTION_KEY environment variable.")
 	}
 
-	db := database.MustConnect(cfg.Database)
+	db, err := database.Connect(cfg.Database)
+	if err != nil {
+		fatalStartup(cfg.Sentry, "database connection failed: %v", err)
+	}
 	sqlDB, err := db.DB()
 	if err != nil {
-		log.Fatalf("database handle initialization failed: %v", err)
+		fatalStartup(cfg.Sentry, "database handle initialization failed: %v", err)
 	}
 	defer sqlDB.Close()
 
@@ -133,7 +150,7 @@ func runServer() {
 	if cfg.Redis.Enabled {
 		client, err := cache.NewRedisClient(cfg.Redis)
 		if err != nil {
-			log.Fatalf("redis connection failed: %v", err)
+			fatalStartup(cfg.Sentry, "redis connection failed: %v", err)
 		}
 		redisClient = client
 		sessionStore = sessioncache.NewRedisStore(client, cfg.Redis.Prefix)
@@ -142,7 +159,7 @@ func runServer() {
 		if cfg.RateLimit.Enabled {
 			rateLimitStore, err = middleware.NewRedisStore(client, cfg.Redis.Prefix+":ratelimit")
 			if err != nil {
-				log.Fatalf("rate limit store initialization failed: %v", err)
+				fatalStartup(cfg.Sentry, "rate limit store initialization failed: %v", err)
 			}
 		}
 	}
@@ -155,13 +172,13 @@ func runServer() {
 		emailService, err = email.NewService(cfg.Email)
 	}
 	if err != nil {
-		log.Fatalf("email service initialization failed: %v", err)
+		fatalStartup(cfg.Sentry, "email service initialization failed: %v", err)
 	}
 
 	// Start email queue if async is enabled
 	if cfg.Email.UseAsyncQueue {
 		if err := emailService.StartQueue(ctx); err != nil {
-			log.Fatalf("failed to start email queue: %v", err)
+			fatalStartup(cfg.Sentry, "failed to start email queue: %v", err)
 		}
 		log.Printf("Email queue started (backend: %s)", cfg.Email.QueueBackend)
 	}
@@ -192,6 +209,9 @@ func runServer() {
 			if err := redisClient.Close(); err != nil {
 				log.Printf("Redis close error: %v", err)
 			}
+		}
+		if !observability.Flush(cfg.Sentry) {
+			log.Printf("Sentry flush timed out after %d seconds", cfg.Sentry.FlushTimeout)
 		}
 	})
 

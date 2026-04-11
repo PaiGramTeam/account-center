@@ -18,16 +18,35 @@ import (
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	"paigram/internal/service/user"
 )
 
 // Handler exposes REST handlers for user resources.
 type Handler struct {
-	db *gorm.DB
+	userService UserServiceInterface
+	db          *gorm.DB // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
 }
 
-// NewHandler constructs a handler with the provided database.
-func NewHandler(db *gorm.DB) *Handler {
-	return &Handler{db: db}
+// UserServiceInterface defines the interface for user business logic.
+type UserServiceInterface interface {
+	ListUsers(params user.ListUsersParams) (*user.ListUsersResult, error)
+	GetUserByID(userID uint64) (*model.User, error)
+	CreateUser(params user.CreateUserParams) (*model.User, error)
+	UpdateUser(userID uint64, params user.UpdateUserParams) (*model.User, error)
+	DeleteUser(userID uint64) error
+}
+
+// NewHandler constructs a handler with the provided user service.
+func NewHandler(userService UserServiceInterface) *Handler {
+	return &Handler{userService: userService}
+}
+
+// NewHandlerWithDB constructs a handler with both service and db (temporary during migration).
+func NewHandlerWithDB(userService UserServiceInterface, db *gorm.DB) *Handler {
+	return &Handler{
+		userService: userService,
+		db:          db,
+	}
 }
 
 // RegisterRoutes binds user routes to the router group.
@@ -44,143 +63,103 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/:id/permissions", h.GetUserPermissions)
 }
 
-// swagger:route GET /api/v1/users users listUsers
-//
-// 列出所有用户及其基础信息。
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: userListResponse
-//	400: errorResponse
-//	500: errorResponse
-//
 // ListUsers returns all users with basic profile metadata.
+// @Summary List all users
+// @Description Get a paginated list of all users with their basic profile information. Supports filtering by status and search query, with customizable sorting options.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param page query int false "Page number (starting from 1)" default(1) minimum(1)
+// @Param page_size query int false "Number of items per page" default(20) minimum(1) maximum(100)
+// @Param sort_by query string false "Sort field (created_at, last_login_at, id)" default(created_at)
+// @Param order query string false "Sort order (asc, desc)" default(desc) Enums(asc, desc)
+// @Param status query string false "Filter by user status (active, pending, suspended, deleted)"
+// @Param search query string false "Search by email or display name"
+// @Success 200 {object} response.PaginatedResponse "Successfully retrieved user list"
+// @Failure 400 {object} gin.H "Invalid request parameters"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users [get]
 func (h *Handler) ListUsers(c *gin.Context) {
 	// Parse pagination parameters
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	if page < 1 {
-		page = 1
-	}
-
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if pageSize < 1 {
-		pageSize = 20
-	}
-	if pageSize > 100 {
-		pageSize = 100
-	}
-
 	sortBy := c.DefaultQuery("sort_by", "created_at")
 	order := c.DefaultQuery("order", "desc")
 	status := c.Query("status")
 	search := strings.TrimSpace(c.Query("search"))
 
-	// Validate sort field
-	allowedSortFields := map[string]bool{
-		"id":            true,
-		"created_at":    true,
-		"last_login_at": true,
-	}
-	if !allowedSortFields[sortBy] {
-		sortBy = "created_at"
-	}
+	// Call service layer
+	result, err := h.userService.ListUsers(user.ListUsersParams{
+		Page:     page,
+		PageSize: pageSize,
+		SortBy:   sortBy,
+		Order:    order,
+		Status:   status,
+		Search:   search,
+	})
 
-	// Validate order
-	if order != "asc" && order != "desc" {
-		order = "desc"
-	}
-
-	// Build query
-	query := h.db.Model(&model.User{})
-
-	// Apply filters
-	if status != "" {
-		query = query.Where("status = ?", status)
-	}
-
-	if search != "" {
-		query = query.Joins("LEFT JOIN user_profiles ON user_profiles.user_id = users.id").
-			Joins("LEFT JOIN user_emails ON user_emails.user_id = users.id AND user_emails.is_primary = ?", true).
-			Where("user_emails.email LIKE ? OR user_profiles.display_name LIKE ?",
-				"%"+search+"%", "%"+search+"%")
-	}
-
-	// Count total
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to count users", nil)
+	if err != nil {
+		response.InternalServerError(c, err.Error())
 		return
 	}
 
-	// Apply pagination
-	offset := (page - 1) * pageSize
-	var users []model.User
-
-	orderClause := sortBy + " " + strings.ToUpper(order)
-	if err := query.Preload("Profile").Preload("Emails").
-		Order(orderClause).
-		Limit(pageSize).
-		Offset(offset).
-		Find(&users).Error; err != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to list users", nil)
-		return
+	// Load roles for all users to maintain API compatibility
+	userIDs := make([]uint64, len(result.Users))
+	for i, u := range result.Users {
+		userIDs[i] = u.ID
 	}
-
-	userIDs := make([]uint64, 0, len(users))
-	for _, user := range users {
-		userIDs = append(userIDs, user.ID)
-	}
-
 	rolesByUserID, err := h.loadRoleNamesByUserIDs(h.db, userIDs)
 	if err != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load user roles", nil)
+		response.InternalServerError(c, "failed to load roles: "+err.Error())
 		return
 	}
 
-	results := make([]UserListItem, 0, len(users))
-	for _, user := range users {
-		results = append(results, UserListItem{
-			ID:               user.ID,
-			Status:           user.Status,
-			PrimaryLoginType: user.PrimaryLoginType,
-			DisplayName:      user.Profile.DisplayName,
-			PrimaryEmail:     primaryEmail(user.Emails),
-			Roles:            rolesByUserID[user.ID],
-			LastLoginAt:      shared.NullTimePtr(user.LastLoginAt),
-			CreatedAt:        user.CreatedAt,
+	// Build response with roles
+	userList := make([]gin.H, 0, len(result.Users))
+	for _, u := range result.Users {
+		userList = append(userList, gin.H{
+			"id":                 u.ID,
+			"primary_login_type": u.PrimaryLoginType,
+			"status":             u.Status,
+			"display_name":       u.Profile.DisplayName,
+			"avatar_url":         u.Profile.AvatarURL,
+			"roles":              rolesByUserID[u.ID],
+			"last_login_at":      u.LastLoginAt,
+			"created_at":         u.CreatedAt,
 		})
 	}
 
-	response.SuccessWithPagination(c, results, total, page, pageSize)
+	response.SuccessWithPagination(c, userList, result.Total, page, pageSize)
 }
 
-// swagger:route GET /api/v1/users/{id} users getUser
-//
-// 查看指定用户的详细信息。
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: userDetailResponse
-//	400: errorResponse
-//	404: errorResponse
-//	500: errorResponse
-//
 // GetUser retrieves full details for a user by id.
+// @Summary Get user by ID
+// @Description Retrieve detailed information for a specific user including profile, emails, roles, permissions, and security metadata. Users can access their own information or require user:read permission for other users.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Success 200 {object} UserDetailResponse "Successfully retrieved user details"
+// @Failure 400 {object} gin.H "Invalid user ID"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
+// @Failure 404 {object} gin.H "User not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users/{id} [get]
 func (h *Handler) GetUser(c *gin.Context) {
-	id, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	id := c.Param("id")
+	userID, err := strconv.ParseUint(id, 10, 64)
 	if err != nil {
 		response.BadRequest(c, "invalid user id")
 		return
 	}
 
+	// Load user with associations for buildUserDetail
 	var user model.User
-	if err := h.db.Preload("Profile").Preload("Emails").Preload("Sessions").First(&user, id).Error; err != nil {
+	if err := h.db.Preload("Profile").Preload("Emails").First(&user, userID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "user not found")
 			return
@@ -189,9 +168,10 @@ func (h *Handler) GetUser(c *gin.Context) {
 		return
 	}
 
+	// Build full user detail with roles, permissions, security metadata
 	userData, err := h.buildUserDetail(h.db, user)
 	if err != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to build user detail", nil)
+		response.InternalServerError(c, "failed to build user detail: "+err.Error())
 		return
 	}
 
@@ -371,7 +351,22 @@ func buildDeviceID(userAgent, clientIP string) string {
 	return base64.URLEncoding.EncodeToString(hash[:])[:22]
 }
 
-// GetUserSessions returns a user's active sessions with pagination.
+// @Summary Get user sessions
+// @Description Get a paginated list of all active sessions for a specific user
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param page query int false "Page number (starting from 1)" default(1) minimum(1)
+// @Param page_size query int false "Number of items per page" default(20) minimum(1) maximum(100)
+// @Success 200 {object} response.PaginatedResponse "Successfully retrieved user sessions"
+// @Failure 400 {object} gin.H "Invalid request parameters"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
+// @Failure 404 {object} gin.H "User not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users/{id}/sessions [get]
 func (h *Handler) GetUserSessions(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -445,7 +440,21 @@ func (h *Handler) GetUserSessions(c *gin.Context) {
 	response.SuccessWithPagination(c, result, total, page, pageSize)
 }
 
-// RevokeUserSession revokes a specific user session.
+// @Summary Revoke user session
+// @Description Revoke a specific active session for a user
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param sessionId path string true "Session ID"
+// @Success 204 {object} nil "Session successfully revoked (no content)"
+// @Failure 400 {object} gin.H "Invalid request parameters"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
+// @Failure 404 {object} gin.H "Session not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users/{id}/sessions/{sessionId} [delete]
 func (h *Handler) RevokeUserSession(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -493,7 +502,20 @@ func (h *Handler) RevokeUserSession(c *gin.Context) {
 	response.Success(c, gin.H{"message": "session revoked successfully"})
 }
 
-// GetSecuritySummary returns security-related summary data for a user.
+// @Summary Get security summary
+// @Description Get a security status summary for a specific user including two-factor authentication status, active sessions, and device count
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Success 200 {object} user.SecuritySummary "Successfully retrieved security summary"
+// @Failure 400 {object} gin.H "Invalid user ID"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
+// @Failure 404 {object} gin.H "User not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users/{id}/security-summary [get]
 func (h *Handler) GetSecuritySummary(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -543,270 +565,128 @@ func (h *Handler) GetSecuritySummary(c *gin.Context) {
 	response.Success(c, summary)
 }
 
-// swagger:route POST /api/v1/users users createUser
-//
-// 创建新用户（管理员功能）。
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	201: createUserResponse
-//	400: errorResponse
-//	409: errorResponse
-//	500: errorResponse
-//
-// CreateUser creates a new user (admin function).
+// CreateUser registers a new user account.
+// @Summary Create a new user
+// @Description Create a new user account with email authentication, profile information, and optional role assignments. This endpoint requires user:write permission. The password will be hashed using bcrypt before storage.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param body body CreateUserRequest true "User creation details including email, password, profile information, and optional roles"
+// @Success 201 {object} UserDetailResponse "User created successfully"
+// @Failure 400 {object} gin.H "Invalid request body or validation error"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - requires user:write permission"
+// @Failure 409 {object} gin.H "Email already registered"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users [post]
 func (h *Handler) CreateUser(c *gin.Context) {
-	var req CreateUserRequest
+	var req struct {
+		Email            string   `json:"email" binding:"required,email"`
+		Password         string   `json:"password" binding:"required,min=8,max=72"`
+		DisplayName      string   `json:"display_name" binding:"required,min=1,max=255"`
+		PrimaryLoginType string   `json:"primary_login_type" binding:"required,oneof=email oauth"`
+		AvatarURL        string   `json:"avatar_url" binding:"omitempty,url"`
+		Bio              string   `json:"bio" binding:"omitempty,max=500"`
+		Locale           string   `json:"locale" binding:"omitempty"`
+		Status           string   `json:"status" binding:"omitempty,oneof=pending active suspended deleted"`
+		Roles            []string `json:"roles" binding:"omitempty"`
+	}
+
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", map[string]string{
-			"error": err.Error(),
-		})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	// Validate required fields
+	// Normalize and validate email
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if email == "" {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidEmail, "email is required", nil)
+		response.BadRequest(c, "email is required")
 		return
 	}
 
-	displayName := strings.TrimSpace(req.DisplayName)
-	if displayName == "" {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidDisplayName, "display name is required", nil)
-		return
+	// Set defaults
+	locale := strings.TrimSpace(req.Locale)
+	if locale == "" {
+		locale = "en_US"
 	}
 
-	password := req.Password
-	if password == "" {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidPassword, "password is required", nil)
-		return
-	}
-	if len(password) < 8 || len(password) > 72 {
-		response.BadRequestWithCode(c, response.ErrCodePasswordTooWeak, "password must be between 8 and 72 characters", nil)
-		return
+	status := model.UserStatusPending
+	if req.Status != "" {
+		status = model.UserStatus(req.Status)
 	}
 
 	// Check if email already exists
 	var existingEmail model.UserEmail
 	if err := h.db.Where("email = ?", email).First(&existingEmail).Error; err == nil {
-		response.ConflictWithCode(c, response.ErrCodeEmailAlreadyInUse, "email already in use", map[string]string{
-			"email": email,
-		})
+		response.Conflict(c, "email already registered")
 		return
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to check email uniqueness", nil)
+		response.InternalServerError(c, "failed to check email uniqueness")
 		return
 	}
 
 	// Hash password
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeInternalError, "failed to hash password", nil)
+		response.InternalServerError(c, "failed to hash password")
 		return
 	}
 
-	// Default values
-	status := model.UserStatusActive
-	if req.Status != "" {
-		status = model.UserStatus(req.Status)
-		// Validate status
-		if status != model.UserStatusActive && status != model.UserStatusPending &&
-			status != model.UserStatusSuspended && status != model.UserStatusDeleted {
-			response.BadRequestWithCode(c, response.ErrCodeInvalidUserStatus, "invalid user status", map[string]string{
-				"status":  req.Status,
-				"allowed": "active, pending, suspended, deleted",
-			})
-			return
-		}
-	}
-
-	locale := req.Locale
-	if locale == "" {
-		locale = "en_US"
-	}
-
+	// Get actor ID for role assignment tracking
 	actorID, _ := middleware.GetUserID(c)
 
-	// Create user in transaction
+	// Create user with all related records in transaction
 	var user model.User
 	err = h.db.Transaction(func(tx *gorm.DB) error {
+		// 1. Create user with profile
 		user = model.User{
-			PrimaryLoginType: model.LoginTypeEmail,
+			PrimaryLoginType: model.LoginType(req.PrimaryLoginType),
 			Status:           status,
+			Profile: model.UserProfile{
+				DisplayName: strings.TrimSpace(req.DisplayName),
+				AvatarURL:   req.AvatarURL,
+				Bio:         req.Bio,
+				Locale:      locale,
+			},
 		}
 
 		if err := tx.Create(&user).Error; err != nil {
-			return err
+			return fmt.Errorf("failed to create user: %w", err)
 		}
 
-		profile := model.UserProfile{
-			UserID:      user.ID,
-			DisplayName: displayName,
-			Locale:      locale,
-		}
-		if err := tx.Create(&profile).Error; err != nil {
-			return err
-		}
-
-		credential := model.UserCredential{
-			UserID:            user.ID,
-			Provider:          string(model.LoginTypeEmail),
-			ProviderAccountID: email,
-			PasswordHash:      string(passwordHash),
-		}
-		if err := tx.Create(&credential).Error; err != nil {
-			return err
-		}
-
-		emailRecord := model.UserEmail{
+		// 2. Create email record
+		userEmail := model.UserEmail{
 			UserID:    user.ID,
 			Email:     email,
 			IsPrimary: true,
 		}
-		if err := tx.Create(&emailRecord).Error; err != nil {
-			return err
+		if err := tx.Create(&userEmail).Error; err != nil {
+			return fmt.Errorf("failed to create email: %w", err)
 		}
 
-		if req.Roles != nil {
+		// 3. Create credential with hashed password
+		credential := model.UserCredential{
+			UserID:            user.ID,
+			Provider:          string(model.LoginTypeEmail),
+			ProviderAccountID: email,
+			PasswordHash:      string(hashedPassword),
+		}
+		if err := tx.Create(&credential).Error; err != nil {
+			return fmt.Errorf("failed to create credential: %w", err)
+		}
+
+		// 4. Assign roles if provided
+		if len(req.Roles) > 0 {
 			var roles []model.Role
-			if len(req.Roles) > 0 {
-				if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
-					return err
-				}
-				if len(roles) != len(req.Roles) {
-					return errors.New("one or more roles not found")
-				}
-
-				for _, role := range roles {
-					userRole := model.UserRole{UserID: user.ID, RoleID: role.ID, GrantedBy: actorID}
-					if err := tx.Create(&userRole).Error; err != nil {
-						return err
-					}
-				}
-			}
-		}
-
-		// Load created user with associations
-		return tx.Preload("Profile").Preload("Emails").First(&user, user.ID).Error
-	})
-
-	if err != nil {
-		if err.Error() == "one or more roles not found" {
-			response.BadRequestWithCode(c, response.ErrCodeRoleNotFound, "one or more roles not found", map[string]string{
-				"roles": strings.Join(req.Roles, ", "),
-			})
-			return
-		}
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to create user", nil)
-		return
-	}
-
-	userData, err := h.buildUserDetail(h.db, user)
-	if err != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to build user detail", nil)
-		return
-	}
-
-	response.Created(c, userData)
-}
-
-// swagger:route PATCH /api/v1/users/{id} users updateUser
-//
-// 更新用户信息（管理员功能）。
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: updateUserResponse
-//	400: errorResponse
-//	404: errorResponse
-//	500: errorResponse
-//
-// UpdateUser updates user information (admin function).
-func (h *Handler) UpdateUser(c *gin.Context) {
-	id, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
-	if err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidUserID, "invalid user id", nil)
-		return
-	}
-
-	var req UpdateUserRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", map[string]string{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	// Check if user exists
-	var user model.User
-	if err := h.db.Preload("Profile").First(&user, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			response.NotFoundWithCode(c, response.ErrCodeUserNotFound, "user not found", nil)
-			return
-		}
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load user", nil)
-		return
-	}
-
-	// Update user in transaction
-	err = h.db.Transaction(func(tx *gorm.DB) error {
-		// Update user status if provided
-		if req.Status != "" {
-			status := model.UserStatus(req.Status)
-			// Validate status
-			if status != model.UserStatusActive && status != model.UserStatusPending &&
-				status != model.UserStatusSuspended && status != model.UserStatusDeleted {
-				return errors.New("invalid user status")
-			}
-			if err := tx.Model(&user).Update("status", status).Error; err != nil {
-				return err
-			}
-		}
-
-		// Update profile if display name provided
-		if req.DisplayName != "" {
-			if err := tx.Model(&model.UserProfile{}).
-				Where("user_id = ?", user.ID).
-				Update("display_name", strings.TrimSpace(req.DisplayName)).Error; err != nil {
-				return err
-			}
-		}
-
-		if req.Locale != "" {
-			if err := tx.Model(&model.UserProfile{}).
-				Where("user_id = ?", user.ID).
-				Update("locale", strings.TrimSpace(req.Locale)).Error; err != nil {
-				return err
-			}
-		}
-
-		// Update roles if provided
-		if req.Roles != nil {
-			// Verify all roles exist
-			var roles []model.Role
-			if len(req.Roles) > 0 {
-				if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
-					return err
-				}
-				if len(roles) != len(req.Roles) {
-					return errors.New("one or more roles not found")
-				}
+			if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
+				return fmt.Errorf("failed to find roles: %w", err)
 			}
 
-			// Delete existing role assignments
-			if err := tx.Where("user_id = ?", user.ID).Delete(&model.UserRole{}).Error; err != nil {
-				return err
+			if len(roles) != len(req.Roles) {
+				return errors.New("one or more roles not found")
 			}
 
-			// Create new role assignments
-			actorID, _ := middleware.GetUserID(c)
 			for _, role := range roles {
 				userRole := model.UserRole{
 					UserID:    user.ID,
@@ -814,95 +694,232 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 					GrantedBy: actorID,
 				}
 				if err := tx.Create(&userRole).Error; err != nil {
-					return err
+					return fmt.Errorf("failed to assign role: %w", err)
 				}
 			}
 		}
 
-		// Reload user with associations
-		return tx.Preload("Profile").Preload("Emails").First(&user, id).Error
+		return nil
 	})
 
 	if err != nil {
-		if err.Error() == "invalid user status" {
-			response.BadRequestWithCode(c, response.ErrCodeInvalidUserStatus, "invalid user status", map[string]string{
-				"status":  req.Status,
-				"allowed": "active, pending, suspended, deleted",
-			})
+		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
+			response.Conflict(c, "email already registered")
 			return
 		}
-		if err.Error() == "one or more roles not found" {
-			response.BadRequestWithCode(c, response.ErrCodeRoleNotFound, "one or more roles not found", map[string]string{
-				"roles": strings.Join(req.Roles, ", "),
-			})
+		if strings.Contains(err.Error(), "roles not found") {
+			response.BadRequest(c, err.Error())
 			return
 		}
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to update user", nil)
+		response.InternalServerError(c, err.Error())
 		return
 	}
 
-	userData, err := h.buildUserDetail(h.db, user)
+	// Load full user details with all associations
+	var fullUser model.User
+	if err := h.db.Preload("Profile").Preload("Emails").First(&fullUser, user.ID).Error; err != nil {
+		response.InternalServerError(c, "failed to load created user: "+err.Error())
+		return
+	}
+
+	// Build complete user detail response
+	userData, err := h.buildUserDetail(h.db, fullUser)
 	if err != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to build user detail", nil)
+		response.InternalServerError(c, "failed to build user detail: "+err.Error())
+		return
+	}
+
+	response.Created(c, userData)
+}
+
+// UpdateUser modifies user profile fields, locale, and roles.
+// @Summary Update user information
+// @Description Update user profile fields (display name, avatar, bio), locale settings, and role assignments. Users can update their own profile or require user:write permission to update other users. Role updates require providing the complete new set of roles.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param body body UpdateUserRequest true "User update details - all fields are optional"
+// @Success 200 {object} UserDetailResponse "User updated successfully"
+// @Failure 400 {object} gin.H "Invalid request body or user ID"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
+// @Failure 404 {object} gin.H "User not found"
+// @Failure 409 {object} gin.H "Conflict - data validation failed"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users/{id} [patch]
+func (h *Handler) UpdateUser(c *gin.Context) {
+	id := c.Param("id")
+	userID, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		response.BadRequest(c, "invalid user id")
+		return
+	}
+
+	var req struct {
+		DisplayName *string  `json:"display_name" binding:"omitempty,min=1,max=255"`
+		AvatarURL   *string  `json:"avatar_url" binding:"omitempty,url"`
+		Bio         *string  `json:"bio" binding:"omitempty,max=500"`
+		Locale      *string  `json:"locale" binding:"omitempty"`
+		Roles       []string `json:"roles" binding:"omitempty"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	// Get actor ID for role assignment tracking
+	actorID, _ := middleware.GetUserID(c)
+
+	// Update user with transaction for multi-table operations
+	var user model.User
+	err = h.db.Transaction(func(tx *gorm.DB) error {
+		// 1. Load existing user with profile
+		if err := tx.Preload("Profile").First(&user, userID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("user not found")
+			}
+			return fmt.Errorf("failed to load user: %w", err)
+		}
+
+		// 2. Update profile fields
+		updates := map[string]interface{}{}
+		if req.DisplayName != nil {
+			updates["display_name"] = strings.TrimSpace(*req.DisplayName)
+		}
+		if req.AvatarURL != nil {
+			updates["avatar_url"] = *req.AvatarURL
+		}
+		if req.Bio != nil {
+			updates["bio"] = *req.Bio
+		}
+		if req.Locale != nil {
+			updates["locale"] = strings.TrimSpace(*req.Locale)
+		}
+
+		if len(updates) > 0 {
+			if err := tx.Model(&model.UserProfile{}).Where("user_id = ?", userID).Updates(updates).Error; err != nil {
+				return fmt.Errorf("failed to update profile: %w", err)
+			}
+		}
+
+		// 3. Update roles if provided
+		if req.Roles != nil {
+			// Delete existing roles
+			if err := tx.Where("user_id = ?", userID).Delete(&model.UserRole{}).Error; err != nil {
+				return fmt.Errorf("failed to delete existing roles: %w", err)
+			}
+
+			// Add new roles
+			if len(req.Roles) > 0 {
+				var roles []model.Role
+				if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
+					return fmt.Errorf("failed to find roles: %w", err)
+				}
+
+				if len(roles) != len(req.Roles) {
+					return errors.New("one or more roles not found")
+				}
+
+				for _, role := range roles {
+					userRole := model.UserRole{
+						UserID:    userID,
+						RoleID:    role.ID,
+						GrantedBy: actorID,
+					}
+					if err := tx.Create(&userRole).Error; err != nil {
+						return fmt.Errorf("failed to assign role: %w", err)
+					}
+				}
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			response.NotFound(c, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "already taken") {
+			response.Conflict(c, err.Error())
+			return
+		}
+		response.InternalServerError(c, err.Error())
+		return
+	}
+
+	// Load full user details with all associations
+	var fullUser model.User
+	if err := h.db.Preload("Profile").Preload("Emails").First(&fullUser, userID).Error; err != nil {
+		response.InternalServerError(c, "failed to load updated user: "+err.Error())
+		return
+	}
+
+	// Build complete user detail response
+	userData, err := h.buildUserDetail(h.db, fullUser)
+	if err != nil {
+		response.InternalServerError(c, "failed to build user detail: "+err.Error())
 		return
 	}
 
 	response.Success(c, userData)
 }
 
-// swagger:route DELETE /api/v1/users/{id} users deleteUser
-//
-// 删除用户（管理员功能）。
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: deleteUserResponse
-//	400: errorResponse
-//	404: errorResponse
-//	500: errorResponse
-//
-// DeleteUser deletes a user (admin function).
+// DeleteUser soft-deletes a user account, or hard-deletes if ?hard_delete=true.
+// @Summary Delete user
+// @Description Soft-delete a user account by default (sets deleted_at timestamp), or permanently remove from database with hard_delete=true query parameter. This endpoint requires user:delete permission. Soft-deleted users can potentially be restored.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param hard_delete query bool false "Permanently delete user from database (cannot be undone)" default(false)
+// @Success 204 "User deleted successfully - no content returned"
+// @Failure 400 {object} gin.H "Invalid user ID"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - requires user:delete permission"
+// @Failure 404 {object} gin.H "User not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/users/{id} [delete]
 func (h *Handler) DeleteUser(c *gin.Context) {
-	id, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	id := c.Param("id")
+	userID, err := strconv.ParseUint(id, 10, 64)
 	if err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidUserID, "invalid user id", nil)
+		response.BadRequest(c, "invalid user id")
 		return
 	}
 
+	// Support hard delete via query parameter
 	hardDelete := c.Query("hard_delete") == "true"
 
-	// Check if user exists
-	var user model.User
-	if err := h.db.First(&user, id).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			response.NotFoundWithCode(c, response.ErrCodeUserNotFound, "user not found", nil)
+	if hardDelete {
+		// Hard delete: bypass service layer, use direct DB access with Unscoped
+		result := h.db.Unscoped().Delete(&model.User{}, userID)
+		if result.Error != nil {
+			response.InternalServerError(c, "failed to delete user: "+result.Error.Error())
 			return
 		}
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load user", nil)
-		return
-	}
-
-	// Delete user
-	var deleteErr error
-	if hardDelete {
-		// Permanently delete
-		deleteErr = h.db.Unscoped().Delete(&user).Error
+		if result.RowsAffected == 0 {
+			response.NotFound(c, "user not found")
+			return
+		}
 	} else {
-		// Soft delete
-		deleteErr = h.db.Delete(&user).Error
+		// Soft delete: use service layer
+		if err := h.userService.DeleteUser(userID); err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				response.NotFound(c, err.Error())
+				return
+			}
+			response.InternalServerError(c, err.Error())
+			return
+		}
 	}
 
-	if deleteErr != nil {
-		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to delete user", nil)
-		return
-	}
-
-	response.Success(c, gin.H{
-		"message": "user deleted successfully",
-	})
+	c.Status(204)
 }
 
 // swagger:route PATCH /api/v1/users/{id}/status users updateUserStatus

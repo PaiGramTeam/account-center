@@ -310,12 +310,13 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 	require.NoError(t, stack.DB.Create(&adminRole).Error)
 
 	createBody := map[string]any{
-		"email":        fmt.Sprintf("managed-%d@example.com", time.Now().UnixNano()),
-		"display_name": "Managed User",
-		"password":     "ManagedPass123!",
-		"status":       "active",
-		"locale":       "zh_CN",
-		"roles":        []string{memberRole.Name},
+		"email":              fmt.Sprintf("managed-%d@example.com", time.Now().UnixNano()),
+		"display_name":       "Managed User",
+		"password":           "ManagedPass123!",
+		"primary_login_type": "email",
+		"status":             "active",
+		"locale":             "zh_CN",
+		"roles":              []string{memberRole.Name},
 	}
 
 	createDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBody, headers)
@@ -360,7 +361,7 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 
 	grantPermissionsToUser(t, stack, actorID, model.PermUserDelete)
 	deleteAllowed := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d", createdUserID), nil, headers)
-	require.Equal(t, http.StatusOK, deleteAllowed.Code, deleteAllowed.Body.String())
+	require.Equal(t, http.StatusNoContent, deleteAllowed.Code, deleteAllowed.Body.String())
 
 	var deletedUser model.User
 	require.NoError(t, stack.DB.Unscoped().First(&deletedUser, createdUserID).Error)

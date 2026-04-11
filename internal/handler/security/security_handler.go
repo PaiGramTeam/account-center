@@ -623,27 +623,22 @@ type regenerateBackupCodesRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// RegenerateBackupCodes generates new backup codes for 2FA
-// swagger:route POST /api/v1/profiles/{id}/2fa/regenerate-backup-codes security regenerateBackupCodes
-//
-// Regenerate 2FA backup codes.
-//
-// Generates new backup codes and invalidates old ones. Requires password verification.
-//
-// Consumes:
-//   - application/json
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: regenerateBackupCodesResponse
-//	400: securityErrorResponse
-//	401: securityErrorResponse
-//	403: securityErrorResponse
-//	404: securityErrorResponse
-//	500: securityErrorResponse
+// RegenerateBackupCodes generates new backup codes for 2FA.
+// @Summary Regenerate 2FA backup codes
+// @Description Regenerate 2FA backup recovery codes. Old codes will be invalidated. / 重新生成2FA备用恢复码，旧的备用码将失效
+// @Tags security
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param request body regenerateBackupCodesRequest true "Password for verification"
+// @Success 200 {object} gin.H "Backup codes regenerated successfully"
+// @Failure 400 {object} gin.H "Invalid user ID or request"
+// @Failure 401 {object} gin.H "Unauthorized - incorrect password"
+// @Failure 403 {object} gin.H "Forbidden - can only regenerate own backup codes"
+// @Failure 404 {object} gin.H "2FA not enabled"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/profiles/{id}/2fa/regenerate-backup-codes [post]
 func (h *Handler) RegenerateBackupCodes(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -749,22 +744,21 @@ func (h *Handler) RegenerateBackupCodes(c *gin.Context) {
 	})
 }
 
-// GetDevices returns list of user's login devices
-// swagger:route GET /api/v1/profiles/{id}/devices security getDevices
-//
-// Get login devices with pagination.
-//
-// Retrieves a paginated list of devices that have been used to access the account.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: paginatedResponse
-//	400: securityErrorResponse
-//	403: securityErrorResponse
-//	500: securityErrorResponse
+// GetDevices returns list of user's login devices.
+// @Summary Get trusted devices
+// @Description Get all trusted devices for the user. / 获取用户的所有受信任设备列表
+// @Tags security
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param page query int false "Page number (default: 1)"
+// @Param page_size query int false "Page size (default: 20, max: 100)"
+// @Success 200 {object} gin.H "Paginated list of devices"
+// @Failure 400 {object} gin.H "Invalid user ID or pagination parameters"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - can only view own devices"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/profiles/{id}/devices [get]
 func (h *Handler) GetDevices(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -845,23 +839,21 @@ func (h *Handler) GetDevices(c *gin.Context) {
 	response.SuccessWithPagination(c, deviceList, total, page, pageSize)
 }
 
-// RemoveDevice removes a login device/session
-// swagger:route DELETE /api/v1/profiles/{id}/devices/{device_id} security removeDevice
-//
-// Remove login device.
-//
-// Removes a device and revokes all associated sessions.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: removeDeviceResponse
-//	400: securityErrorResponse
-//	403: securityErrorResponse
-//	404: securityErrorResponse
-//	500: securityErrorResponse
+// RemoveDevice removes a login device/session.
+// @Summary Remove trusted device
+// @Description Remove a trusted device. Next login will require re-verification. / 移除受信任设备，该设备下次登录需重新验证
+// @Tags security
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param device_id path string true "Device ID to remove"
+// @Success 200 {object} gin.H "Device removed successfully"
+// @Failure 400 {object} gin.H "Invalid user ID or device ID"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - can only remove own devices or cannot remove current device"
+// @Failure 404 {object} gin.H "Device not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/profiles/{id}/devices/{device_id} [delete]
 func (h *Handler) RemoveDevice(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {

@@ -153,24 +153,21 @@ func (h *EmailHandler) AddEmail(c *gin.Context) {
 	})
 }
 
-// swagger:route DELETE /api/v1/profiles/{id}/emails/{email} profile deleteEmail
-//
-// Delete email address.
-//
-// Removes an email address from user profile. Cannot delete primary email if it's the only one.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: deleteEmailResponse
-//	400: profileErrorResponse
-//	403: profileErrorResponse
-//	404: profileErrorResponse
-//	500: profileErrorResponse
-//
 // DeleteEmail removes an email address from user profile.
+// @Summary Delete email address
+// @Description Remove an alternate email address from user profile. Cannot delete the only email or primary email. / 删除用户的备用邮箱地址。无法删除用户的唯一邮箱或仅存在的主邮箱。
+// @Tags profile
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param email path string true "Email address to delete"
+// @Success 200 {object} gin.H "Email deleted successfully"
+// @Failure 400 {object} gin.H "Invalid user ID or email address"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - cannot delete the only email"
+// @Failure 404 {object} gin.H "User or email not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/profiles/{id}/emails/{email} [delete]
 func (h *EmailHandler) DeleteEmail(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -244,25 +241,21 @@ func (h *EmailHandler) DeleteEmail(c *gin.Context) {
 	})
 }
 
-// swagger:route PATCH /api/v1/profiles/{id}/emails/{email}/primary profile setPrimaryEmail
-//
-// Set primary email address.
-//
-// Sets the specified email as the primary email address for the user.
-// The email must be verified before it can be set as primary.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: setPrimaryEmailResponse
-//	400: profileErrorResponse
-//	403: profileErrorResponse
-//	404: profileErrorResponse
-//	500: profileErrorResponse
-//
 // SetPrimaryEmail sets the specified email as primary.
+// @Summary Set primary email
+// @Description Set the specified email as primary contact. Email must be verified first. / 将指定邮箱设置为主邮箱。邮箱必须已验证才能设为主邮箱。
+// @Tags profile
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param email path string true "Email address to set as primary"
+// @Success 200 {object} gin.H "Primary email updated successfully"
+// @Failure 400 {object} gin.H "Invalid user ID or email address"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 403 {object} gin.H "Forbidden - email must be verified before setting as primary"
+// @Failure 404 {object} gin.H "User or email not found"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/profiles/{id}/emails/{email}/primary [patch]
 func (h *EmailHandler) SetPrimaryEmail(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -330,25 +323,22 @@ func (h *EmailHandler) SetPrimaryEmail(c *gin.Context) {
 	})
 }
 
-// swagger:route POST /api/v1/profiles/{id}/emails/{email}/verify profile resendVerificationEmail
-//
-// Resend email verification.
-//
-// Resends verification email to the specified email address.
-// Generates a new verification token if the previous one expired.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: resendVerificationResponse
-//	400: profileErrorResponse
-//	404: profileErrorResponse
-//	429: profileErrorResponse
-//	500: profileErrorResponse
-//
 // ResendVerificationEmail resends verification email.
+// @Summary Resend verification email
+// @Description Resend verification email to an unverified email address. Rate limited to prevent abuse. / 重新发送邮箱验证邮件。如果之前的验证令牌已过期,将生成新的验证令牌。
+// @Tags profile
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param email path string true "Email address to resend verification to"
+// @Success 200 {object} gin.H "Verification email sent successfully"
+// @Failure 400 {object} gin.H "Invalid user ID, email address, or email already verified"
+// @Failure 401 {object} gin.H "Unauthorized - authentication required"
+// @Failure 404 {object} gin.H "User or email not found"
+// @Failure 429 {object} gin.H "Too many requests - rate limit exceeded"
+// @Failure 500 {object} gin.H "Internal server error"
+// @Router /api/v1/profiles/{id}/emails/{email}/verify [post]
 func (h *EmailHandler) ResendVerificationEmail(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {

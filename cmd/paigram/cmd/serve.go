@@ -225,7 +225,10 @@ func runServer() {
 
 	// Start gRPC server if enabled
 	if cfg.GRPC.Enabled {
-		grpcServer = server.NewGRPCServer(cfg.GRPC.Port, db, redisClient, cfg)
+		grpcServer, err = server.NewGRPCServer(cfg.GRPC.Port, db, redisClient, cfg)
+		if err != nil {
+			fatalStartup(cfg.Sentry, "gRPC server initialization failed: %v", err)
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

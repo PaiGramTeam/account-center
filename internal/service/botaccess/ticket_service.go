@@ -12,11 +12,15 @@ import (
 )
 
 type ServiceTicketClaims struct {
+	ActorType            string   `json:"actor_type,omitempty"`
+	ActorID              string   `json:"actor_id,omitempty"`
+	OwnerUserID          uint64   `json:"owner_user_id,omitempty"`
 	BotID                string   `json:"bot_id"`
 	UserID               uint64   `json:"user_id"`
 	Platform             string   `json:"platform"`
 	PlatformServiceKey   string   `json:"platform_service_key"`
 	PlatformAccountRefID uint64   `json:"platform_account_ref_id"`
+	PlatformAccountID    string   `json:"platform_account_id,omitempty"`
 	Scopes               []string `json:"scopes"`
 	jwt.RegisteredClaims
 }
@@ -55,11 +59,15 @@ func (s *TicketService) Issue(botID string, ref *model.PlatformAccountRef, userI
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.ttl)
 	claims := ServiceTicketClaims{
+		ActorType:            "bot",
+		ActorID:              botID,
+		OwnerUserID:          userID,
 		BotID:                botID,
 		UserID:               userID,
 		Platform:             ref.Platform,
 		PlatformServiceKey:   ref.PlatformServiceKey,
 		PlatformAccountRefID: ref.ID,
+		PlatformAccountID:    ref.PlatformAccountID,
 		Scopes:               scopes,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.issuer,

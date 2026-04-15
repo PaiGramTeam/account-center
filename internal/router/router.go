@@ -70,7 +70,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	registerSwagger(engine)
 
 	// Initialize handler groups with dependencies
-	if err := handler.InitializeApiGroups(db, cache); err != nil {
+	if err := handler.InitializeApiGroups(db, cache, authCfg); err != nil {
 		return nil, fmt.Errorf("initialize api groups: %w", err)
 	}
 

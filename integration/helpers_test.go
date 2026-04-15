@@ -202,6 +202,9 @@ func newTestConfig(env integrationEnv, redisPrefix string) *config.Config {
 			SessionUpdateAgeSeconds:       86400,
 			SessionFreshAgeSeconds:        300,
 			RequireEmailVerificationLogin: true,
+			ServiceTicketTTLSeconds:       300,
+			ServiceTicketIssuer:           "paigram-account-center",
+			ServiceTicketSigningKey:       "0123456789abcdef0123456789abcdef",
 		},
 		Redis: config.RedisConfig{
 			Enabled:  true,

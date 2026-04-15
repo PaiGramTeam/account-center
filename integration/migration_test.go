@@ -13,6 +13,9 @@ func TestMigrationsApplyToFreshMySQL(t *testing.T) {
 	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "user_emails")
 	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "user_sessions")
 	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "user_devices")
+	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "bot_identities")
+	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "platform_account_refs")
+	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "bot_account_grants")
 
 	runMigrations(t, stack.SQLDB, stack.DatabaseCfg)
 }

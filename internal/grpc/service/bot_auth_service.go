@@ -317,7 +317,13 @@ func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotT
 
 			// Cache validation successful
 			return &ValidateBotTokenResponse{
-				Valid:              true,
+				Valid: true,
+				Bot: &Bot{
+					Id:     cacheData.BotID,
+					Name:   cacheData.BotName,
+					Status: s.convertStringToBotStatus(cacheData.BotStatus),
+					Scopes: cacheData.Scopes,
+				},
 				Scopes:             cacheData.Scopes,
 				ExpiresAt:          timestamppb.New(cacheData.ExpiresAt),
 				PermissionsGranted: permissionsGranted,
@@ -433,6 +439,7 @@ func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotT
 
 	return &ValidateBotTokenResponse{
 		Valid:              true,
+		Bot:                s.modelBotToProto(&botToken.Bot),
 		Scopes:             scopes,
 		ExpiresAt:          timestamppb.New(botToken.ExpiresAt),
 		PermissionsGranted: permissionsGranted,

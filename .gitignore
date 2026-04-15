@@ -9,7 +9,7 @@
 *.dylib
 
 # Built binary
-paigram
+/paigram
 
 # Test binary, built with `go test -c`
 *.test

@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS `bot_account_grants` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `user_id` BIGINT UNSIGNED NOT NULL,
+    `bot_id` VARCHAR(64) NOT NULL,
+    `platform_account_ref_id` BIGINT UNSIGNED NOT NULL,
+    `scopes` JSON NOT NULL,
+    `granted_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `revoked_at` DATETIME(3) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    `deleted_at` DATETIME(3) NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_bot_account_grants_bot_account` (`bot_id`, `platform_account_ref_id`),
+    KEY `idx_bot_account_grants_user_id` (`user_id`),
+    KEY `idx_bot_account_grants_platform_account_ref_id` (`platform_account_ref_id`),
+    KEY `idx_bot_account_grants_revoked_at` (`revoked_at`),
+    KEY `idx_bot_account_grants_deleted_at` (`deleted_at`),
+    CONSTRAINT `fk_bot_account_grants_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT `fk_bot_account_grants_bot` FOREIGN KEY (`bot_id`) REFERENCES `bots` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT `fk_bot_account_grants_ref` FOREIGN KEY (`platform_account_ref_id`) REFERENCES `platform_account_refs` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Bot 对平台账号引用的授权表';

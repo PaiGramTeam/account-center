@@ -12,7 +12,10 @@ import (
 
 	"paigram/internal/config"
 	"paigram/internal/grpc/interceptor"
+	pb "paigram/internal/grpc/pb/v1"
+	grpcservice "paigram/internal/grpc/service"
 	"paigram/internal/observability"
+	"paigram/internal/service/botaccess"
 )
 
 // GRPCServer represents the gRPC server
@@ -26,7 +29,11 @@ type GRPCServer struct {
 }
 
 // NewGRPCServer creates a new gRPC server
-func NewGRPCServer(port int, db *gorm.DB, redisClient *redis.Client, cfg *config.Config) *GRPCServer {
+func NewGRPCServer(port int, db *gorm.DB, redisClient *redis.Client, cfg *config.Config) (*GRPCServer, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("grpc config is required")
+	}
+
 	redisPrefix := "bot_token:"
 	if cfg.Redis.Prefix != "" {
 		redisPrefix = cfg.Redis.Prefix + redisPrefix
@@ -48,14 +55,14 @@ func NewGRPCServer(port int, db *gorm.DB, redisClient *redis.Client, cfg *config
 
 	server := grpc.NewServer(opts...)
 
-	// Register services
-	// userService := service.NewUserService(db)
-	// botAuthService := service.NewBotAuthService(db)
+	botAuthCore := grpcservice.NewBotAuthService(db, redisClient, redisPrefix)
+	pb.RegisterBotAuthServiceServer(server, grpcservice.NewBotAuthServiceAdapter(botAuthCore))
 
-	// Note: These registration calls would normally use the generated pb package
-	// For now, we'll comment them out
-	// pb.RegisterUserServiceServer(server, userService)
-	// pb.RegisterBotAuthServiceServer(server, botAuthService)
+	botAccessGroup, err := botaccess.NewServiceGroup(db, cfg.Auth)
+	if err != nil {
+		return nil, fmt.Errorf("init bot access services: %w", err)
+	}
+	pb.RegisterBotAccessServiceServer(server, grpcservice.NewBotAccessService(&botAccessGroup.AccountRefService, &botAccessGroup.TicketService))
 
 	// Register reflection service for debugging
 	reflection.Register(server)
@@ -67,7 +74,7 @@ func NewGRPCServer(port int, db *gorm.DB, redisClient *redis.Client, cfg *config
 		cfg:             cfg,
 		server:          server,
 		authInterceptor: authInterceptor,
-	}
+	}, nil
 }
 
 // Start starts the gRPC server

@@ -3,6 +3,7 @@ package service
 import (
 	"paigram/internal/service/authority"
 	"paigram/internal/service/casbin"
+	"paigram/internal/service/platform"
 	"paigram/internal/service/user"
 
 	"gorm.io/gorm"
@@ -13,15 +14,18 @@ type ServiceGroup struct {
 	UserServiceGroup      user.ServiceGroup
 	CasbinServiceGroup    casbin.ServiceGroup
 	AuthorityServiceGroup authority.ServiceGroup
+	PlatformServiceGroup  platform.ServiceGroup
 }
 
 // NewServiceGroup creates the global service group with all dependencies.
 func NewServiceGroup(db *gorm.DB) *ServiceGroup {
 	casbinGroup := casbin.NewServiceGroup(db)
+	platformGroup := platform.NewServiceGroup(db)
 	return &ServiceGroup{
 		UserServiceGroup:      *user.NewServiceGroup(db),
 		CasbinServiceGroup:    *casbinGroup,
 		AuthorityServiceGroup: *authority.NewServiceGroup(db, &casbinGroup.CasbinService),
+		PlatformServiceGroup:  *platformGroup,
 	}
 }
 

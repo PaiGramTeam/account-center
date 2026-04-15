@@ -24,6 +24,7 @@ import (
 	"gorm.io/gorm"
 
 	initmigrate "paigram/initialize/migrate"
+	"paigram/internal/casbin"
 	"paigram/internal/config"
 	"paigram/internal/crypto"
 	"paigram/internal/email"
@@ -124,7 +125,14 @@ func newIntegrationStackWithConfig(t *testing.T, mutate func(*config.Config)) *i
 		mutate(testCfg)
 	}
 
-	stack.Router = router.New(testCfg, sessionStore, stack.DB, rateLimitStore, stack.Email)
+	stack.Router, err = router.New(testCfg, sessionStore, stack.DB, rateLimitStore, stack.Email)
+	require.NoError(t, err)
+
+	// Reset and initialize Casbin enforcer with the test database
+	// Reset is needed because each test uses a fresh database, but Casbin uses singleton pattern
+	casbin.Reset()
+	_, err = casbin.InitEnforcer(stack.DB)
+	require.NoError(t, err, "Failed to initialize Casbin enforcer")
 
 	t.Cleanup(func() {
 		for i := len(stack.cleanup) - 1; i >= 0; i-- {
@@ -352,6 +360,9 @@ func decodeResponseData(t *testing.T, recorder *httptest.ResponseRecorder) map[s
 
 	var resp response.Response
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &resp))
+	if resp.Data == nil {
+		t.Fatalf("response data is nil, status=%d, body=%s", recorder.Code, recorder.Body.String())
+	}
 	data, ok := resp.Data.(map[string]any)
 	require.True(t, ok, "expected map response data, got %T", resp.Data)
 	return data

@@ -4,15 +4,15 @@ import (
 	"errors"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 
-	"paigram/internal/model"
 	"paigram/internal/response"
+	"paigram/internal/service"
+	serviceuser "paigram/internal/service/user"
 )
 
 // Require2FA middleware ensures that the user has 2FA enabled
 // This middleware should be used after AuthMiddleware
-func Require2FA(db *gorm.DB) gin.HandlerFunc {
+func Require2FA() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get user ID from context (set by AuthMiddleware)
 		userID, exists := GetUserID(c)
@@ -23,31 +23,33 @@ func Require2FA(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Check if user has 2FA enabled
-		var twoFactor model.UserTwoFactor
-		err := db.Where("user_id = ?", userID).First(&twoFactor).Error
+		middlewareService := &service.ServiceGroupApp.UserServiceGroup.MiddlewareService
+		_, err := middlewareService.GetTwoFactorSecret(userID)
 
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+			if errors.Is(err, serviceuser.ErrTwoFactorNotEnabled) {
 				response.ForbiddenWithCode(c, "2FA_REQUIRED", "two-factor authentication is required for this operation", map[string]string{
 					"message": "please enable 2FA to access this resource",
 				})
-			} else {
-				response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "failed to verify 2FA status", nil)
+				c.Abort()
+				return
 			}
+
+			response.InternalServerErrorWithCode(c, "2FA_CHECK_FAILED", "failed to verify two-factor authentication state", nil)
 			c.Abort()
 			return
 		}
 
 		// 2FA is enabled, continue
 		c.Set("has_2fa", true)
-		c.Set("2fa_id", twoFactor.ID)
+		// Note: 2fa_id is not set anymore as we don't have the record ID from MiddlewareService
 		c.Next()
 	}
 }
 
 // Optional2FA middleware checks if the user has 2FA enabled and sets a flag in context
 // It does not abort the request if 2FA is not enabled
-func Optional2FA(db *gorm.DB) gin.HandlerFunc {
+func Optional2FA() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get user ID from context (set by AuthMiddleware)
 		userID, exists := GetUserID(c)
@@ -57,14 +59,18 @@ func Optional2FA(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// Check if user has 2FA enabled
-		var twoFactor model.UserTwoFactor
-		err := db.Where("user_id = ?", userID).First(&twoFactor).Error
+		middlewareService := &service.ServiceGroupApp.UserServiceGroup.MiddlewareService
+		_, err := middlewareService.GetTwoFactorSecret(userID)
 
 		if err == nil {
 			c.Set("has_2fa", true)
-			c.Set("2fa_id", twoFactor.ID)
-		} else {
+			// Note: 2fa_id is not set anymore as we don't have the record ID from MiddlewareService
+		} else if errors.Is(err, serviceuser.ErrTwoFactorNotEnabled) {
 			c.Set("has_2fa", false)
+		} else {
+			response.InternalServerErrorWithCode(c, "2FA_CHECK_FAILED", "failed to verify two-factor authentication state", nil)
+			c.Abort()
+			return
 		}
 
 		c.Next()

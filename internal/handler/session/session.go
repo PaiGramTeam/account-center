@@ -219,9 +219,7 @@ func (h *Handler) RevokeSession(c *gin.Context) {
 		return
 	}
 
-	// Remove from cache is not possible without the original tokens
-	// The cache entries will naturally expire based on their TTL
-	// The revoked_at flag in the database will prevent any cached tokens from being used
+	_ = h.sessionCache.Set(c.Request.Context(), sessioncache.RevokedSessionMarkerKey(session.ID), []byte("1"), sessioncache.RevokedSessionMarkerTTL(&session))
 
 	response.Success(c, gin.H{
 		"message": "session revoked successfully",
@@ -254,12 +252,13 @@ func (h *Handler) RevokeAllSessions(c *gin.Context) {
 		currentToken = authHeader[7:]
 		hasCurrentToken = true
 	}
+	currentTokenHash := hashToken(currentToken)
 
 	var sessions []model.UserSession
 	query := h.db.Where("user_id = ? AND revoked_at IS NULL", userID)
 
 	if hasCurrentToken {
-		query = query.Where("access_token != ?", currentToken)
+		query = query.Where("access_token_hash != ?", currentTokenHash)
 	}
 
 	if err := query.Find(&sessions).Error; err != nil {
@@ -292,7 +291,7 @@ func (h *Handler) RevokeAllSessions(c *gin.Context) {
 			Where("user_id = ? AND revoked_at IS NULL", userID)
 
 		if hasCurrentToken {
-			revokeQuery = revokeQuery.Where("access_token != ?", currentToken)
+			revokeQuery = revokeQuery.Where("access_token_hash != ?", currentTokenHash)
 		}
 
 		return revokeQuery.Updates(updates).Error
@@ -307,9 +306,9 @@ func (h *Handler) RevokeAllSessions(c *gin.Context) {
 		return
 	}
 
-	// Cache removal is not possible without the original tokens
-	// The cache entries will naturally expire based on their TTL
-	// The revoked_at flag in the database will prevent any cached tokens from being used
+	for i := range sessions {
+		_ = h.sessionCache.Set(c.Request.Context(), sessioncache.RevokedSessionMarkerKey(sessions[i].ID), []byte("1"), sessioncache.RevokedSessionMarkerTTL(&sessions[i]))
+	}
 
 	response.Success(c, gin.H{
 		"message":        "all other sessions revoked successfully",

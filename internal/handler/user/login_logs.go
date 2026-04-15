@@ -15,7 +15,7 @@ import (
 
 // RegisterLoginLogRoutes registers login log routes
 func (h *Handler) RegisterLoginLogRoutes(rg *gin.RouterGroup) {
-	rg.GET("/:id/login-logs", h.GetLoginLogs)
+	rg.GET("/:id/login-logs", middleware.SelfOrCasbinPermission(), h.GetLoginLogs)
 }
 
 // GetLoginLogs returns user's login history with pagination
@@ -40,21 +40,6 @@ func (h *Handler) GetLoginLogs(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
 		response.BadRequestWithCode(c, "INVALID_USER_ID", "invalid user id", nil)
-		return
-	}
-
-	// Check if the current user can view these logs
-	currentUserID, exists := middleware.GetUserID(c)
-	if !exists {
-		response.UnauthorizedWithCode(c, "UNAUTHORIZED", "authentication required", nil)
-		return
-	}
-
-	// Users can only view their own logs unless they have admin permissions
-	if currentUserID != userID {
-		// Check for admin permission (implement permission check)
-		// For now, we'll just deny access
-		response.ForbiddenWithCode(c, "FORBIDDEN", "can only view your own login logs", nil)
 		return
 	}
 

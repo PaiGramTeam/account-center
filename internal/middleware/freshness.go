@@ -1,21 +1,19 @@
 package middleware
 
 import (
-	"errors"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 
 	"paigram/internal/config"
-	"paigram/internal/model"
 	"paigram/internal/response"
+	"paigram/internal/service"
 )
 
 // RequireFreshSession creates middleware that ensures the session is "fresh"
 // A fresh session is one that was created recently (within freshAge)
 // This is used for sensitive operations like password changes, 2FA setup, etc.
-func RequireFreshSession(db *gorm.DB, authCfg config.AuthConfig) gin.HandlerFunc {
+func RequireFreshSession(authCfg config.AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get session ID from context (set by AuthMiddleware)
 		sessionIDRaw, exists := c.Get("session_id")
@@ -32,19 +30,22 @@ func RequireFreshSession(db *gorm.DB, authCfg config.AuthConfig) gin.HandlerFunc
 			return
 		}
 
-		// Get session from database
-		var session model.UserSession
-		if err := db.First(&session, sessionID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				response.UnauthorizedWithCode(c, "SESSION_NOT_FOUND", "session not found", nil)
-			} else {
-				response.InternalServerErrorWithCode(c, "DATABASE_ERROR", "failed to query session", nil)
-			}
+		// Get session from database via MiddlewareService
+		middlewareService := &service.ServiceGroupApp.UserServiceGroup.MiddlewareService
+		sessionPtr, err := middlewareService.GetSessionByID(sessionID)
+		if err != nil {
+			response.InternalServerErrorWithCode(c, "SESSION_ERROR", "failed to validate session", nil)
 			c.Abort()
 			return
 		}
+		if sessionPtr == nil {
+			response.UnauthorizedWithCode(c, "SESSION_NOT_FOUND", "session not found", nil)
+			c.Abort()
+			return
+		}
+		session := *sessionPtr
 
-		// Check session freshness
+		// Check session freshness based on CreatedAt
 		freshAge := time.Duration(authCfg.SessionFreshAgeSeconds) * time.Second
 		if freshAge <= 0 {
 			freshAge = 24 * time.Hour // Default: 1 day (same as better-auth)
@@ -70,7 +71,7 @@ func RequireFreshSession(db *gorm.DB, authCfg config.AuthConfig) gin.HandlerFunc
 
 // OptionalFreshSession is similar to RequireFreshSession but doesn't abort
 // It sets a context flag indicating whether the session is fresh
-func OptionalFreshSession(db *gorm.DB, authCfg config.AuthConfig) gin.HandlerFunc {
+func OptionalFreshSession(authCfg config.AuthConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		sessionIDRaw, exists := c.Get("session_id")
 		if !exists {
@@ -86,19 +87,22 @@ func OptionalFreshSession(db *gorm.DB, authCfg config.AuthConfig) gin.HandlerFun
 			return
 		}
 
-		var session model.UserSession
-		if err := db.First(&session, sessionID).Error; err != nil {
+		// Get session from database via MiddlewareService
+		middlewareService := &service.ServiceGroupApp.UserServiceGroup.MiddlewareService
+		sessionPtr, err := middlewareService.GetSessionByID(sessionID)
+		if err != nil || sessionPtr == nil {
 			c.Set("session_is_fresh", false)
 			c.Next()
 			return
 		}
 
+		// Check session freshness based on CreatedAt
 		freshAge := time.Duration(authCfg.SessionFreshAgeSeconds) * time.Second
 		if freshAge <= 0 {
 			freshAge = 24 * time.Hour
 		}
 
-		isFresh := time.Since(session.CreatedAt) <= freshAge
+		isFresh := time.Since(sessionPtr.CreatedAt) <= freshAge
 		c.Set("session_is_fresh", isFresh)
 
 		c.Next()

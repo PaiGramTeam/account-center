@@ -8,21 +8,20 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/model"
-	permMgr "paigram/internal/permission"
 	"paigram/internal/response"
 )
 
 // Handler manages permission-related HTTP requests.
+// Deprecated: This handler is deprecated. Use Casbin-based authorization instead.
 type Handler struct {
-	db      *gorm.DB
-	permMgr *permMgr.Manager
+	db *gorm.DB
 }
 
 // NewHandler creates a new permission handler.
-func NewHandler(db *gorm.DB, pm *permMgr.Manager) *Handler {
+// Deprecated: This handler is deprecated. Use Casbin-based authorization instead.
+func NewHandler(db *gorm.DB) *Handler {
 	return &Handler{
-		db:      db,
-		permMgr: pm,
+		db: db,
 	}
 }
 
@@ -50,6 +49,8 @@ type CreatePermissionRequest struct {
 //
 // This endpoint returns a paginated list of all permissions in the system.
 //
+// Deprecated: This endpoint is deprecated. Use Casbin-based authorization instead.
+//
 // Produces:
 // - application/json
 //
@@ -69,6 +70,7 @@ type CreatePermissionRequest struct {
 // @Success 200 {object} response.PaginatedResponse
 // @Failure 500 {object} gin.H
 // @Router /api/v1/permissions [get]
+// @deprecated
 func (h *Handler) ListPermissions(c *gin.Context) {
 	// Parse pagination parameters
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -137,6 +139,7 @@ func (h *Handler) ListPermissions(c *gin.Context) {
 // @Failure 404 {object} gin.H
 // @Failure 500 {object} gin.H
 // @Router /api/v1/permissions/{id} [get]
+// @deprecated
 func (h *Handler) GetPermission(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -167,6 +170,7 @@ func (h *Handler) GetPermission(c *gin.Context) {
 // @Failure 400 {object} gin.H
 // @Failure 500 {object} gin.H
 // @Router /api/v1/permissions [post]
+// @deprecated
 func (h *Handler) CreatePermission(c *gin.Context) {
 	var req CreatePermissionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -174,8 +178,14 @@ func (h *Handler) CreatePermission(c *gin.Context) {
 		return
 	}
 
-	perm, err := h.permMgr.CreatePermission(req.Name, req.Resource, req.Action, req.Description)
-	if err != nil {
+	perm := model.Permission{
+		Name:        req.Name,
+		Resource:    req.Resource,
+		Action:      req.Action,
+		Description: req.Description,
+	}
+
+	if err := h.db.Create(&perm).Error; err != nil {
 		response.InternalServerError(c, "failed to create permission")
 		return
 	}
@@ -192,6 +202,7 @@ func (h *Handler) CreatePermission(c *gin.Context) {
 // @Failure 404 {object} gin.H
 // @Failure 500 {object} gin.H
 // @Router /api/v1/permissions/{id} [delete]
+// @deprecated
 func (h *Handler) DeletePermission(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -199,11 +210,17 @@ func (h *Handler) DeletePermission(c *gin.Context) {
 		return
 	}
 
-	if err := h.permMgr.DeletePermission(id); err != nil {
-		if errors.Is(err, permMgr.ErrPermissionNotFound) {
+	var perm model.Permission
+	if err := h.db.First(&perm, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "permission not found")
 			return
 		}
+		response.InternalServerError(c, "failed to get permission")
+		return
+	}
+
+	if err := h.db.Delete(&perm).Error; err != nil {
 		response.InternalServerError(c, "failed to delete permission")
 		return
 	}

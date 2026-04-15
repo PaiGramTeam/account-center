@@ -24,6 +24,8 @@ import (
 	"paigram/internal/sessioncache"
 )
 
+var errRefreshTokenRotated = errors.New("refresh token already rotated")
+
 type registerEmailRequest struct {
 	Email        string `json:"email" binding:"required,email"`
 	Password     string `json:"password" binding:"required,min=8,max=72"`
@@ -538,6 +540,8 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		err = h.db.First(&session, sessionID).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
+		} else if err == nil && session.RefreshTokenHash != refreshTokenHash {
+			err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
 		}
 	} else {
 		err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
@@ -556,14 +560,26 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		// 撤销该用户的所有 session 作为安全措施
 		log.Printf("[security] Attempt to use revoked refresh token detected for user %d - revoking all sessions", session.UserID)
 
-		h.db.Transaction(func(tx *gorm.DB) error {
+		var activeSessions []model.UserSession
+		if err := h.db.Where("user_id = ? AND revoked_at IS NULL", session.UserID).Find(&activeSessions).Error; err != nil {
+			response.InternalServerError(c, "failed to revoke reused token sessions")
+			return
+		}
+
+		if err := h.db.Transaction(func(tx *gorm.DB) error {
 			return tx.Model(&model.UserSession{}).
 				Where("user_id = ? AND revoked_at IS NULL", session.UserID).
 				Updates(map[string]interface{}{
 					"revoked_at":     now,
 					"revoked_reason": "token_reuse_detected",
 				}).Error
-		})
+		}); err != nil {
+			response.InternalServerError(c, "failed to revoke reused token sessions")
+			return
+		}
+		for i := range activeSessions {
+			h.clearCurrentAccessHashMarker(activeSessions[i].ID)
+		}
 
 		response.UnauthorizedWithCode(c, "TOKEN_REUSE_DETECTED", "security violation: token reuse detected, all sessions revoked", nil)
 		return
@@ -583,23 +599,36 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 	prevSession := session
 	var newAccessToken, newRefreshToken string
 
-	// Check if this session was recently refreshed (within last 5 seconds)
-	// This could indicate a replay attack or race condition
-	if time.Since(session.UpdatedAt) < 5*time.Second {
+	// Detect rapid repeat refreshes only after a successful refresh has already occurred.
+	if _, err := h.sessionCache.Get(ctx, rapidRefreshGuardKey(session.ID)); err == nil {
 		log.Printf("[security] Refresh token used too quickly after last refresh for session %d - possible replay attack", session.ID)
 
 		// Revoke this session and all user sessions as a security measure
-		h.db.Transaction(func(tx *gorm.DB) error {
+		var userSessions []model.UserSession
+		if err := h.db.Where("user_id = ? AND revoked_at IS NULL", session.UserID).Find(&userSessions).Error; err != nil {
+			response.InternalServerError(c, "failed to revoke rapid refresh sessions")
+			return
+		}
+
+		if err := h.db.Transaction(func(tx *gorm.DB) error {
 			return tx.Model(&model.UserSession{}).
 				Where("user_id = ?", session.UserID).
 				Updates(map[string]interface{}{
 					"revoked_at":     now,
 					"revoked_reason": "rapid_refresh_detected",
 				}).Error
-		})
+		}); err != nil {
+			response.InternalServerError(c, "failed to revoke rapid refresh sessions")
+			return
+		}
+		for i := range userSessions {
+			h.clearCurrentAccessHashMarker(userSessions[i].ID)
+		}
 
 		response.UnauthorizedWithCode(c, "RAPID_REFRESH_DETECTED", "security violation: rapid token refresh detected", nil)
 		return
+	} else if err != nil && !errorsIsRedisNil(err) {
+		log.Printf("failed to read rapid refresh guard: %v", err)
 	}
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
@@ -634,20 +663,30 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 			"updated_at":         now,
 		}
 
-		if err := tx.Model(&model.UserSession{}).Where("id = ?", session.ID).Updates(updates).Error; err != nil {
-			return err
+		result := tx.Model(&model.UserSession{}).
+			Where("id = ? AND refresh_token_hash = ? AND revoked_at IS NULL", session.ID, refreshTokenHash).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errRefreshTokenRotated
 		}
 
 		return nil
 	})
 
 	if err != nil {
+		if errors.Is(err, errRefreshTokenRotated) {
+			response.Unauthorized(c, "invalid refresh token")
+			return
+		}
 		response.InternalServerError(c, "failed to refresh token")
 		return
 	}
 
 	// Revoke old tokens from cache
-	h.cacheRevokeSessionTokens(&prevSession, req.RefreshToken, "")
+	h.cacheRevokeSessionTokens(&prevSession, "", req.RefreshToken)
 
 	// Reload updated session
 	var newSession model.UserSession
@@ -658,6 +697,9 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 
 	// Cache new tokens
 	h.cacheStoreSessionWithTokens(&newSession, newAccessToken, newRefreshToken)
+	if err := h.sessionCache.Set(ctx, rapidRefreshGuardKey(newSession.ID), []byte("1"), 5*time.Second); err != nil && !errorsIsRedisNil(err) {
+		log.Printf("failed to store rapid refresh guard: %v", err)
+	}
 
 	responseData := map[string]interface{}{
 		"user_id":        newSession.UserID,

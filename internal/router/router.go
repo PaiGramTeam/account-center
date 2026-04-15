@@ -13,21 +13,17 @@ import (
 	"paigram/internal/geolocation"
 	"paigram/internal/handler"
 	authhandler "paigram/internal/handler/auth"
-	permissionhandler "paigram/internal/handler/permission"
 	profilehandler "paigram/internal/handler/profile"
-	rolehandler "paigram/internal/handler/role"
 	securityhandler "paigram/internal/handler/security"
 	sessionhandler "paigram/internal/handler/session"
 	"paigram/internal/middleware"
-	"paigram/internal/model"
 	"paigram/internal/observability"
-	"paigram/internal/permission"
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
 )
 
 // New initialises the Gin router with application routes.
-func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitStore limiter.Store, emailService *email.Service) *gin.Engine {
+func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitStore limiter.Store, emailService *email.Service) (*gin.Engine, error) {
 	appCfg := cfg.App
 	authCfg := cfg.Auth
 	rateLimitCfg := cfg.RateLimit
@@ -74,7 +70,9 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	registerSwagger(engine)
 
 	// Initialize handler groups with dependencies
-	handler.InitializeApiGroups(db)
+	if err := handler.InitializeApiGroups(db, cache); err != nil {
+		return nil, fmt.Errorf("initialize api groups: %w", err)
+	}
 
 	// swagger:route GET /healthz health healthCheck
 	//
@@ -185,12 +183,9 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 		}
 	}
 
-	// Initialize permission manager
-	permMgr := permission.NewManager(db)
-
 	// Protected routes - require authentication
 	protected := v1.Group("")
-	protected.Use(middleware.AuthMiddleware(db, cache, authCfg))
+	protected.Use(middleware.AuthMiddleware(cache, authCfg))
 
 	// Apply rate limiting to authenticated endpoints if enabled
 	if rateLimitCfg.Enabled && rateLimitStore != nil {
@@ -201,18 +196,18 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 		}))
 	}
 
-	// User management routes - delegated to router group
-	InitializeRouterGroups(protected, db, permMgr)
+	// User, authority, and casbin policy routes - delegated to router groups
+	InitializeRouterGroups(protected, db)
 
 	// Profile management routes
 	profileHandler := profilehandler.NewHandler(db, authCfg)
 	profiles := protected.Group("/profiles")
 	{
 		// Get profile - self or requires user:read permission
-		profiles.GET("/:id", middleware.SelfOrPermission(permMgr, model.PermUserRead), profileHandler.GetProfile)
+		profiles.GET("/:id", middleware.SelfOrCasbinPermission(), profileHandler.GetProfile)
 
 		// Update profile - self or requires user:write permission
-		profiles.PATCH("/:id", middleware.SelfOrPermission(permMgr, model.PermUserWrite), profileHandler.UpdateProfile)
+		profiles.PATCH("/:id", middleware.SelfOrCasbinPermission(), profileHandler.UpdateProfile)
 
 		// Account binding - only self can manage
 		profiles.GET("/:id/accounts", middleware.RequireSelf(), profileHandler.GetBoundAccounts)
@@ -236,7 +231,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 
 		// Routes that REQUIRE fresh session (sensitive operations)
 		freshSecurity := security.Group("")
-		freshSecurity.Use(middleware.RequireFreshSession(db, authCfg))
+		freshSecurity.Use(middleware.RequireFreshSession(authCfg))
 		{
 			freshSecurity.POST("/:id/password/change", securityHandler.ChangePassword)
 			freshSecurity.POST("/:id/2fa/enable", securityHandler.Enable2FA)
@@ -252,29 +247,6 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	sessions := protected.Group("/sessions")
 	{
 		sessionHandler.RegisterRoutes(sessions)
-	}
-
-	// Role management routes
-	roleHandler := rolehandler.NewHandler(db, permMgr)
-	roles := protected.Group("/roles")
-	{
-		roles.GET("", middleware.PermissionMiddleware(permMgr, model.PermRoleRead), roleHandler.ListRoles)
-		roles.GET("/:id", middleware.PermissionMiddleware(permMgr, model.PermRoleRead), roleHandler.GetRole)
-		roles.POST("", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.CreateRole)
-		roles.PUT("/:id", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.UpdateRole)
-		roles.DELETE("/:id", middleware.PermissionMiddleware(permMgr, model.PermRoleDelete), roleHandler.DeleteRole)
-		roles.POST("/:id/permissions", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.AssignPermissionToRole)
-		roles.DELETE("/:id/permissions/:permissionId", middleware.PermissionMiddleware(permMgr, model.PermRoleWrite), roleHandler.RemovePermissionFromRole)
-	}
-
-	// Permission management routes
-	permissionHandler := permissionhandler.NewHandler(db, permMgr)
-	permissions := protected.Group("/permissions")
-	{
-		permissions.GET("", middleware.PermissionMiddleware(permMgr, model.PermPermissionRead), permissionHandler.ListPermissions)
-		permissions.GET("/:id", middleware.PermissionMiddleware(permMgr, model.PermPermissionRead), permissionHandler.GetPermission)
-		permissions.POST("", middleware.PermissionMiddleware(permMgr, model.PermPermissionWrite), permissionHandler.CreatePermission)
-		permissions.DELETE("/:id", middleware.PermissionMiddleware(permMgr, model.PermPermissionDelete), permissionHandler.DeletePermission)
 	}
 
 	// swagger:route GET / general getRoot
@@ -294,5 +266,5 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 		})
 	})
 
-	return engine
+	return engine, nil
 }

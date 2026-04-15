@@ -9,21 +9,18 @@ import (
 
 	"paigram/internal/middleware"
 	"paigram/internal/model"
-	"paigram/internal/permission"
 	"paigram/internal/response"
 )
 
 // Handler manages role-related HTTP requests.
 type Handler struct {
-	db      *gorm.DB
-	permMgr *permission.Manager
+	db *gorm.DB
 }
 
 // NewHandler creates a new role handler.
-func NewHandler(db *gorm.DB, permMgr *permission.Manager) *Handler {
+func NewHandler(db *gorm.DB) *Handler {
 	return &Handler{
-		db:      db,
-		permMgr: permMgr,
+		db: db,
 	}
 }
 
@@ -158,9 +155,9 @@ func (h *Handler) GetRole(c *gin.Context) {
 		return
 	}
 
-	role, err := h.permMgr.GetRoleByID(id)
-	if err != nil {
-		if errors.Is(err, permission.ErrRoleNotFound) {
+	var role model.Role
+	if err := h.db.Preload("Permissions").First(&role, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "role not found")
 			return
 		}
@@ -188,8 +185,14 @@ func (h *Handler) CreateRole(c *gin.Context) {
 		return
 	}
 
-	role, err := h.permMgr.CreateRole(req.Name, req.DisplayName, req.Description, false)
-	if err != nil {
+	role := model.Role{
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		Description: req.Description,
+		IsSystem:    false,
+	}
+
+	if err := h.db.Create(&role).Error; err != nil {
 		response.InternalServerError(c, "failed to create role")
 		return
 	}
@@ -222,13 +225,29 @@ func (h *Handler) UpdateRole(c *gin.Context) {
 		return
 	}
 
-	role, err := h.permMgr.UpdateRole(id, req.DisplayName, req.Description)
-	if err != nil {
-		if errors.Is(err, permission.ErrRoleNotFound) {
+	var role model.Role
+	if err := h.db.First(&role, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "role not found")
 			return
 		}
+		response.InternalServerError(c, "failed to get role")
+		return
+	}
+
+	updates := map[string]interface{}{
+		"display_name": req.DisplayName,
+		"description":  req.Description,
+	}
+
+	if err := h.db.Model(&role).Updates(updates).Error; err != nil {
 		response.InternalServerError(c, "failed to update role")
+		return
+	}
+
+	// Reload role with associations
+	if err := h.db.Preload("Permissions").First(&role, id).Error; err != nil {
+		response.InternalServerError(c, "failed to reload role")
 		return
 	}
 
@@ -252,15 +271,22 @@ func (h *Handler) DeleteRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.permMgr.DeleteRole(id); err != nil {
-		if errors.Is(err, permission.ErrRoleNotFound) {
+	var role model.Role
+	if err := h.db.First(&role, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "role not found")
 			return
 		}
-		if errors.Is(err, permission.ErrCannotDeleteSystemRole) {
-			response.Forbidden(c, "cannot delete system role")
-			return
-		}
+		response.InternalServerError(c, "failed to get role")
+		return
+	}
+
+	if role.IsSystem {
+		response.Forbidden(c, "cannot delete system role")
+		return
+	}
+
+	if err := h.db.Delete(&role).Error; err != nil {
 		response.InternalServerError(c, "failed to delete role")
 		return
 	}
@@ -293,15 +319,30 @@ func (h *Handler) AssignPermissionToRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.permMgr.AssignPermissionToRole(roleID, req.PermissionID); err != nil {
-		if errors.Is(err, permission.ErrRoleNotFound) {
+	// Check if role exists
+	var role model.Role
+	if err := h.db.First(&role, roleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "role not found")
 			return
 		}
-		if errors.Is(err, permission.ErrPermissionNotFound) {
+		response.InternalServerError(c, "failed to get role")
+		return
+	}
+
+	// Check if permission exists
+	var permission model.Permission
+	if err := h.db.First(&permission, req.PermissionID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "permission not found")
 			return
 		}
+		response.InternalServerError(c, "failed to get permission")
+		return
+	}
+
+	// Assign permission to role using GORM's association API
+	if err := h.db.Model(&role).Association("Permissions").Append(&permission); err != nil {
 		response.InternalServerError(c, "failed to assign permission")
 		return
 	}
@@ -332,15 +373,30 @@ func (h *Handler) RemovePermissionFromRole(c *gin.Context) {
 		return
 	}
 
-	if err := h.permMgr.RemovePermissionFromRole(roleID, permissionID); err != nil {
-		if errors.Is(err, permission.ErrRoleNotFound) {
+	// Check if role exists
+	var role model.Role
+	if err := h.db.First(&role, roleID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "role not found")
 			return
 		}
-		if errors.Is(err, permission.ErrPermissionNotFound) {
+		response.InternalServerError(c, "failed to get role")
+		return
+	}
+
+	// Check if permission exists
+	var permission model.Permission
+	if err := h.db.First(&permission, permissionID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "permission not found")
 			return
 		}
+		response.InternalServerError(c, "failed to get permission")
+		return
+	}
+
+	// Remove permission from role using GORM's association API
+	if err := h.db.Model(&role).Association("Permissions").Delete(&permission); err != nil {
 		response.InternalServerError(c, "failed to remove permission")
 		return
 	}

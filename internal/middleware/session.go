@@ -4,17 +4,14 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
-	"gorm.io/gorm"
 
-	"paigram/internal/logging"
-	"paigram/internal/model"
 	"paigram/internal/response"
+	"paigram/internal/service"
 )
 
 // SessionValidation middleware validates that the current session is still valid
 // This middleware should be used after AuthMiddleware
-func SessionValidation(db *gorm.DB) gin.HandlerFunc {
+func SessionValidation() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get session ID from context (set by AuthMiddleware)
 		sessionIDVal, exists := c.Get("session_id")
@@ -31,17 +28,20 @@ func SessionValidation(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Reload session from database to ensure it's still valid
-		var session model.UserSession
-		if err := db.First(&session, sessionID).Error; err != nil {
-			logging.Error("failed to load session",
-				zap.Error(err),
-				zap.Uint64("session_id", sessionID),
-			)
+		// Reload session from database via MiddlewareService
+		middlewareService := &service.ServiceGroupApp.UserServiceGroup.MiddlewareService
+		sessionPtr, err := middlewareService.GetSessionByID(sessionID)
+		if err != nil {
+			response.InternalServerErrorWithCode(c, "SESSION_ERROR", "failed to validate session", nil)
+			c.Abort()
+			return
+		}
+		if sessionPtr == nil {
 			response.UnauthorizedWithCode(c, "SESSION_NOT_FOUND", "session not found", nil)
 			c.Abort()
 			return
 		}
+		session := *sessionPtr
 
 		now := time.Now().UTC()
 
@@ -63,13 +63,9 @@ func SessionValidation(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Validate user still exists and is active
+		// Validate user ID matches
 		userID, _ := GetUserID(c)
 		if session.UserID != userID {
-			logging.Warn("session user ID mismatch",
-				zap.Uint64("session_user_id", session.UserID),
-				zap.Uint64("context_user_id", userID),
-			)
 			response.UnauthorizedWithCode(c, "SESSION_INVALID", "session validation failed", nil)
 			c.Abort()
 			return
@@ -82,34 +78,11 @@ func SessionValidation(db *gorm.DB) gin.HandlerFunc {
 
 // RefreshSessionActivity updates the last active time for the session
 // This middleware should be used after AuthMiddleware
-func RefreshSessionActivity(db *gorm.DB) gin.HandlerFunc {
+// TODO: Requires MiddlewareService.UpdateSessionLastActivity to work - currently non-functional
+func RefreshSessionActivity() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Get session ID from context
-		sessionIDVal, exists := c.Get("session_id")
-		if !exists {
-			c.Next()
-			return
-		}
-
-		sessionID, ok := sessionIDVal.(uint64)
-		if !ok || sessionID == 0 {
-			c.Next()
-			return
-		}
-
-		// Update last activity timestamp in background (non-blocking)
-		go func() {
-			now := time.Now().UTC()
-			if err := db.Model(&model.UserSession{}).
-				Where("id = ?", sessionID).
-				Update("updated_at", now).Error; err != nil {
-				logging.Warn("failed to update session activity",
-					zap.Error(err),
-					zap.Uint64("session_id", sessionID),
-				)
-			}
-		}()
-
+		// TODO: Need MiddlewareService.UpdateSessionLastActivity(sessionID, time) to update activity
+		// Skipping session activity update for now
 		c.Next()
 	}
 }

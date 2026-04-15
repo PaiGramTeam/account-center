@@ -1,12 +1,16 @@
 package seed
 
 import (
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"paigram/internal/casbin"
 	"paigram/internal/model"
 	"paigram/internal/testutil"
 )
@@ -113,10 +117,39 @@ func TestSeedRoles_UpdatePermissions(t *testing.T) {
 	assert.Equal(t, initialPermCount, len(adminRole.Permissions))
 }
 
+func TestSeedRoles_ClearsStalePermissionsForEmptyRole(t *testing.T) {
+	db := setupTestDB(t)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+
+	var guestRole model.Role
+	err := db.Where("name = ?", model.RoleGuest).First(&guestRole).Error
+	require.NoError(t, err)
+
+	var userReadPermission model.Permission
+	err = db.Where("name = ?", model.BuildPermissionName(model.ResourceUser, model.ActionRead)).First(&userReadPermission).Error
+	require.NoError(t, err)
+
+	staleAssignment := model.RolePermission{RoleID: guestRole.ID, PermissionID: userReadPermission.ID}
+	require.NoError(t, db.Create(&staleAssignment).Error)
+
+	require.NoError(t, SeedRoles(db))
+
+	var count int64
+	err = db.Model(&model.RolePermission{}).Where("role_id = ?", guestRole.ID).Count(&count).Error
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
 func TestRun(t *testing.T) {
 	db := setupTestDB(t)
 
-	err := Run(db)
+	// Initialize Casbin enforcer before seeding
+	_, err := casbin.InitEnforcer(db)
+	require.NoError(t, err)
+
+	err = Run(db)
 	require.NoError(t, err)
 
 	// Verify permissions exist
@@ -130,6 +163,156 @@ func TestRun(t *testing.T) {
 	err = db.Model(&model.Role{}).Count(&roleCount).Error
 	require.NoError(t, err)
 	assert.Greater(t, roleCount, int64(0))
+}
+
+func TestSeedCasbinPoliciesAddsMissingRulesWhenPoliciesAlreadyExist(t *testing.T) {
+	db := setupTestDB(t)
+	casbin.Reset()
+	t.Cleanup(casbin.Reset)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+	_, err := casbin.InitEnforcer(db)
+	require.NoError(t, err)
+
+	var adminRole model.Role
+	err = db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error
+	require.NoError(t, err)
+	adminID := strconv.FormatUint(adminRole.ID, 10)
+
+	enforcer := casbin.GetEnforcer()
+	_, err = enforcer.AddPolicy(adminID, "/api/v1/users", "GET")
+	require.NoError(t, err)
+
+	err = SeedCasbinPolicies(db)
+	require.NoError(t, err)
+
+	hasPolicy, err := enforcer.Enforce(adminID, "/api/v1/casbin/authorities/1/policies", "GET")
+	require.NoError(t, err)
+	assert.True(t, hasPolicy)
+
+	hasPolicy, err = enforcer.Enforce(adminID, "/api/v1/authorities/1/permissions", "POST")
+	require.NoError(t, err)
+	assert.True(t, hasPolicy)
+}
+
+func TestSeedCasbinPoliciesInitializesEnforcerWhenNeeded(t *testing.T) {
+	db := setupTestDB(t)
+	casbin.Reset()
+	t.Cleanup(casbin.Reset)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+
+	require.NotPanics(t, func() {
+		err := SeedCasbinPolicies(db)
+		require.NoError(t, err)
+	})
+
+	enforcer := casbin.GetEnforcer()
+	require.NotNil(t, enforcer)
+
+	var adminRole model.Role
+	err := db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error
+	require.NoError(t, err)
+
+	hasPolicy, err := enforcer.Enforce(strconv.FormatUint(adminRole.ID, 10), "/api/v1/casbin/authorities/1/policies", "GET")
+	require.NoError(t, err)
+	assert.True(t, hasPolicy)
+}
+
+func TestSeedCasbinPoliciesRemovesObsoleteBuiltInRolePoliciesOnly(t *testing.T) {
+	db := setupTestDB(t)
+	casbin.Reset()
+	t.Cleanup(casbin.Reset)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+	_, err := casbin.InitEnforcer(db)
+	require.NoError(t, err)
+
+	customRole := model.Role{Name: "custom-task1-role", DisplayName: "Custom", Description: "custom test role"}
+	require.NoError(t, db.Create(&customRole).Error)
+
+	var adminRole model.Role
+	err = db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error
+	require.NoError(t, err)
+
+	enforcer := casbin.GetEnforcer()
+	adminID := strconv.FormatUint(adminRole.ID, 10)
+	customID := strconv.FormatUint(customRole.ID, 10)
+
+	_, err = enforcer.AddPolicy(adminID, "/api/v1/menu", "GET")
+	require.NoError(t, err)
+	_, err = enforcer.AddPolicy(customID, "/api/v1/menu", "GET")
+	require.NoError(t, err)
+
+	err = SeedCasbinPolicies(db)
+	require.NoError(t, err)
+
+	hasObsoleteAdminPolicy, err := enforcer.Enforce(adminID, "/api/v1/menu", "GET")
+	require.NoError(t, err)
+	assert.False(t, hasObsoleteAdminPolicy)
+
+	hasCustomPolicy, err := enforcer.Enforce(customID, "/api/v1/menu", "GET")
+	require.NoError(t, err)
+	assert.True(t, hasCustomPolicy)
+}
+
+func TestSeedCasbinPoliciesMatchesDefaultRolePermissionCatalog(t *testing.T) {
+	db := setupTestDB(t)
+	casbin.Reset()
+	t.Cleanup(casbin.Reset)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+	require.NoError(t, SeedCasbinPolicies(db))
+
+	enforcer := casbin.GetEnforcer()
+	for _, roleDef := range DefaultRoles {
+		var role model.Role
+		err := db.Where("name = ?", roleDef.Name).First(&role).Error
+		require.NoError(t, err)
+
+		actual := normalizePolicySet(enforcer.GetFilteredPolicy(0, strconv.FormatUint(role.ID, 10)))
+		expected := normalizePolicySet(buildSeedPolicies(strconv.FormatUint(role.ID, 10), casbin.PoliciesForSystemRole(roleDef.Name)))
+		assert.Equal(t, expected, actual, roleDef.Name)
+	}
+}
+
+func TestVerifySeedCasbinPoliciesDetectsMissingManagedPolicy(t *testing.T) {
+	db := setupTestDB(t)
+	casbin.Reset()
+	t.Cleanup(casbin.Reset)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+	require.NoError(t, SeedCasbinPolicies(db))
+
+	var adminRole model.Role
+	require.NoError(t, db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error)
+
+	enforcer := casbin.GetEnforcer()
+	removed, err := enforcer.RemovePolicy(strconv.FormatUint(adminRole.ID, 10), "/api/v1/casbin/authorities/:id/policies", "GET")
+	require.NoError(t, err)
+	require.True(t, removed)
+	require.NoError(t, enforcer.LoadPolicy())
+
+	drift, err := VerifySeedCasbinPolicies(db)
+	require.NoError(t, err)
+	require.Len(t, drift, 1)
+	assert.Equal(t, model.RoleAdmin, drift[0].RoleName)
+	assert.Contains(t, normalizePolicySet(drift[0].Missing), strings.Join([]string{strconv.FormatUint(adminRole.ID, 10), "/api/v1/casbin/authorities/:id/policies", "GET"}, "|"))
+	assert.Empty(t, drift[0].Unexpected)
+}
+
+func normalizePolicySet(policies [][]string) []string {
+	normalized := make([]string, 0, len(policies))
+	for _, policy := range policies {
+		normalized = append(normalized, strings.Join(policy, "|"))
+	}
+	slices.Sort(normalized)
+	return normalized
 }
 
 func TestCreateDefaultAdmin(t *testing.T) {
@@ -195,6 +378,10 @@ func TestCreateDefaultAdmin_Idempotent(t *testing.T) {
 	err = SeedRoles(db)
 	require.NoError(t, err)
 
+	t.Setenv("ADMIN_EMAIL", "idempotent-admin@example.com")
+	t.Setenv("ADMIN_PASSWORD", "IdempotentPass123!")
+	t.Setenv("ADMIN_NAME", "Idempotent Admin")
+
 	// Create admin first time
 	err = CreateDefaultAdmin(db)
 	require.NoError(t, err)
@@ -221,4 +408,46 @@ func TestCreateDefaultAdmin_WithoutAdminRole(t *testing.T) {
 	err := CreateDefaultAdmin(db)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "admin role not found")
+}
+
+func TestCreateDefaultAdmin_RequiresExplicitCredentials(t *testing.T) {
+	db := setupTestDB(t)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+
+	err := CreateDefaultAdmin(db)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ADMIN_EMAIL and ADMIN_PASSWORD must be set")
+}
+
+func TestCreateDefaultAdmin_CreatesReplacementWhenExistingAdminAssignmentIsInactive(t *testing.T) {
+	db := setupTestDB(t)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+
+	var adminRole model.Role
+	require.NoError(t, db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error)
+
+	inactiveUser := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusSuspended}
+	require.NoError(t, db.Create(&inactiveUser).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: inactiveUser.ID, RoleID: adminRole.ID, GrantedBy: inactiveUser.ID}).Error)
+
+	t.Setenv("ADMIN_EMAIL", "replacement-admin@example.com")
+	t.Setenv("ADMIN_PASSWORD", "ReplacementPass123!")
+	t.Setenv("ADMIN_NAME", "Replacement Admin")
+
+	require.NoError(t, CreateDefaultAdmin(db))
+
+	var activeAdminCount int64
+	require.NoError(t, db.Table("user_roles").
+		Joins("JOIN users ON users.id = user_roles.user_id").
+		Where("user_roles.role_id = ? AND users.status = ?", adminRole.ID, model.UserStatusActive).
+		Count(&activeAdminCount).Error)
+	assert.Equal(t, int64(1), activeAdminCount)
+
+	var totalUsers int64
+	require.NoError(t, db.Model(&model.User{}).Count(&totalUsers).Error)
+	assert.Equal(t, int64(2), totalUsers)
 }

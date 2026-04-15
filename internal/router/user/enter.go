@@ -6,15 +6,13 @@ import (
 
 	"paigram/internal/handler"
 	"paigram/internal/middleware"
-	"paigram/internal/model"
-	"paigram/internal/permission"
 )
 
 // RouterGroup holds user-related routers.
 type RouterGroup struct{}
 
 // Init registers user routes on the provided router group.
-func (r *RouterGroup) Init(rg *gin.RouterGroup, db *gorm.DB, permMgr *permission.Manager) {
+func (r *RouterGroup) Init(rg *gin.RouterGroup, db *gorm.DB) {
 	// Get user handler from global API group
 	userHandler := &handler.ApiGroupApp.UserApiGroup.Handler
 
@@ -22,43 +20,43 @@ func (r *RouterGroup) Init(rg *gin.RouterGroup, db *gorm.DB, permMgr *permission
 	users := rg.Group("/users")
 	{
 		// List users - requires user:read permission
-		users.GET("", middleware.PermissionMiddleware(permMgr, model.PermUserRead), userHandler.ListUsers)
+		users.GET("", middleware.CasbinMiddleware(), userHandler.ListUsers)
 
 		// Create user - requires user:write permission
-		users.POST("", middleware.PermissionMiddleware(permMgr, model.PermUserWrite), userHandler.CreateUser)
+		users.POST("", middleware.CasbinMiddleware(), userHandler.CreateUser)
 
 		// Get user - self or requires user:read permission
-		users.GET("/:id", middleware.SelfOrPermission(permMgr, model.PermUserRead), userHandler.GetUser)
+		users.GET("/:id", middleware.SelfOrCasbinPermission(), userHandler.GetUser)
 
 		// Update user - self or requires user:write permission
-		users.PATCH("/:id", middleware.SelfOrPermission(permMgr, model.PermUserWrite), userHandler.UpdateUser)
+		users.PATCH("/:id", middleware.SelfOrCasbinPermission(), userHandler.UpdateUser)
 
-		// Delete user - requires user:delete permission
-		users.DELETE("/:id", middleware.PermissionMiddleware(permMgr, model.PermUserDelete), userHandler.DeleteUser)
+		// Delete user - requires user:write permission
+		users.DELETE("/:id", middleware.CasbinMiddleware(), userHandler.DeleteUser)
 
-		// Update user status - requires admin role
-		users.PATCH("/:id/status", middleware.AdminMiddleware(permMgr), userHandler.UpdateUserStatus)
+		// Update user status - requires user:write permission
+		users.PATCH("/:id/status", middleware.CasbinMiddleware(), userHandler.UpdateUserStatus)
 
-		// Reset user password - requires admin role
-		users.POST("/:id/reset-password", middleware.AdminMiddleware(permMgr), userHandler.ResetUserPassword)
+		// Reset user password - requires user:write permission
+		users.POST("/:id/reset-password", middleware.CasbinMiddleware(), userHandler.ResetUserPassword)
 
 		// Get audit logs - self or requires audit:read permission
-		users.GET("/:id/audit-logs", middleware.SelfOrPermission(permMgr, model.PermAuditRead), userHandler.GetAuditLogs)
+		users.GET("/:id/audit-logs", middleware.SelfOrCasbinPermission(), userHandler.GetAuditLogs)
 
 		// Get user roles - self or requires role:read permission
-		users.GET("/:id/roles", middleware.SelfOrPermission(permMgr, model.PermRoleRead), userHandler.GetUserRoles)
+		users.GET("/:id/roles", middleware.SelfOrCasbinPermission(), userHandler.GetUserRoles)
 
 		// Get user permissions - self or requires permission:read permission
-		users.GET("/:id/permissions", middleware.SelfOrPermission(permMgr, model.PermPermissionRead), userHandler.GetUserPermissions)
+		users.GET("/:id/permissions", middleware.SelfOrCasbinPermission(), userHandler.GetUserPermissions)
 
 		// Get user sessions - self or requires user:manage permission
-		users.GET("/:id/sessions", middleware.SelfOrPermission(permMgr, model.PermUserManage), userHandler.GetUserSessions)
+		users.GET("/:id/sessions", middleware.SelfOrCasbinPermission(), userHandler.GetUserSessions)
 
 		// Revoke a user session - self or requires user:manage permission
-		users.DELETE("/:id/sessions/:sessionId", middleware.SelfOrPermission(permMgr, model.PermUserManage), userHandler.RevokeUserSession)
+		users.DELETE("/:id/sessions/:sessionId", middleware.SelfOrCasbinPermission(), userHandler.RevokeUserSession)
 
 		// Get user security summary - self or requires user:read permission
-		users.GET("/:id/security-summary", middleware.SelfOrPermission(permMgr, model.PermUserRead), userHandler.GetSecuritySummary)
+		users.GET("/:id/security-summary", middleware.SelfOrCasbinPermission(), userHandler.GetSecuritySummary)
 	}
 
 	// Login log routes (under /users path)

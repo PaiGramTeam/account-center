@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
@@ -19,12 +20,14 @@ import (
 	"paigram/internal/model"
 	"paigram/internal/response"
 	"paigram/internal/service/user"
+	"paigram/internal/sessioncache"
 )
 
 // Handler exposes REST handlers for user resources.
 type Handler struct {
-	userService UserServiceInterface
-	db          *gorm.DB // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
+	userService  UserServiceInterface
+	sessionCache sessioncache.Store
+	db           *gorm.DB // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
 }
 
 // UserServiceInterface defines the interface for user business logic.
@@ -38,14 +41,23 @@ type UserServiceInterface interface {
 
 // NewHandler constructs a handler with the provided user service.
 func NewHandler(userService UserServiceInterface) *Handler {
-	return &Handler{userService: userService}
+	return &Handler{userService: userService, sessionCache: sessioncache.NewNoopStore()}
 }
 
 // NewHandlerWithDB constructs a handler with both service and db (temporary during migration).
 func NewHandlerWithDB(userService UserServiceInterface, db *gorm.DB) *Handler {
+	return NewHandlerWithDBAndCache(userService, db, sessioncache.NewNoopStore())
+}
+
+// NewHandlerWithDBAndCache constructs a handler with both db and session cache dependencies.
+func NewHandlerWithDBAndCache(userService UserServiceInterface, db *gorm.DB, cache sessioncache.Store) *Handler {
+	if cache == nil {
+		cache = sessioncache.NewNoopStore()
+	}
 	return &Handler{
-		userService: userService,
-		db:          db,
+		userService:  userService,
+		sessionCache: cache,
+		db:           db,
 	}
 }
 
@@ -498,6 +510,7 @@ func (h *Handler) RevokeUserSession(c *gin.Context) {
 		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to revoke session", nil)
 		return
 	}
+	_ = h.sessionCache.Set(c.Request.Context(), sessioncache.RevokedSessionMarkerKey(session.ID), []byte("1"), sessioncache.RevokedSessionMarkerTTL(&session))
 
 	response.Success(c, gin.H{"message": "session revoked successfully"})
 }
@@ -567,12 +580,12 @@ func (h *Handler) GetSecuritySummary(c *gin.Context) {
 
 // CreateUser registers a new user account.
 // @Summary Create a new user
-// @Description Create a new user account with email authentication, profile information, and optional role assignments. This endpoint requires user:write permission. The password will be hashed using bcrypt before storage.
+// @Description Create a new user account with email authentication and profile information. This endpoint requires user:write permission. Role membership is managed via the authority domain. The password will be hashed using bcrypt before storage.
 // @Tags users
 // @Accept json
 // @Produce json
 // @Security BearerAuth
-// @Param body body CreateUserRequest true "User creation details including email, password, profile information, and optional roles"
+// @Param body body CreateUserRequest true "User creation details including email, password, and profile information"
 // @Success 201 {object} UserDetailResponse "User created successfully"
 // @Failure 400 {object} gin.H "Invalid request body or validation error"
 // @Failure 401 {object} gin.H "Unauthorized - authentication required"
@@ -582,19 +595,23 @@ func (h *Handler) GetSecuritySummary(c *gin.Context) {
 // @Router /api/v1/users [post]
 func (h *Handler) CreateUser(c *gin.Context) {
 	var req struct {
-		Email            string   `json:"email" binding:"required,email"`
-		Password         string   `json:"password" binding:"required,min=8,max=72"`
-		DisplayName      string   `json:"display_name" binding:"required,min=1,max=255"`
-		PrimaryLoginType string   `json:"primary_login_type" binding:"required,oneof=email oauth"`
-		AvatarURL        string   `json:"avatar_url" binding:"omitempty,url"`
-		Bio              string   `json:"bio" binding:"omitempty,max=500"`
-		Locale           string   `json:"locale" binding:"omitempty"`
-		Status           string   `json:"status" binding:"omitempty,oneof=pending active suspended deleted"`
-		Roles            []string `json:"roles" binding:"omitempty"`
+		Email            string    `json:"email" binding:"required,email"`
+		Password         string    `json:"password" binding:"required,min=8,max=72"`
+		DisplayName      string    `json:"display_name" binding:"required,min=1,max=255"`
+		PrimaryLoginType string    `json:"primary_login_type" binding:"required,oneof=email oauth"`
+		AvatarURL        string    `json:"avatar_url" binding:"omitempty,url"`
+		Bio              string    `json:"bio" binding:"omitempty,max=500"`
+		Locale           string    `json:"locale" binding:"omitempty"`
+		Status           string    `json:"status" binding:"omitempty,oneof=pending active suspended deleted"`
+		Roles            *[]string `json:"roles"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
 		response.BadRequest(c, err.Error())
+		return
+	}
+	if req.Roles != nil {
+		response.BadRequest(c, "roles must be managed via authorities")
 		return
 	}
 
@@ -632,9 +649,6 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		response.InternalServerError(c, "failed to hash password")
 		return
 	}
-
-	// Get actor ID for role assignment tracking
-	actorID, _ := middleware.GetUserID(c)
 
 	// Create user with all related records in transaction
 	var user model.User
@@ -676,39 +690,12 @@ func (h *Handler) CreateUser(c *gin.Context) {
 			return fmt.Errorf("failed to create credential: %w", err)
 		}
 
-		// 4. Assign roles if provided
-		if len(req.Roles) > 0 {
-			var roles []model.Role
-			if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
-				return fmt.Errorf("failed to find roles: %w", err)
-			}
-
-			if len(roles) != len(req.Roles) {
-				return errors.New("one or more roles not found")
-			}
-
-			for _, role := range roles {
-				userRole := model.UserRole{
-					UserID:    user.ID,
-					RoleID:    role.ID,
-					GrantedBy: actorID,
-				}
-				if err := tx.Create(&userRole).Error; err != nil {
-					return fmt.Errorf("failed to assign role: %w", err)
-				}
-			}
-		}
-
 		return nil
 	})
 
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			response.Conflict(c, "email already registered")
-			return
-		}
-		if strings.Contains(err.Error(), "roles not found") {
-			response.BadRequest(c, err.Error())
 			return
 		}
 		response.InternalServerError(c, err.Error())
@@ -732,9 +719,9 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	response.Created(c, userData)
 }
 
-// UpdateUser modifies user profile fields, locale, and roles.
+// UpdateUser modifies user profile fields and locale.
 // @Summary Update user information
-// @Description Update user profile fields (display name, avatar, bio), locale settings, and role assignments. Users can update their own profile or require user:write permission to update other users. Role updates require providing the complete new set of roles.
+// @Description Update user profile fields (display name, avatar, bio) and locale settings. Users can update their own profile or require user:write permission to update other users. Role membership is managed via the authority domain.
 // @Tags users
 // @Accept json
 // @Produce json
@@ -758,20 +745,21 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	}
 
 	var req struct {
-		DisplayName *string  `json:"display_name" binding:"omitempty,min=1,max=255"`
-		AvatarURL   *string  `json:"avatar_url" binding:"omitempty,url"`
-		Bio         *string  `json:"bio" binding:"omitempty,max=500"`
-		Locale      *string  `json:"locale" binding:"omitempty"`
-		Roles       []string `json:"roles" binding:"omitempty"`
+		DisplayName *string   `json:"display_name" binding:"omitempty,min=1,max=255"`
+		AvatarURL   *string   `json:"avatar_url" binding:"omitempty,url"`
+		Bio         *string   `json:"bio" binding:"omitempty,max=500"`
+		Locale      *string   `json:"locale" binding:"omitempty"`
+		Roles       *[]string `json:"roles"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
-
-	// Get actor ID for role assignment tracking
-	actorID, _ := middleware.GetUserID(c)
+	if req.Roles != nil {
+		response.BadRequest(c, "roles must be managed via authorities")
+		return
+	}
 
 	// Update user with transaction for multi-table operations
 	var user model.User
@@ -802,37 +790,6 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		if len(updates) > 0 {
 			if err := tx.Model(&model.UserProfile{}).Where("user_id = ?", userID).Updates(updates).Error; err != nil {
 				return fmt.Errorf("failed to update profile: %w", err)
-			}
-		}
-
-		// 3. Update roles if provided
-		if req.Roles != nil {
-			// Delete existing roles
-			if err := tx.Where("user_id = ?", userID).Delete(&model.UserRole{}).Error; err != nil {
-				return fmt.Errorf("failed to delete existing roles: %w", err)
-			}
-
-			// Add new roles
-			if len(req.Roles) > 0 {
-				var roles []model.Role
-				if err := tx.Where("name IN ?", req.Roles).Find(&roles).Error; err != nil {
-					return fmt.Errorf("failed to find roles: %w", err)
-				}
-
-				if len(roles) != len(req.Roles) {
-					return errors.New("one or more roles not found")
-				}
-
-				for _, role := range roles {
-					userRole := model.UserRole{
-						UserID:    userID,
-						RoleID:    role.ID,
-						GrantedBy: actorID,
-					}
-					if err := tx.Create(&userRole).Error; err != nil {
-						return fmt.Errorf("failed to assign role: %w", err)
-					}
-				}
 			}
 		}
 

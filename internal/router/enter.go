@@ -4,20 +4,29 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
-	"paigram/internal/permission"
+	routerAuthority "paigram/internal/router/authority"
+	routerCasbin "paigram/internal/router/casbin"
 	routerUser "paigram/internal/router/user"
 )
 
 // RouterGroup aggregates all router groups.
 type RouterGroup struct {
-	UserRouterGroup routerUser.RouterGroup
+	UserRouterGroup      routerUser.RouterGroup
+	CasbinRouterGroup    routerCasbin.RouterGroup
+	AuthorityRouterGroup routerAuthority.RouterGroup
 }
 
 // RouterGroupApp is the global router instance.
 var RouterGroupApp = new(RouterGroup)
 
 // InitializeRouterGroups sets up all router groups with dependencies.
-func InitializeRouterGroups(rg *gin.RouterGroup, db *gorm.DB, permMgr *permission.Manager) {
+func InitializeRouterGroups(rg *gin.RouterGroup, db *gorm.DB) {
 	// Initialize user router group
-	RouterGroupApp.UserRouterGroup.Init(rg, db, permMgr)
+	RouterGroupApp.UserRouterGroup.Init(rg, db)
+
+	// Initialize authority router group
+	RouterGroupApp.AuthorityRouterGroup.Init(rg, db)
+
+	// Initialize casbin router group
+	RouterGroupApp.CasbinRouterGroup.Init(rg, db)
 }

@@ -4,11 +4,22 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
+	"strconv"
 
 	"gorm.io/gorm"
 
+	"paigram/internal/casbin"
 	"paigram/internal/model"
 )
+
+// PolicyDrift reports managed Casbin policy mismatches for one seeded system role.
+type PolicyDrift struct {
+	RoleName   string
+	RoleID     string
+	Missing    [][]string
+	Unexpected [][]string
+}
 
 // DefaultPermissions defines the default permissions in the system.
 var DefaultPermissions = []struct {
@@ -69,44 +80,28 @@ var DefaultRoles = []struct {
 		DisplayName: "Administrator",
 		Description: "Full system access with all permissions",
 		IsSystem:    true,
-		Permissions: []string{
-			// All permissions
-			"user:create", "user:read", "user:update", "user:delete", "user:list",
-			"role:create", "role:read", "role:update", "role:delete", "role:list", "role:manage",
-			"permission:create", "permission:read", "permission:delete", "permission:list",
-			"bot:create", "bot:read", "bot:update", "bot:delete", "bot:list", "bot:manage",
-			"session:read", "session:delete", "session:list",
-			"audit:read", "audit:list",
-		},
+		Permissions: casbin.PermissionNamesForSystemRole(model.RoleAdmin),
 	},
 	{
 		Name:        model.RoleModerator,
 		DisplayName: "Moderator",
 		Description: "Limited administrative access for user and content management",
 		IsSystem:    true,
-		Permissions: []string{
-			"user:read", "user:update", "user:list",
-			"bot:read", "bot:list",
-			"session:read", "session:list",
-			"audit:read", "audit:list",
-		},
+		Permissions: casbin.PermissionNamesForSystemRole(model.RoleModerator),
 	},
 	{
 		Name:        model.RoleUser,
 		DisplayName: "Regular User",
 		Description: "Standard user with basic access",
 		IsSystem:    true,
-		Permissions: []string{
-			"user:read",
-			"bot:read", "bot:list",
-		},
+		Permissions: casbin.PermissionNamesForSystemRole(model.RoleUser),
 	},
 	{
 		Name:        model.RoleGuest,
 		DisplayName: "Guest",
 		Description: "Limited read-only access",
 		IsSystem:    true,
-		Permissions: []string{},
+		Permissions: casbin.PermissionNamesForSystemRole(model.RoleGuest),
 	},
 }
 
@@ -187,17 +182,15 @@ func SeedRoles(db *gorm.DB) error {
 
 // updateRolePermissions assigns permissions to a role.
 func updateRolePermissions(db *gorm.DB, role *model.Role, permissionNames []string) error {
-	if len(permissionNames) == 0 {
-		return nil
-	}
-
 	var permissions []model.Permission
-	if err := db.Where("name IN ?", permissionNames).Find(&permissions).Error; err != nil {
-		return fmt.Errorf("find permissions: %w", err)
-	}
+	if len(permissionNames) > 0 {
+		if err := db.Where("name IN ?", permissionNames).Find(&permissions).Error; err != nil {
+			return fmt.Errorf("find permissions: %w", err)
+		}
 
-	if len(permissions) != len(permissionNames) {
-		return fmt.Errorf("some permissions not found (expected %d, found %d)", len(permissionNames), len(permissions))
+		if len(permissions) != len(permissionNames) {
+			return fmt.Errorf("some permissions not found (expected %d, found %d)", len(permissionNames), len(permissions))
+		}
 	}
 
 	// Replace all permissions for this role
@@ -206,6 +199,183 @@ func updateRolePermissions(db *gorm.DB, role *model.Role, permissionNames []stri
 	}
 
 	return nil
+}
+
+// SeedCasbinPolicies adds Casbin policy seed data for default roles.
+func SeedCasbinPolicies(db *gorm.DB) error {
+	log.Println("Seeding Casbin policies...")
+
+	enforcer, err := casbin.InitEnforcer(db)
+	if err != nil {
+		return fmt.Errorf("init casbin enforcer: %w", err)
+	}
+
+	desiredPoliciesByRole, _, totalDesired, err := desiredSeedPoliciesByRole(db)
+	if err != nil {
+		return err
+	}
+
+	removedCount, addedCount, err := reconcileSeedPolicies(enforcer, desiredPoliciesByRole)
+	if err != nil {
+		return fmt.Errorf("failed to add casbin policies: %w", err)
+	}
+
+	log.Printf("Casbin policies reconciled: removed %d, added %d, desired %d", removedCount, addedCount, totalDesired)
+	return nil
+}
+
+// VerifySeedCasbinPolicies checks built-in role policies against the seed catalog.
+func VerifySeedCasbinPolicies(db *gorm.DB) ([]PolicyDrift, error) {
+	enforcer, err := casbin.InitEnforcer(db)
+	if err != nil {
+		return nil, fmt.Errorf("init casbin enforcer: %w", err)
+	}
+
+	desiredPoliciesByRole, roleNamesByID, _, err := desiredSeedPoliciesByRole(db)
+	if err != nil {
+		return nil, err
+	}
+
+	drift := make([]PolicyDrift, 0)
+	for roleID, desiredPolicies := range desiredPoliciesByRole {
+		missing, unexpected := diffPolicies(enforcer.GetFilteredPolicy(0, roleID), desiredPolicies)
+		if len(missing) == 0 && len(unexpected) == 0 {
+			continue
+		}
+
+		drift = append(drift, PolicyDrift{
+			RoleName:   roleNamesByID[roleID],
+			RoleID:     roleID,
+			Missing:    missing,
+			Unexpected: unexpected,
+		})
+	}
+
+	sort.Slice(drift, func(i, j int) bool {
+		return drift[i].RoleName < drift[j].RoleName
+	})
+
+	return drift, nil
+}
+
+func desiredSeedPoliciesByRole(db *gorm.DB) (map[string][][]string, map[string]string, int, error) {
+	desiredPoliciesByRole := make(map[string][][]string)
+	roleNamesByID := make(map[string]string)
+	totalDesired := 0
+
+	for _, roleDef := range DefaultRoles {
+		if !roleDef.IsSystem {
+			continue
+		}
+
+		var role model.Role
+		if err := db.Where("name = ?", roleDef.Name).First(&role).Error; err != nil {
+			return nil, nil, 0, fmt.Errorf("%s role not found: %w", roleDef.Name, err)
+		}
+
+		roleID := strconv.FormatUint(role.ID, 10)
+		policies := buildSeedPolicies(roleID, casbin.PoliciesForSystemRole(roleDef.Name))
+		desiredPoliciesByRole[roleID] = policies
+		roleNamesByID[roleID] = roleDef.Name
+		totalDesired += len(policies)
+	}
+
+	return desiredPoliciesByRole, roleNamesByID, totalDesired, nil
+}
+
+func buildSeedPolicies(roleID string, rules []casbin.PolicyRule) [][]string {
+	policies := make([][]string, 0, len(rules))
+	for _, rule := range rules {
+		policies = append(policies, []string{roleID, rule.Path, rule.Method})
+	}
+	return policies
+}
+
+func reconcileSeedPolicies(enforcer interface {
+	GetFilteredPolicy(fieldIndex int, fieldValues ...string) [][]string
+	RemovePolicy(params ...interface{}) (bool, error)
+	AddPolicy(params ...interface{}) (bool, error)
+	LoadPolicy() error
+}, desiredByRole map[string][][]string) (int, int, error) {
+	removedCount := 0
+	addedCount := 0
+	for roleID, desiredPolicies := range desiredByRole {
+		desiredSet := make(map[string]struct{}, len(desiredPolicies))
+		for _, policy := range desiredPolicies {
+			desiredSet[policyKey(policy[0], policy[1], policy[2])] = struct{}{}
+		}
+
+		for _, existing := range enforcer.GetFilteredPolicy(0, roleID) {
+			if _, ok := desiredSet[policyKey(existing[0], existing[1], existing[2])]; ok {
+				continue
+			}
+			removed, err := enforcer.RemovePolicy(existing[0], existing[1], existing[2])
+			if err != nil {
+				return removedCount, addedCount, err
+			}
+			if removed {
+				removedCount++
+			}
+		}
+
+		for _, policy := range desiredPolicies {
+			added, err := enforcer.AddPolicy(policy[0], policy[1], policy[2])
+			if err != nil {
+				return removedCount, addedCount, err
+			}
+			if added {
+				addedCount++
+			}
+		}
+	}
+
+	if err := enforcer.LoadPolicy(); err != nil {
+		return removedCount, addedCount, err
+	}
+
+	return removedCount, addedCount, nil
+}
+
+func diffPolicies(actualPolicies, desiredPolicies [][]string) ([][]string, [][]string) {
+	actualSet := make(map[string][]string, len(actualPolicies))
+	for _, policy := range actualPolicies {
+		actualSet[policyKey(policy[0], policy[1], policy[2])] = append([]string(nil), policy...)
+	}
+
+	desiredSet := make(map[string][]string, len(desiredPolicies))
+	for _, policy := range desiredPolicies {
+		desiredSet[policyKey(policy[0], policy[1], policy[2])] = append([]string(nil), policy...)
+	}
+
+	missing := make([][]string, 0)
+	for key, policy := range desiredSet {
+		if _, ok := actualSet[key]; ok {
+			continue
+		}
+		missing = append(missing, policy)
+	}
+
+	unexpected := make([][]string, 0)
+	for key, policy := range actualSet {
+		if _, ok := desiredSet[key]; ok {
+			continue
+		}
+		unexpected = append(unexpected, policy)
+	}
+
+	sortPolicyTuples(missing)
+	sortPolicyTuples(unexpected)
+	return missing, unexpected
+}
+
+func sortPolicyTuples(policies [][]string) {
+	sort.Slice(policies, func(i, j int) bool {
+		return policyKey(policies[i][0], policies[i][1], policies[i][2]) < policyKey(policies[j][0], policies[j][1], policies[j][2])
+	})
+}
+
+func policyKey(sub, obj, act string) string {
+	return sub + "\x00" + obj + "\x00" + act
 }
 
 // Run executes all seed functions in order.
@@ -218,6 +388,10 @@ func Run(db *gorm.DB) error {
 
 	if err := SeedRoles(db); err != nil {
 		return fmt.Errorf("seed roles: %w", err)
+	}
+
+	if err := SeedCasbinPolicies(db); err != nil {
+		return fmt.Errorf("seed casbin policies: %w", err)
 	}
 
 	log.Println("Seed data initialization completed successfully")

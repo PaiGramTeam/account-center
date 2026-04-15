@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"gorm.io/gorm"
 
 	"paigram/initialize/seed"
 )
@@ -81,29 +82,19 @@ func runAllSeeds(cmd *cobra.Command) {
 	fmt.Println("Running all seed operations...")
 	fmt.Println()
 
-	// Run permissions
-	fmt.Println("1. Creating permissions...")
-	if err := seed.SeedPermissions(db); err != nil {
-		fmt.Printf("Error seeding permissions: %v\n", err)
+	fmt.Println("1. Creating permissions, roles, and managed Casbin policies...")
+	if err := seedRolesBootstrap(db); err != nil {
+		fmt.Printf("Error running seed bootstrap: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("✓ Permissions created successfully")
-	fmt.Println()
-
-	// Run roles
-	fmt.Println("2. Creating roles...")
-	if err := seed.SeedRoles(db); err != nil {
-		fmt.Printf("Error seeding roles: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Println("✓ Roles created successfully")
+	fmt.Println("✓ Core seed data created successfully")
 	fmt.Println()
 
 	// Optionally create admin
 	withAdmin, _ := cmd.Flags().GetBool("with-admin")
 	if withAdmin {
-		fmt.Println("3. Creating default admin user...")
-		if err := seed.CreateDefaultAdmin(db); err != nil {
+		fmt.Println("2. Creating default admin user...")
+		if err := seedAdminBootstrap(db); err != nil {
 			fmt.Printf("Error creating default admin: %v\n", err)
 			os.Exit(1)
 		}
@@ -120,7 +111,7 @@ func runPermissionSeeds() {
 	db := getDB()
 
 	fmt.Println("Creating default permissions...")
-	if err := seed.SeedPermissions(db); err != nil {
+	if err := seedPermissionsBootstrap(db); err != nil {
 		fmt.Printf("Error seeding permissions: %v\n", err)
 		os.Exit(1)
 	}
@@ -131,29 +122,61 @@ func runPermissionSeeds() {
 func runRoleSeeds() {
 	db := getDB()
 
-	fmt.Println("Creating default roles...")
-	if err := seed.SeedRoles(db); err != nil {
+	fmt.Println("Creating default roles and managed Casbin policies...")
+	if err := seedRolesBootstrap(db); err != nil {
 		fmt.Printf("Error seeding roles: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("✅ Roles created successfully!")
+	fmt.Println("✅ Roles and managed Casbin policies created successfully!")
 }
 
 func runAdminSeed() {
 	db := getDB()
 
 	fmt.Println("Creating default admin user...")
-	if err := seed.CreateDefaultAdmin(db); err != nil {
+	if err := seedAdminBootstrap(db); err != nil {
 		fmt.Printf("Error creating default admin: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Println("✅ Default admin created successfully!")
 	fmt.Println()
+	printAdminCredentials()
+}
+
+func seedPermissionsBootstrap(db *gorm.DB) error {
+	return seed.SeedPermissions(db)
+}
+
+func seedRolesBootstrap(db *gorm.DB) error {
+	return seed.Run(db)
+}
+
+func seedAdminBootstrap(db *gorm.DB) error {
+	if err := seedRolesBootstrap(db); err != nil {
+		return err
+	}
+	return seed.CreateDefaultAdmin(db)
+}
+
+func printAdminCredentials() {
+	config := seed.AdminConfig{
+		Email:       getEnvOrDefault("ADMIN_EMAIL", "admin@paigram.local"),
+		Password:    getEnvOrDefault("ADMIN_PASSWORD", "admin123456"),
+		DisplayName: getEnvOrDefault("ADMIN_NAME", "Administrator"),
+	}
+
 	fmt.Println("Admin credentials:")
-	fmt.Println("- Email: admin@paigram.local (or $ADMIN_EMAIL)")
-	fmt.Println("- Password: admin123456 (or $ADMIN_PASSWORD)")
+	fmt.Printf("- Email: %s\n", config.Email)
+	fmt.Printf("- Password: %s\n", config.Password)
 	fmt.Println()
 	fmt.Println("⚠️  Please change the default password immediately!")
+}
+
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

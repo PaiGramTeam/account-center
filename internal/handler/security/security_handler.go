@@ -3,7 +3,9 @@ package security
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -169,11 +171,19 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 		if req.RevokeOtherSessions {
 			currentToken := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 			if currentToken != "" {
+				currentTokenHash := hashSessionToken(currentToken)
+				var otherSessions []model.UserSession
+				if err := tx.Where("user_id = ? AND revoked_at IS NULL AND access_token_hash != ?", userID, currentTokenHash).Find(&otherSessions).Error; err != nil {
+					return err
+				}
 				if err := tx.Model(&model.UserSession{}).
-					Where("user_id = ? AND access_token != ?", userID, currentToken).
+					Where("user_id = ? AND revoked_at IS NULL AND access_token_hash != ?", userID, currentTokenHash).
 					Update("revoked_at", gorm.Expr("NOW()")).
 					Update("revoked_reason", "password_changed").Error; err != nil {
 					return err
+				}
+				for i := range otherSessions {
+					_ = h.sessionCache.Set(context.Background(), sessioncache.RevokedSessionMarkerKey(otherSessions[i].ID), []byte("1"), sessioncache.RevokedSessionMarkerTTL(&otherSessions[i]))
 				}
 			}
 		}
@@ -189,6 +199,14 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 	response.Success(c, gin.H{
 		"message": "password changed successfully",
 	})
+}
+
+func hashSessionToken(token string) string {
+	if token == "" {
+		return ""
+	}
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
 }
 
 // Enable2FA initiates 2FA setup

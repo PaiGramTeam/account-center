@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -244,6 +245,9 @@ func (h *Handler) cacheStoreSessionWithTokens(session *model.UserSession, access
 	if err := h.sessionCache.SaveSessionWithTokens(ctx, session, accessToken, refreshToken); err != nil && !errorsIsRedisNil(err) {
 		log.Printf("failed to cache session tokens: %v", err)
 	}
+	if err := h.sessionCache.Set(ctx, sessioncache.CurrentAccessTokenHashKey(session.ID), []byte(session.AccessTokenHash), sessioncache.CurrentAccessTokenHashTTL(session)); err != nil && !errorsIsRedisNil(err) {
+		log.Printf("failed to cache current access token hash: %v", err)
+	}
 }
 
 // cacheRevokeSessionTokens removes and marks tokens as revoked in cache
@@ -282,6 +286,23 @@ func (h *Handler) cacheRevokeSessionTokens(session *model.UserSession, accessTok
 			log.Printf("failed to cache revoked refresh token: %v", err)
 		}
 	}
+
+	if err := h.sessionCache.Delete(ctx, sessioncache.CurrentAccessTokenHashKey(session.ID)); err != nil && !errorsIsRedisNil(err) {
+		log.Printf("failed to clear current access token hash marker: %v", err)
+	}
+}
+
+func (h *Handler) clearCurrentAccessHashMarker(sessionID uint64) {
+	if sessionID == 0 {
+		return
+	}
+	if err := h.sessionCache.Delete(context.Background(), sessioncache.CurrentAccessTokenHashKey(sessionID)); err != nil && !errorsIsRedisNil(err) {
+		log.Printf("failed to clear current access token hash marker: %v", err)
+	}
+}
+
+func rapidRefreshGuardKey(sessionID uint64) string {
+	return fmt.Sprintf("session:refresh-guard:%d", sessionID)
 }
 
 func errorsIsRedisNil(err error) bool {

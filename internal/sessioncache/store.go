@@ -209,6 +209,35 @@ func (s *RedisStore) revokedKey(tokenType TokenType, token string) string {
 	return fmt.Sprintf("%s:session:revoked:%s:%s", s.prefix, tokenType, token)
 }
 
+// RevokedSessionMarkerKey returns the generic cache key used to invalidate a session by ID.
+func RevokedSessionMarkerKey(sessionID uint64) string {
+	return fmt.Sprintf("session:revoked:session-id:%d", sessionID)
+}
+
+// RevokedSessionMarkerTTL keeps revoke markers alive for the remaining refresh lifetime.
+func RevokedSessionMarkerTTL(session *model.UserSession) time.Duration {
+	if session == nil {
+		return 24 * time.Hour
+	}
+
+	ttl := time.Until(session.RefreshExpiry)
+	if ttl <= 0 {
+		return 24 * time.Hour
+	}
+
+	return ttl
+}
+
+// CurrentAccessTokenHashKey returns the cache key storing the current access-token hash for a session.
+func CurrentAccessTokenHashKey(sessionID uint64) string {
+	return fmt.Sprintf("session:current-access-hash:%d", sessionID)
+}
+
+// CurrentAccessTokenHashTTL keeps the current access-token marker aligned to refresh expiry.
+func CurrentAccessTokenHashTTL(session *model.UserSession) time.Duration {
+	return RevokedSessionMarkerTTL(session)
+}
+
 // IncrementCounter increments a counter and sets expiry if not exists
 func (s *RedisStore) IncrementCounter(ctx context.Context, key string, ttl time.Duration) (int64, error) {
 	fullKey := fmt.Sprintf("%s:%s", s.prefix, key)

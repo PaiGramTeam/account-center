@@ -33,9 +33,12 @@ func CreateDefaultAdmin(db *gorm.DB) error {
 		return fmt.Errorf("check admin role: %w", err)
 	}
 
-	// Check if any user has admin role
+	// Check if any active user has the admin role
 	var count int64
-	if err := db.Model(&model.UserRole{}).Where("role_id = ?", adminRole.ID).Count(&count).Error; err != nil {
+	if err := db.Table("user_roles").
+		Joins("JOIN users ON users.id = user_roles.user_id").
+		Where("user_roles.role_id = ? AND users.status = ?", adminRole.ID, model.UserStatusActive).
+		Count(&count).Error; err != nil {
 		return fmt.Errorf("check existing admins: %w", err)
 	}
 
@@ -44,10 +47,16 @@ func CreateDefaultAdmin(db *gorm.DB) error {
 		return nil
 	}
 
-	// Get admin credentials from environment or use defaults
+	adminEmail := os.Getenv("ADMIN_EMAIL")
+	adminPassword := os.Getenv("ADMIN_PASSWORD")
+	if adminEmail == "" || adminPassword == "" {
+		return fmt.Errorf("ADMIN_EMAIL and ADMIN_PASSWORD must be set to create the default admin")
+	}
+
+	// Get admin credentials from environment
 	config := AdminConfig{
-		Email:       getEnvOrDefault("ADMIN_EMAIL", "admin@paigram.local"),
-		Password:    getEnvOrDefault("ADMIN_PASSWORD", "admin123456"),
+		Email:       adminEmail,
+		Password:    adminPassword,
 		DisplayName: getEnvOrDefault("ADMIN_NAME", "Administrator"),
 	}
 

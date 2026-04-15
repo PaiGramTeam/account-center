@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"paigram/internal/casbin"
 	"paigram/internal/model"
 	"paigram/internal/response"
 )
@@ -92,17 +93,21 @@ func TestCrossUserRoutesRequirePermissions(t *testing.T) {
 
 	headers := authHeaders(viewerAccessToken)
 
+	t.Logf("[TEST] viewerID=%d, targetID=%d", viewerID, targetID)
+
 	for _, path := range []string{
 		fmt.Sprintf("/api/v1/users/%d", targetID),
 		fmt.Sprintf("/api/v1/users/%d/roles", targetID),
 		fmt.Sprintf("/api/v1/users/%d/permissions", targetID),
 		fmt.Sprintf("/api/v1/users/%d/audit-logs", targetID),
+		fmt.Sprintf("/api/v1/users/%d/login-logs", targetID),
 	} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
 		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
 		assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, res))
 	}
 
+	t.Logf("[TEST] Before granting permissions to viewerID=%d", viewerID)
 	grantPermissionsToUser(t, stack, viewerID,
 		model.PermUserRead,
 		model.PermRoleRead,
@@ -115,8 +120,13 @@ func TestCrossUserRoutesRequirePermissions(t *testing.T) {
 		fmt.Sprintf("/api/v1/users/%d/roles", targetID),
 		fmt.Sprintf("/api/v1/users/%d/permissions", targetID),
 		fmt.Sprintf("/api/v1/users/%d/audit-logs", targetID),
+		fmt.Sprintf("/api/v1/users/%d/login-logs", targetID),
 	} {
+		t.Logf("[TEST] Testing access to %s after granting permissions", path)
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
+		if res.Code != http.StatusOK {
+			t.Logf("[TEST] FAILED: Expected 200, got %d. Response: %s", res.Code, res.Body.String())
+		}
 		require.Equal(t, http.StatusOK, res.Code, "%s => %s", path, res.Body.String())
 	}
 }
@@ -147,55 +157,104 @@ func TestAdminRoutesRequireAdminRole(t *testing.T) {
 	require.Equal(t, http.StatusOK, loginRes.Code, loginRes.Body.String())
 }
 
-func TestManagementCatalogRoutesRequirePermissions(t *testing.T) {
+func TestAuthorityRoutesRequirePermissionsAndLegacyCatalogRoutesStayUnavailable(t *testing.T) {
 	stack := newIntegrationStack(t)
 
 	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "catalog-actor")
 	headers := authHeaders(actorAccessToken)
 
-	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
+	for _, path := range []string{"/api/v1/authorities", "/api/v1/roles", "/api/v1/permissions"} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
-		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
+		expected := http.StatusForbidden
+		if path != "/api/v1/authorities" {
+			expected = http.StatusNotFound
+		}
+		require.Equal(t, expected, res.Code, "%s => %s", path, res.Body.String())
 	}
 
-	grantPermissionsToUser(t, stack, actorID, model.PermRoleRead, model.PermPermissionRead)
+	grantPermissionsToUser(t, stack, actorID, model.PermRoleRead)
 
-	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
-		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
-		require.Equal(t, http.StatusOK, res.Code, "%s => %s", path, res.Body.String())
-	}
+	listAuthoritiesAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/authorities", nil, headers)
+	require.Equal(t, http.StatusOK, listAuthoritiesAllowed.Code, listAuthoritiesAllowed.Body.String())
 
-	createRoleDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/roles", map[string]any{
+	createAuthorityDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/authorities", map[string]any{
 		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
 		"display_name": "Operations",
 		"description":  "ops role",
 	}, headers)
-	require.Equal(t, http.StatusForbidden, createRoleDenied.Code, createRoleDenied.Body.String())
+	require.Equal(t, http.StatusForbidden, createAuthorityDenied.Code, createAuthorityDenied.Body.String())
 
-	createPermissionDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/permissions", map[string]any{
-		"name":        fmt.Sprintf("report:%d", time.Now().UnixNano()),
-		"resource":    "report",
-		"action":      "read",
-		"description": "report read",
-	}, headers)
-	require.Equal(t, http.StatusForbidden, createPermissionDenied.Code, createPermissionDenied.Body.String())
+	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
+		res := performJSONRequest(t, stack.Router, http.MethodPost, path, map[string]any{"name": "legacy"}, headers)
+		require.Equal(t, http.StatusNotFound, res.Code, "%s => %s", path, res.Body.String())
+	}
 
-	grantPermissionsToUser(t, stack, actorID, model.PermRoleWrite, model.PermPermissionWrite)
+	grantPermissionsToUser(t, stack, actorID, model.PermRoleWrite)
 
-	createRoleAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/roles", map[string]any{
+	createAuthorityAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/authorities", map[string]any{
 		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
 		"display_name": "Operations",
 		"description":  "ops role",
 	}, headers)
-	require.Equal(t, http.StatusCreated, createRoleAllowed.Code, createRoleAllowed.Body.String())
+	require.Equal(t, http.StatusOK, createAuthorityAllowed.Code, createAuthorityAllowed.Body.String())
+}
 
-	createPermissionAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/permissions", map[string]any{
-		"name":        fmt.Sprintf("report:read:%d", time.Now().UnixNano()),
-		"resource":    "report",
-		"action":      "read",
-		"description": "report read",
-	}, headers)
-	require.Equal(t, http.StatusCreated, createPermissionAllowed.Code, createPermissionAllowed.Body.String())
+func TestAuthorityMutationRoutesRequireAdminRoleEvenForRoleManagers(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "authority-manager")
+	headers := authHeaders(actorAccessToken)
+
+	customRole := model.Role{
+		Name:        fmt.Sprintf("custom-manager-%d", time.Now().UnixNano()),
+		DisplayName: "Custom Manager",
+		Description: "custom manager role",
+	}
+	require.NoError(t, stack.DB.Create(&customRole).Error)
+	require.NoError(t, stack.DB.Create(&model.UserRole{UserID: actorID, RoleID: customRole.ID, GrantedBy: actorID}).Error)
+
+	roleIDStr := fmt.Sprintf("%d", customRole.ID)
+	_, err := casbin.GetEnforcer().AddPolicies([][]string{
+		{roleIDStr, "/api/v1/authorities/:id/permissions", "POST"},
+		{roleIDStr, "/api/v1/authorities/:id/users", "PUT"},
+	})
+	require.NoError(t, err)
+	require.NoError(t, casbin.GetEnforcer().LoadPolicy())
+
+	permission := model.Permission{
+		Name:        fmt.Sprintf("custom:grant:%d", time.Now().UnixNano()),
+		Resource:    model.ResourceUser,
+		Action:      model.ActionDelete,
+		Description: "dangerous custom permission",
+	}
+	require.NoError(t, stack.DB.Create(&permission).Error)
+
+	assignPermissionRes := performJSONRequest(t, stack.Router, http.MethodPost,
+		fmt.Sprintf("/api/v1/authorities/%d/permissions", customRole.ID), map[string]any{
+			"permission_ids": []uint64{permission.ID},
+		}, headers)
+	require.Equal(t, http.StatusForbidden, assignPermissionRes.Code, assignPermissionRes.Body.String())
+
+	var rolePermissionCount int64
+	require.NoError(t, stack.DB.Model(&model.RolePermission{}).Where("role_id = ? AND permission_id = ?", customRole.ID, permission.ID).Count(&rolePermissionCount).Error)
+	assert.Equal(t, int64(0), rolePermissionCount)
+
+	privilegedRole := model.Role{
+		Name:        fmt.Sprintf("privileged-custom-%d", time.Now().UnixNano()),
+		DisplayName: "Privileged Custom",
+		Description: "privileged custom role",
+	}
+	require.NoError(t, stack.DB.Create(&privilegedRole).Error)
+
+	addSelfRes := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/authorities/%d/users", privilegedRole.ID), map[string]any{
+			"user_ids": []uint64{actorID},
+		}, headers)
+	require.Equal(t, http.StatusForbidden, addSelfRes.Code, addSelfRes.Body.String())
+
+	var privilegedAssignmentCount int64
+	require.NoError(t, stack.DB.Model(&model.UserRole{}).Where("role_id = ? AND user_id = ?", privilegedRole.ID, actorID).Count(&privilegedAssignmentCount).Error)
+	assert.Equal(t, int64(0), privilegedAssignmentCount)
 }
 
 func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
@@ -275,6 +334,10 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, forbiddenLogsRes.Code, forbiddenLogsRes.Body.String())
 	assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, forbiddenLogsRes))
 
+	grantPermissionsToUser(t, stack, userID, model.PermAuditRead)
+	authorizedCrossUserLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/login-logs", otherUserID), nil, headers)
+	require.Equal(t, http.StatusOK, authorizedCrossUserLogsRes.Code, authorizedCrossUserLogsRes.Body.String())
+
 	currentSession := requireSessionForRefreshToken(t, stack.DB, refreshToken)
 	revokeSelfRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", userID, currentSession.ID), nil, headers)
 	require.Equal(t, http.StatusOK, revokeSelfRes.Code, revokeSelfRes.Body.String())
@@ -284,10 +347,9 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 	assert.True(t, revokedSession.RevokedAt.Valid)
 	assert.Equal(t, "revoked by user", revokedSession.RevokedReason)
 
-	revokeAgainRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", userID, currentSession.ID), nil, headers)
-	require.Equal(t, http.StatusOK, revokeAgainRes.Code, revokeAgainRes.Body.String())
-	revokeAgainData := decodeResponseData(t, revokeAgainRes)
-	assert.Equal(t, "session already revoked", revokeAgainData["message"])
+	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, headers)
+	require.Equal(t, http.StatusUnauthorized, reuseRes.Code, reuseRes.Body.String())
+	assert.Equal(t, "SESSION_REVOKED", decodeErrorCode(t, reuseRes))
 }
 
 func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
@@ -325,21 +387,29 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 	grantPermissionsToUser(t, stack, actorID, model.PermUserWrite, model.PermRoleRead, model.PermPermissionRead, model.PermUserRead)
 
 	createAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBody, headers)
-	require.Equal(t, http.StatusCreated, createAllowed.Code, createAllowed.Body.String())
-	createdUserData := decodeResponseData(t, createAllowed)
+	require.Equal(t, http.StatusBadRequest, createAllowed.Code, createAllowed.Body.String())
+
+	createBodyWithoutRoles := map[string]any{
+		"email":              fmt.Sprintf("managed-%d@example.com", time.Now().UnixNano()),
+		"display_name":       "Managed User",
+		"password":           "ManagedPass123!",
+		"primary_login_type": "email",
+		"status":             "active",
+		"locale":             "zh_CN",
+	}
+
+	createWithoutRolesAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBodyWithoutRoles, headers)
+	require.Equal(t, http.StatusCreated, createWithoutRolesAllowed.Code, createWithoutRolesAllowed.Body.String())
+	createdUserData := decodeResponseData(t, createWithoutRolesAllowed)
 	createdUserID := uint64(createdUserData["id"].(float64))
 	assert.Equal(t, "zh_CN", createdUserData["locale"])
-	roles, ok := createdUserData["roles"].([]any)
-	require.True(t, ok, "expected created roles list, got %T", createdUserData["roles"])
-	require.Len(t, roles, 1)
-	assert.Equal(t, memberRole.Name, roles[0])
 
 	getRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/roles", createdUserID), nil, headers)
 	require.Equal(t, http.StatusOK, getRolesRes.Code, getRolesRes.Body.String())
 	getRolesData := decodeResponseData(t, getRolesRes)
 	roleItems, ok := getRolesData["data"].([]any)
 	require.True(t, ok, "expected paginated role payload, got %T", getRolesData["data"])
-	require.Len(t, roleItems, 1)
+	require.Empty(t, roleItems)
 
 	updateDeniedHeaders := authHeaders(actorAccessToken)
 	updateDenied := performJSONRequest(t, stack.Router, http.MethodPatch, fmt.Sprintf("/api/v1/users/%d", createdUserID), map[string]any{
@@ -347,14 +417,14 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 		"locale":       "en_US",
 		"roles":        []string{adminRole.Name},
 	}, updateDeniedHeaders)
-	require.Equal(t, http.StatusOK, updateDenied.Code, updateDenied.Body.String())
+	require.Equal(t, http.StatusBadRequest, updateDenied.Code, updateDenied.Body.String())
 
-	updatedData := decodeResponseData(t, updateDenied)
-	updatedRoles, ok := updatedData["roles"].([]any)
-	require.True(t, ok, "expected updated roles list, got %T", updatedData["roles"])
-	require.Len(t, updatedRoles, 1)
-	assert.Equal(t, adminRole.Name, updatedRoles[0])
-	assert.Equal(t, "en_US", updatedData["locale"])
+	unchangedRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/roles", createdUserID), nil, headers)
+	require.Equal(t, http.StatusOK, unchangedRolesRes.Code, unchangedRolesRes.Body.String())
+	unchangedRolesData := decodeResponseData(t, unchangedRolesRes)
+	unchangedRoleItems, ok := unchangedRolesData["data"].([]any)
+	require.True(t, ok, "expected paginated role payload, got %T", unchangedRolesData["data"])
+	require.Empty(t, unchangedRoleItems)
 
 	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d", createdUserID), nil, headers)
 	require.Equal(t, http.StatusForbidden, deleteDenied.Code, deleteDenied.Body.String())
@@ -491,7 +561,8 @@ func decodeErrorCode(t *testing.T, recorder *httptest.ResponseRecorder) string {
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
-	errorData := payload["error"].(map[string]any)
+	errorData, ok := payload["error"].(map[string]any)
+	require.True(t, ok, "expected error map in response, got %T", payload["error"])
 	code, _ := errorData["code"].(string)
 	return code
 }
@@ -506,6 +577,11 @@ func grantPermissionsToUser(t *testing.T, stack *integrationStack, userID uint64
 		Description: "integration test role",
 	}
 	require.NoError(t, stack.DB.Create(&role).Error)
+	t.Logf("[DEBUG] Created role: ID=%d, Name=%s", role.ID, role.Name)
+
+	// Get Casbin enforcer
+	enforcer := casbin.GetEnforcer()
+	require.NotNil(t, enforcer, "Casbin enforcer should be initialized")
 
 	for _, permName := range permissionNames {
 		permission := model.Permission{
@@ -517,10 +593,116 @@ func grantPermissionsToUser(t *testing.T, stack *integrationStack, userID uint64
 		require.NoError(t, stack.DB.Where(model.Permission{Name: permName}).FirstOrCreate(&permission).Error)
 		rolePermission := model.RolePermission{RoleID: role.ID, PermissionID: permission.ID}
 		require.NoError(t, stack.DB.Where(&rolePermission).FirstOrCreate(&rolePermission).Error)
+
+		// Create Casbin policies for the permission
+		// Map permission names to (path, HTTP method) pairs
+		policies := mapPermissionToPolicies(permName)
+
+		for _, policy := range policies {
+			added, err := enforcer.AddPolicy(fmt.Sprint(role.ID), policy.Path, policy.Method)
+			require.NoError(t, err, "Failed to add Casbin policy for %s (%s %s): %v", permName, policy.Method, policy.Path, err)
+			t.Logf("[DEBUG] Added Casbin policy: role=%d, path=%s, method=%s, added=%v", role.ID, policy.Path, policy.Method, added)
+		}
 	}
 
 	userRole := model.UserRole{UserID: userID, RoleID: role.ID, GrantedBy: userID}
 	require.NoError(t, stack.DB.Create(&userRole).Error)
+	t.Logf("[DEBUG] Assigned role %d to user %d", role.ID, userID)
+
+	// Verify the policies were actually added
+	allPolicies := enforcer.GetPolicy()
+	t.Logf("[DEBUG] Total Casbin policies in enforcer: %d", len(allPolicies))
+	for i, p := range allPolicies {
+		if len(p) >= 3 {
+			t.Logf("[DEBUG] Policy %d: [%s, %s, %s]", i, p[0], p[1], p[2])
+		}
+	}
+}
+
+// PolicyRule represents a Casbin policy rule with path and HTTP method
+type PolicyRule struct {
+	Path   string
+	Method string
+}
+
+// mapPermissionToPolicies maps permission names to Casbin policy rules (path + HTTP method)
+func mapPermissionToPolicies(permName string) []PolicyRule {
+	switch permName {
+	case model.PermUserRead:
+		return []PolicyRule{
+			{"/api/v1/users/*", "GET"},
+		}
+	case model.PermUserWrite:
+		return []PolicyRule{
+			{"/api/v1/users", "POST"},
+			{"/api/v1/users/*", "PATCH"},
+			{"/api/v1/users/*", "PUT"},
+		}
+	case model.PermUserDelete:
+		return []PolicyRule{
+			{"/api/v1/users/*", "DELETE"},
+		}
+	case model.PermUserManage:
+		return []PolicyRule{
+			{"/api/v1/users/*", "GET"},
+			{"/api/v1/users/*", "POST"},
+			{"/api/v1/users/*", "PATCH"},
+			{"/api/v1/users/*", "DELETE"},
+		}
+	case model.PermRoleRead:
+		return []PolicyRule{
+			{"/api/v1/authorities", "GET"},
+			{"/api/v1/authorities/*", "GET"},
+			{"/api/v1/users/*/roles", "GET"},
+		}
+	case model.PermRoleWrite:
+		return []PolicyRule{
+			{"/api/v1/authorities", "POST"},
+			{"/api/v1/authorities/*", "PATCH"},
+			{"/api/v1/authorities/*", "PUT"},
+		}
+	case model.PermRoleDelete:
+		return []PolicyRule{
+			{"/api/v1/authorities/*", "DELETE"},
+		}
+	case model.PermPermissionRead:
+		return []PolicyRule{
+			{"/api/v1/users/*/permissions", "GET"},
+		}
+	case model.PermPermissionWrite:
+		return nil
+	case model.PermPermissionDelete:
+		return nil
+	case model.PermAuditRead:
+		return []PolicyRule{
+			{"/api/v1/users/*/audit-logs", "GET"},
+			{"/api/v1/users/*/login-logs", "GET"},
+		}
+	default:
+		// Fallback: derive from permission name
+		resource := strings.Split(permName, ":")[0]
+		action := strings.Split(permName, ":")[1]
+		method := actionToHTTPMethod(action)
+		return []PolicyRule{
+			{fmt.Sprintf("/api/v1/%s/*", resource), method},
+		}
+	}
+}
+
+// actionToHTTPMethod converts permission action to HTTP method
+func actionToHTTPMethod(action string) string {
+	switch strings.ToLower(action) {
+	case "read":
+		return "GET"
+	case "write":
+		return "POST"
+	case "delete":
+		return "DELETE"
+	case "manage":
+		return "GET" // Default for manage, usually needs multiple methods
+	default:
+		return "GET"
+	}
 }
 
 func grantAdminRoleToUser(t *testing.T, stack *integrationStack, userID uint64) {
@@ -533,6 +715,26 @@ func grantAdminRoleToUser(t *testing.T, stack *integrationStack, userID uint64) 
 		IsSystem:    true,
 	}
 	require.NoError(t, stack.DB.Where(model.Role{Name: model.RoleAdmin}).FirstOrCreate(&role).Error)
+
+	// Get Casbin enforcer
+	enforcer := casbin.GetEnforcer()
+	require.NotNil(t, enforcer, "Casbin enforcer should be initialized")
+
+	// Grant admin all permissions via Casbin policies
+	// Admin should have access to all routes
+	adminPolicies := []PolicyRule{
+		{"/api/v1/*", "GET"},
+		{"/api/v1/*", "POST"},
+		{"/api/v1/*", "PUT"},
+		{"/api/v1/*", "PATCH"},
+		{"/api/v1/*", "DELETE"},
+	}
+
+	for _, policy := range adminPolicies {
+		_, err := enforcer.AddPolicy(fmt.Sprint(role.ID), policy.Path, policy.Method)
+		require.NoError(t, err, "Failed to add Casbin policy for admin: %v", err)
+	}
+
 	userRole := model.UserRole{UserID: userID, RoleID: role.ID, GrantedBy: userID}
 	require.NoError(t, stack.DB.Where(model.UserRole{UserID: userID, RoleID: role.ID}).Assign(model.UserRole{GrantedBy: userID}).FirstOrCreate(&userRole).Error)
 }

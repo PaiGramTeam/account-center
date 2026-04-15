@@ -19,6 +19,7 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/cache"
+	"paigram/internal/casbin"
 	"paigram/internal/config"
 	"paigram/internal/crypto"
 	"paigram/internal/database"
@@ -144,6 +145,13 @@ func runServer() {
 	}
 	defer sqlDB.Close()
 
+	// Initialize Casbin enforcer
+	log.Println("Initializing Casbin enforcer...")
+	if _, err := casbin.InitEnforcer(db); err != nil {
+		fatalStartup(cfg.Sentry, "Failed to initialize Casbin: %v", err)
+	}
+	log.Println("Casbin enforcer initialized successfully")
+
 	var sessionStore sessioncache.Store = sessioncache.NewNoopStore()
 	var redisClient *redis.Client
 	var rateLimitStore limiter.Store
@@ -242,7 +250,10 @@ func runServer() {
 	}
 
 	// Start HTTP server
-	engine := router.New(cfg, sessionStore, db, rateLimitStore, emailService)
+	engine, err := router.New(cfg, sessionStore, db, rateLimitStore, emailService)
+	if err != nil {
+		fatalStartup(cfg.Sentry, "http router initialization failed: %v", err)
+	}
 	addr := fmt.Sprintf("%s:%d", cfg.App.Host, cfg.App.Port)
 	httpServer = &http.Server{
 		Addr:    addr,

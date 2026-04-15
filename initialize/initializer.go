@@ -43,22 +43,13 @@ func (i *Initializer) Run() error {
 	if i.config.AutoSeed {
 		log.Println("Running seed data initialization...")
 
-		// First seed permissions
-		if err := seed.SeedPermissions(i.db); err != nil {
-			return fmt.Errorf("seed permissions: %w", err)
+		if err := seed.Run(i.db); err != nil {
+			return fmt.Errorf("seed core data: %w", err)
 		}
 
-		// Then seed roles
-		if err := seed.SeedRoles(i.db); err != nil {
-			return fmt.Errorf("seed roles: %w", err)
-		}
-
-		// Finally create default admin if it doesn't exist
 		if err := seed.CreateDefaultAdmin(i.db); err != nil {
 			return fmt.Errorf("create default admin: %w", err)
 		}
-
-		log.Println("Seed data initialization completed successfully")
 	}
 
 	return nil

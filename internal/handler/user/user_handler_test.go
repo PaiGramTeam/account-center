@@ -89,7 +89,7 @@ func TestHandler_CreateUser(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name: "valid user with role",
+			name: "reject roles on create",
 			body: map[string]interface{}{
 				"email":              "testuser3@example.com",
 				"password":           "TestPass123!",
@@ -97,8 +97,8 @@ func TestHandler_CreateUser(t *testing.T) {
 				"primary_login_type": "email",
 				"roles":              []string{"user"},
 			},
-			wantStatus: http.StatusCreated,
-			wantErr:    false,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    true,
 		},
 		{
 			name: "missing email",
@@ -186,7 +186,7 @@ func TestHandler_CreateUser(t *testing.T) {
 			wantErr:    true,
 		},
 		{
-			name: "invalid role",
+			name: "reject nonexistent roles on create",
 			body: map[string]interface{}{
 				"email":              "testuser10@example.com",
 				"password":           "TestPass123!",
@@ -394,6 +394,14 @@ func TestHandler_UpdateUser(t *testing.T) {
 				"display_name": "Name",
 			},
 			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:   "reject roles on update",
+			userID: user.ID,
+			body: map[string]interface{}{
+				"roles": []string{"admin"},
+			},
+			wantStatus: http.StatusBadRequest,
 		},
 	}
 

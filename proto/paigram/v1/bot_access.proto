@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package paigram.v1;
+
+option go_package = "paigram/internal/grpc/pb/v1;pb";
+
+import "google/protobuf/timestamp.proto";
+
+service BotAccessService {
+  rpc ResolveBotUser(ResolveBotUserRequest) returns (ResolveBotUserResponse);
+  rpc LinkPlatformAccount(LinkPlatformAccountRequest) returns (LinkPlatformAccountResponse);
+  rpc ListAccessibleAccounts(ListAccessibleAccountsRequest) returns (ListAccessibleAccountsResponse);
+  rpc IssueServiceTicket(IssueServiceTicketRequest) returns (IssueServiceTicketResponse);
+}
+
+enum PlatformAccountStatus {
+  PLATFORM_ACCOUNT_STATUS_UNSPECIFIED = 0;
+  PLATFORM_ACCOUNT_STATUS_ACTIVE = 1;
+  PLATFORM_ACCOUNT_STATUS_INACTIVE = 2;
+  PLATFORM_ACCOUNT_STATUS_REVOKED = 3;
+}
+
+message PlatformAccountRef {
+  uint64 id = 1;
+  uint64 user_id = 2;
+  string platform = 3;
+  string platform_service_key = 4;
+  string platform_account_id = 5;
+  string display_name = 6;
+  PlatformAccountStatus status = 7;
+  string meta_json = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message ResolveBotUserRequest {
+  string external_user_id = 1;
+}
+
+message ResolveBotUserResponse {
+  uint64 user_id = 1;
+  string bot_id = 2;
+  string external_user_id = 3;
+  string external_username = 4;
+}
+
+message LinkPlatformAccountRequest {
+  string external_user_id = 1;
+  string platform = 2;
+  string platform_service_key = 3;
+  string platform_account_id = 4;
+  string display_name = 5;
+  string meta_json = 6;
+  repeated string grant_scopes = 7;
+}
+
+message LinkPlatformAccountResponse {
+  PlatformAccountRef account = 1;
+  bool created = 2;
+}
+
+message ListAccessibleAccountsRequest {
+  string external_user_id = 1;
+  string platform = 2;
+}
+
+message ListAccessibleAccountsResponse {
+  repeated PlatformAccountRef accounts = 1;
+}
+
+message IssueServiceTicketRequest {
+  string external_user_id = 1;
+  uint64 platform_account_ref_id = 2;
+  repeated string requested_scopes = 3;
+  string audience = 4;
+}
+
+message IssueServiceTicketResponse {
+  string ticket = 1;
+  string audience = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  PlatformAccountRef account = 4;
+}

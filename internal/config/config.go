@@ -78,6 +78,9 @@ type AuthConfig struct {
 	PendingUserExpirySeconds      int                            `mapstructure:"pending_user_expiry"`
 	PasswordResetTokenTTLSeconds  int                            `mapstructure:"password_reset_ttl"`
 	RequireEmailVerificationLogin bool                           `mapstructure:"require_verified_email_login"`
+	ServiceTicketTTLSeconds       int                            `mapstructure:"service_ticket_ttl"`
+	ServiceTicketIssuer           string                         `mapstructure:"service_ticket_issuer"`
+	ServiceTicketSigningKey       string                         `mapstructure:"service_ticket_signing_key"`
 	Captcha                       AuthCaptchaConfig              `mapstructure:"captcha"`
 }
 
@@ -241,6 +244,10 @@ func Load(paths ...string) (*Config, error) {
 			err = fmt.Errorf("unmarshal config: %w", unmarshalErr)
 			return
 		}
+		if validateErr := validateServiceTicketConfig(localCfg); validateErr != nil {
+			err = validateErr
+			return
+		}
 
 		cfg = localCfg
 	})
@@ -254,6 +261,26 @@ func Load(paths ...string) (*Config, error) {
 		return nil, fmt.Errorf("configuration not loaded")
 	}
 	return cfg, nil
+}
+
+func validateServiceTicketConfig(cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("configuration not loaded")
+	}
+	auth := cfg.Auth
+	if auth.ServiceTicketTTLSeconds <= 0 {
+		return fmt.Errorf("auth.service_ticket_ttl must be greater than zero")
+	}
+	if auth.ServiceTicketIssuer == "" {
+		return fmt.Errorf("auth.service_ticket_issuer must not be empty")
+	}
+	if auth.ServiceTicketSigningKey == "" {
+		return nil
+	}
+	if len(auth.ServiceTicketSigningKey) < 32 {
+		return fmt.Errorf("auth.service_ticket_signing_key must be at least 32 bytes when configured")
+	}
+	return nil
 }
 
 // MustLoad panics when configuration cannot be loaded.
@@ -310,6 +337,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.pending_user_expiry", 2592000)
 	v.SetDefault("auth.password_reset_ttl", 3600)
 	v.SetDefault("auth.require_verified_email_login", true)
+	v.SetDefault("auth.service_ticket_ttl", 300)
+	v.SetDefault("auth.service_ticket_issuer", "paigram-account-center")
+	v.SetDefault("auth.service_ticket_signing_key", "")
 	v.SetDefault("auth.captcha.turnstile.enabled", false)
 	v.SetDefault("auth.captcha.turnstile.verify_url", "https://challenges.cloudflare.com/turnstile/v0/siteverify")
 	v.SetDefault("auth.captcha.turnstile.require_on_register", true)

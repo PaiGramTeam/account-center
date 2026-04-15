@@ -3,6 +3,7 @@ module paigram
 go 1.25.7
 
 require (
+	github.com/PaiGramTeam/proto-contracts v0.0.0
 	github.com/casbin/casbin/v2 v2.77.2
 	github.com/casbin/gorm-adapter/v3 v3.20.0
 	github.com/getsentry/sentry-go v0.43.0
@@ -139,3 +140,5 @@ require (
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.48.2 // indirect
 )
+
+replace github.com/PaiGramTeam/proto-contracts => ../proto-contracts

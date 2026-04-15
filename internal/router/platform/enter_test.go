@@ -27,4 +27,6 @@ func TestRouterGroupInitRegistersPlatformRoutes(t *testing.T) {
 	assert.True(t, ok)
 	_, ok = registered["GET /api/v1/me/platforms/:platform/schema"]
 	assert.True(t, ok)
+	_, ok = registered["GET /api/v1/me/platform-accounts/:refId/summary"]
+	assert.True(t, ok)
 }

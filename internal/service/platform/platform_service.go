@@ -19,6 +19,7 @@ import (
 var (
 	ErrInvalidTicketConfig             = errors.New("invalid service ticket config")
 	ErrPlatformSummaryProxyUnavailable = errors.New("platform summary proxy is unavailable")
+	ErrPlatformServiceUnavailable      = errors.New("platform service is unavailable")
 )
 
 // ServiceTicketClaims carries actor-scoped platform access metadata.
@@ -211,6 +212,9 @@ func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorTy
 
 	platform, err := s.GetEnabledPlatform(ref.Platform)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrPlatformServiceUnavailable
+		}
 		return nil, err
 	}
 

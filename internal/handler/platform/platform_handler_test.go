@@ -20,7 +20,9 @@ type fakePlatformService struct {
 	platform        *serviceplatform.PlatformSchemaView
 	summary         map[string]any
 	listErr         error
-	getErr          error
+	schemaErr       error
+	summaryErr      error
+	summaryCalls    int
 	lastActorType   string
 	lastActorID     string
 	lastOwnerUserID uint64
@@ -33,8 +35,8 @@ func (f *fakePlatformService) ListEnabledPlatformViews() ([]serviceplatform.Plat
 }
 
 func (f *fakePlatformService) GetPlatformSchemaView(platformKey string) (*serviceplatform.PlatformSchemaView, error) {
-	if f.getErr != nil {
-		return nil, f.getErr
+	if f.schemaErr != nil {
+		return nil, f.schemaErr
 	}
 	if f.platform != nil && f.platform.Platform == platformKey {
 		return f.platform, nil
@@ -43,13 +45,14 @@ func (f *fakePlatformService) GetPlatformSchemaView(platformKey string) (*servic
 }
 
 func (f *fakePlatformService) GetPlatformAccountSummary(_ context.Context, actorType, actorID string, ownerUserID, platformAccountRefID uint64, scopes []string) (map[string]any, error) {
+	f.summaryCalls++
 	f.lastActorType = actorType
 	f.lastActorID = actorID
 	f.lastOwnerUserID = ownerUserID
 	f.lastRefID = platformAccountRefID
 	f.lastScopes = append([]string(nil), scopes...)
-	if f.getErr != nil {
-		return nil, f.getErr
+	if f.summaryErr != nil {
+		return nil, f.summaryErr
 	}
 	return f.summary, nil
 }
@@ -113,7 +116,7 @@ func TestGetPlatformSchemaNotFound(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	g := gin.New()
-	h := NewHandler(&fakePlatformService{getErr: gorm.ErrRecordNotFound})
+	h := NewHandler(&fakePlatformService{schemaErr: gorm.ErrRecordNotFound})
 	g.GET("/api/v1/me/platforms/:platform/schema", h.GetPlatformSchema)
 
 	rec := httptest.NewRecorder()
@@ -162,6 +165,7 @@ func TestGetPlatformAccountSummary(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "active", body.Data["status"])
+	require.Equal(t, 1, fake.summaryCalls)
 	require.Equal(t, "web_user", fake.lastActorType)
 	require.Equal(t, "session:99", fake.lastActorID)
 	require.Equal(t, uint64(7), fake.lastOwnerUserID)
@@ -210,7 +214,7 @@ func TestGetPlatformAccountSummaryNotFound(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	g := gin.New()
-	h := NewHandler(&fakePlatformService{getErr: gorm.ErrRecordNotFound})
+	h := NewHandler(&fakePlatformService{summaryErr: gorm.ErrRecordNotFound})
 	g.GET("/api/v1/me/platform-accounts/:refId/summary", func(c *gin.Context) {
 		c.Set("user_id", uint64(7))
 		c.Set("session_id", uint64(99))
@@ -225,6 +229,27 @@ func TestGetPlatformAccountSummaryNotFound(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "platform account not found", body["message"])
+}
+
+func TestGetPlatformAccountSummaryPlatformServiceUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	g := gin.New()
+	h := NewHandler(&fakePlatformService{summaryErr: serviceplatform.ErrPlatformSummaryProxyUnavailable})
+	g.GET("/api/v1/me/platform-accounts/:refId/summary", func(c *gin.Context) {
+		c.Set("user_id", uint64(7))
+		c.Set("session_id", uint64(99))
+		h.GetPlatformAccountSummary(c)
+	})
+
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/me/platform-accounts/11/summary", nil)
+	g.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "platform service unavailable", body["message"])
 }
 
 func TestGetPlatformAccountSummaryInvalidRefID(t *testing.T) {

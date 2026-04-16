@@ -7,6 +7,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"paigram/internal/config"
 	"paigram/internal/model"
@@ -19,9 +21,11 @@ type fakeSummaryProxy struct {
 	platformAccountID string
 	summary           map[string]any
 	err               error
+	calls             int
 }
 
 func (f *fakeSummaryProxy) GetCredentialSummary(_ context.Context, endpoint, ticket, platformAccountID string) (map[string]any, error) {
+	f.calls++
 	f.endpoint = endpoint
 	f.ticket = ticket
 	f.platformAccountID = platformAccountID
@@ -288,4 +292,88 @@ func TestPlatformServiceGetPlatformAccountSummaryReturnsServiceUnavailableWhenRe
 
 	_, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"mihomo.credential.read_meta"})
 	require.ErrorIs(t, err, ErrPlatformServiceUnavailable)
+}
+
+func TestPlatformServiceGetPlatformAccountSummaryPrefersGenericProxy(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "platform_registry_generic_summary_proxy", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:9000",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{}`,
+	}).Error)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	ref := model.PlatformAccountRef{
+		UserID:             owner.ID,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountID:  "hoyo_ref_11_10001",
+		DisplayName:        "Traveler",
+		Status:             model.PlatformAccountRefStatusActive,
+	}
+	require.NoError(t, db.Create(&ref).Error)
+
+	svc := NewServiceGroup(db).PlatformService
+	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+	legacyProxy := &fakeSummaryProxy{summary: map[string]any{"path": "legacy"}}
+	genericProxy := &fakeSummaryProxy{summary: map[string]any{"path": "generic"}}
+	svc.SetSummaryProxy(legacyProxy)
+	svc.SetGenericSummaryProxy(genericProxy)
+
+	summary, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"mihomo.credential.read_meta"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"path": "generic"}, summary)
+	require.Equal(t, 0, legacyProxy.calls)
+	require.Equal(t, 1, genericProxy.calls)
+	require.Equal(t, "127.0.0.1:9000", genericProxy.endpoint)
+	require.Equal(t, ref.PlatformAccountID, genericProxy.platformAccountID)
+}
+
+func TestPlatformServiceGetPlatformAccountSummaryReturnsGenericProxyError(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "platform_registry_generic_summary_error", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:9000",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{}`,
+	}).Error)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	ref := model.PlatformAccountRef{
+		UserID:             owner.ID,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountID:  "hoyo_ref_11_10001",
+		DisplayName:        "Traveler",
+		Status:             model.PlatformAccountRefStatusActive,
+	}
+	require.NoError(t, db.Create(&ref).Error)
+
+	svc := NewServiceGroup(db).PlatformService
+	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+	genericProxy := &fakeSummaryProxy{err: grpcstatus.Error(codes.Unavailable, "downstream unavailable")}
+	svc.SetGenericSummaryProxy(genericProxy)
+
+	_, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"mihomo.credential.read_meta"})
+	require.Error(t, err)
+	require.Equal(t, 1, genericProxy.calls)
 }

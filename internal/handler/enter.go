@@ -48,7 +48,7 @@ func InitializeApiGroups(db *gorm.DB, cache sessioncache.Store, authCfg config.A
 	if err := service.ServiceGroupApp.PlatformServiceGroup.PlatformService.ConfigureAuth(authCfg); err != nil {
 		return err
 	}
-	service.ServiceGroupApp.PlatformServiceGroup.PlatformService.SetSummaryProxy(servicePlatform.NewGRPCSummaryProxy(nil))
+	service.ServiceGroupApp.PlatformServiceGroup.PlatformService.SetGenericSummaryProxy(servicePlatform.NewGRPCGenericSummaryProxy(nil))
 
 	// Initialize API handlers (passing db temporarily for non-refactored methods)
 	ApiGroupApp.CasbinApiGroup = *handlerCasbin.NewApiGroup(&service.ServiceGroupApp.CasbinServiceGroup)

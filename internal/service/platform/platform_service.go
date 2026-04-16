@@ -46,11 +46,12 @@ type platformSummaryProxy interface {
 
 // PlatformService provides platform registry lookups.
 type PlatformService struct {
-	db           *gorm.DB
-	issuer       string
-	ttl          time.Duration
-	signingKey   []byte
-	summaryProxy platformSummaryProxy
+	db                  *gorm.DB
+	issuer              string
+	ttl                 time.Duration
+	signingKey          []byte
+	summaryProxy        platformSummaryProxy
+	genericSummaryProxy platformSummaryProxy
 }
 
 func buildPlatformServiceTicketClaims(actorType, actorID string, ownerUserID, platformAccountRefID uint64, platform, platformAccountID string, scopes []string) ServiceTicketClaims {
@@ -200,8 +201,12 @@ func (s *PlatformService) SetSummaryProxy(proxy platformSummaryProxy) {
 	s.summaryProxy = proxy
 }
 
+func (s *PlatformService) SetGenericSummaryProxy(proxy platformSummaryProxy) {
+	s.genericSummaryProxy = proxy
+}
+
 func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorType, actorID string, ownerUserID, platformAccountRefID uint64, scopes []string) (map[string]any, error) {
-	if s.summaryProxy == nil {
+	if s.genericSummaryProxy == nil && s.summaryProxy == nil {
 		return nil, ErrPlatformSummaryProxyUnavailable
 	}
 
@@ -221,6 +226,10 @@ func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorTy
 	ticket, _, err := s.IssueActorScopedTicket(actorType, actorID, ownerUserID, &ref, scopes, platform.ServiceAudience)
 	if err != nil {
 		return nil, err
+	}
+
+	if s.genericSummaryProxy != nil {
+		return s.genericSummaryProxy.GetCredentialSummary(ctx, platform.Endpoint, ticket, ref.PlatformAccountID)
 	}
 
 	return s.summaryProxy.GetCredentialSummary(ctx, platform.Endpoint, ticket, ref.PlatformAccountID)

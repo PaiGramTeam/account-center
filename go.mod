@@ -3,12 +3,14 @@ module paigram
 go 1.25.7
 
 require (
+	github.com/PaiGramTeam/proto-contracts v0.0.0-20260416033414-4016470bc78d
 	github.com/casbin/casbin/v2 v2.77.2
 	github.com/casbin/gorm-adapter/v3 v3.20.0
 	github.com/getsentry/sentry-go v0.43.0
 	github.com/getsentry/sentry-go/gin v0.43.0
 	github.com/gin-contrib/cors v1.7.6
 	github.com/gin-gonic/gin v1.11.0
+	github.com/glebarez/sqlite v1.11.0
 	github.com/go-openapi/runtime v0.29.0
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/golang-jwt/jwt/v5 v5.3.1
@@ -50,7 +52,6 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.10 // indirect
 	github.com/gin-contrib/sse v1.1.0 // indirect
 	github.com/glebarez/go-sqlite v1.22.0 // indirect
-	github.com/glebarez/sqlite v1.11.0 // indirect
 	github.com/go-openapi/analysis v0.24.0 // indirect
 	github.com/go-openapi/errors v0.22.3 // indirect
 	github.com/go-openapi/jsonpointer v0.22.1 // indirect

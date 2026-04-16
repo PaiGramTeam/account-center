@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
 	"paigram/internal/middleware"
@@ -107,13 +109,30 @@ func (h *Handler) GetPlatformAccountSummary(c *gin.Context) {
 		return
 	}
 
-	summary, err := h.platformService.GetPlatformAccountSummary(c.Request.Context(), "web_user", fmt.Sprintf("session:%d", sessionID), userID, refID, []string{"hoyo.credential.read_meta"})
+	summary, err := h.platformService.GetPlatformAccountSummary(c.Request.Context(), "web_user", fmt.Sprintf("session:%d", sessionID), userID, refID, []string{"mihomo.credential.read_meta"})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "platform account not found")
 			return
 		}
-		response.InternalServerError(c, "failed to load platform account summary")
+		if errors.Is(err, serviceplatform.ErrPlatformServiceUnavailable) || errors.Is(err, serviceplatform.ErrPlatformSummaryProxyUnavailable) {
+			response.InternalServerError(c, "platform service unavailable")
+			return
+		}
+		if st, ok := grpcstatus.FromError(err); ok {
+			switch st.Code() {
+			case codes.NotFound:
+				response.NotFound(c, "platform account not found")
+				return
+			case codes.PermissionDenied:
+				response.Forbidden(c, "platform scope denied")
+				return
+			case codes.Unavailable, codes.DeadlineExceeded:
+				response.InternalServerError(c, "platform service unavailable")
+				return
+			}
+		}
+		response.InternalServerError(c, "platform summary failed")
 		return
 	}
 

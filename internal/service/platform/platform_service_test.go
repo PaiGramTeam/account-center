@@ -7,6 +7,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"paigram/internal/config"
 	"paigram/internal/model"
@@ -19,9 +21,11 @@ type fakeSummaryProxy struct {
 	platformAccountID string
 	summary           map[string]any
 	err               error
+	calls             int
 }
 
 func (f *fakeSummaryProxy) GetCredentialSummary(_ context.Context, endpoint, ticket, platformAccountID string) (map[string]any, error) {
+	f.calls++
 	f.endpoint = endpoint
 	f.ticket = ticket
 	f.platformAccountID = platformAccountID
@@ -34,10 +38,10 @@ func (f *fakeSummaryProxy) GetCredentialSummary(_ context.Context, endpoint, tic
 func TestPlatformServiceGetEnabledPlatform(t *testing.T) {
 	db := testutil.OpenMySQLTestDB(t, "platform_registry", &model.PlatformService{})
 	require.NoError(t, db.Create(&model.PlatformService{
-		PlatformKey:          "hoyoverse",
-		DisplayName:          "Hoyoverse",
-		ServiceKey:           "platform-hoyoverse-service",
-		ServiceAudience:      "platform-hoyoverse-service",
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
 		DiscoveryType:        "static",
 		Endpoint:             "127.0.0.1:9000",
 		Enabled:              true,
@@ -46,9 +50,9 @@ func TestPlatformServiceGetEnabledPlatform(t *testing.T) {
 	}).Error)
 
 	svc := NewServiceGroup(db)
-	platform, err := svc.PlatformService.GetEnabledPlatform("hoyoverse")
+	platform, err := svc.PlatformService.GetEnabledPlatform("mihomo")
 	require.NoError(t, err)
-	require.Equal(t, "platform-hoyoverse-service", platform.ServiceKey)
+	require.Equal(t, "platform-mihomo-service", platform.ServiceKey)
 }
 
 func TestPlatformServiceListEnabledPlatforms(t *testing.T) {
@@ -65,10 +69,10 @@ func TestPlatformServiceListEnabledPlatforms(t *testing.T) {
 		CredentialSchemaJSON: `{}`,
 	}).Error)
 	require.NoError(t, db.Create(&model.PlatformService{
-		PlatformKey:          "hoyoverse",
-		DisplayName:          "Hoyoverse",
-		ServiceKey:           "platform-hoyoverse-service",
-		ServiceAudience:      "platform-hoyoverse-service",
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
 		DiscoveryType:        "static",
 		Endpoint:             "127.0.0.1:9000",
 		Enabled:              true,
@@ -93,18 +97,18 @@ func TestPlatformServiceListEnabledPlatforms(t *testing.T) {
 	platforms, err := svc.PlatformService.ListEnabledPlatforms()
 	require.NoError(t, err)
 	require.Len(t, platforms, 2)
-	require.Equal(t, []string{"hoyoverse", "zenless"}, []string{platforms[0].PlatformKey, platforms[1].PlatformKey})
+	require.Equal(t, []string{"mihomo", "zenless"}, []string{platforms[0].PlatformKey, platforms[1].PlatformKey})
 }
 
 func TestPlatformServiceBuildsWebActorTicketClaims(t *testing.T) {
-	claims := buildPlatformServiceTicketClaims("web_user", "session-123", 7, 11, "hoyoverse", "hoyo_ref_11_10001", []string{"hoyo.credential.read_meta"})
+	claims := buildPlatformServiceTicketClaims("web_user", "session-123", 7, 11, "mihomo", "hoyo_ref_11_10001", []string{"mihomo.credential.read_meta"})
 	require.Equal(t, "web_user", claims.ActorType)
 	require.Equal(t, "session-123", claims.ActorID)
 	require.Equal(t, uint64(7), claims.OwnerUserID)
 	require.Equal(t, uint64(11), claims.PlatformAccountRefID)
-	require.Equal(t, "hoyoverse", claims.Platform)
+	require.Equal(t, "mihomo", claims.Platform)
 	require.Equal(t, "hoyo_ref_11_10001", claims.PlatformAccountID)
-	require.Equal(t, []string{"hoyo.credential.read_meta"}, claims.Scopes)
+	require.Equal(t, []string{"mihomo.credential.read_meta"}, claims.Scopes)
 }
 
 func TestPlatformServiceIssueActorScopedTicket(t *testing.T) {
@@ -118,12 +122,12 @@ func TestPlatformServiceIssueActorScopedTicket(t *testing.T) {
 	ref := &model.PlatformAccountRef{
 		ID:                11,
 		UserID:            7,
-		Platform:          "hoyoverse",
+		Platform:          "mihomo",
 		PlatformAccountID: "hoyo_ref_11_10001",
 		Status:            model.PlatformAccountRefStatusActive,
 	}
 
-	tokenString, expiresAt, err := svc.IssueActorScopedTicket("web_user", "session-123", ref.UserID, ref, []string{"hoyo.credential.read_meta"}, "platform-hoyoverse-service")
+	tokenString, expiresAt, err := svc.IssueActorScopedTicket("web_user", "session-123", ref.UserID, ref, []string{"mihomo.credential.read_meta"}, "platform-mihomo-service")
 	require.NoError(t, err)
 	require.WithinDuration(t, time.Now().UTC().Add(5*time.Minute), expiresAt, 3*time.Second)
 
@@ -139,10 +143,10 @@ func TestPlatformServiceIssueActorScopedTicket(t *testing.T) {
 	require.Equal(t, ref.Platform, parsed.Platform)
 	require.Equal(t, ref.ID, parsed.PlatformAccountRefID)
 	require.Equal(t, ref.PlatformAccountID, parsed.PlatformAccountID)
-	require.Equal(t, []string{"hoyo.credential.read_meta"}, parsed.Scopes)
+	require.Equal(t, []string{"mihomo.credential.read_meta"}, parsed.Scopes)
 	require.Equal(t, "account-center", parsed.Issuer)
 	require.Equal(t, "user:7", parsed.Subject)
-	require.Equal(t, []string{"platform-hoyoverse-service"}, []string(parsed.Audience))
+	require.Equal(t, []string{"platform-mihomo-service"}, []string(parsed.Audience))
 	require.WithinDuration(t, expiresAt, parsed.ExpiresAt.Time, time.Second)
 	require.NotEmpty(t, parsed.ID)
 }
@@ -162,10 +166,10 @@ func TestPlatformServiceConfigureAuthAllowsEmptySigningKeyForReadOnlyRoutes(t *t
 func TestPlatformServiceListPlatformViews(t *testing.T) {
 	db := testutil.OpenMySQLTestDB(t, "platform_registry_views", &model.PlatformService{})
 	require.NoError(t, db.Create(&model.PlatformService{
-		PlatformKey:          "hoyoverse",
-		DisplayName:          "Hoyoverse",
-		ServiceKey:           "platform-hoyoverse-service",
-		ServiceAudience:      "platform-hoyoverse-service",
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
 		DiscoveryType:        "static",
 		Endpoint:             "127.0.0.1:9000",
 		Enabled:              true,
@@ -178,8 +182,8 @@ func TestPlatformServiceListPlatformViews(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, views, 1)
 	require.Equal(t, PlatformListView{
-		Platform:         "hoyoverse",
-		DisplayName:      "Hoyoverse",
+		Platform:         "mihomo",
+		DisplayName:      "Mihomo",
 		SupportedActions: []string{"bind_credential", "delete_credential"},
 	}, views[0])
 }
@@ -187,10 +191,10 @@ func TestPlatformServiceListPlatformViews(t *testing.T) {
 func TestPlatformServiceGetPlatformSchemaView(t *testing.T) {
 	db := testutil.OpenMySQLTestDB(t, "platform_registry_schema_view", &model.PlatformService{})
 	require.NoError(t, db.Create(&model.PlatformService{
-		PlatformKey:          "hoyoverse",
-		DisplayName:          "Hoyoverse",
-		ServiceKey:           "platform-hoyoverse-service",
-		ServiceAudience:      "platform-hoyoverse-service",
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
 		DiscoveryType:        "static",
 		Endpoint:             "127.0.0.1:9000",
 		Enabled:              true,
@@ -199,11 +203,11 @@ func TestPlatformServiceGetPlatformSchemaView(t *testing.T) {
 	}).Error)
 
 	svc := NewServiceGroup(db)
-	view, err := svc.PlatformService.GetPlatformSchemaView("hoyoverse")
+	view, err := svc.PlatformService.GetPlatformSchemaView("mihomo")
 	require.NoError(t, err)
 	require.Equal(t, &PlatformSchemaView{
-		Platform:         "hoyoverse",
-		DisplayName:      "Hoyoverse",
+		Platform:         "mihomo",
+		DisplayName:      "Mihomo",
 		SupportedActions: []string{"bind_credential"},
 		CredentialSchema: map[string]any{"type": "object", "required": []any{"cookie_bundle"}},
 	}, view)
@@ -212,10 +216,10 @@ func TestPlatformServiceGetPlatformSchemaView(t *testing.T) {
 func TestPlatformServiceGetPlatformAccountSummaryIssuesScopedTicketAndCallsProxy(t *testing.T) {
 	db := testutil.OpenMySQLTestDB(t, "platform_registry_summary_proxy", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
 	require.NoError(t, db.Create(&model.PlatformService{
-		PlatformKey:          "hoyoverse",
-		DisplayName:          "Hoyoverse",
-		ServiceKey:           "platform-hoyoverse-service",
-		ServiceAudience:      "platform-hoyoverse-service",
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
 		DiscoveryType:        "static",
 		Endpoint:             "127.0.0.1:9000",
 		Enabled:              true,
@@ -226,8 +230,8 @@ func TestPlatformServiceGetPlatformAccountSummaryIssuesScopedTicketAndCallsProxy
 	require.NoError(t, db.Create(&owner).Error)
 	ref := model.PlatformAccountRef{
 		UserID:             owner.ID,
-		Platform:           "hoyoverse",
-		PlatformServiceKey: "platform-hoyoverse-service",
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
 		PlatformAccountID:  "hoyo_ref_11_10001",
 		DisplayName:        "Traveler",
 		Status:             model.PlatformAccountRefStatusActive,
@@ -243,7 +247,7 @@ func TestPlatformServiceGetPlatformAccountSummaryIssuesScopedTicketAndCallsProxy
 	proxy := &fakeSummaryProxy{summary: map[string]any{"status": "active"}}
 	svc.SetSummaryProxy(proxy)
 
-	summary, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"hoyo.credential.read_meta"})
+	summary, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"mihomo.credential.read_meta"})
 	require.NoError(t, err)
 	require.Equal(t, map[string]any{"status": "active"}, summary)
 	require.Equal(t, "127.0.0.1:9000", proxy.endpoint)
@@ -260,6 +264,116 @@ func TestPlatformServiceGetPlatformAccountSummaryIssuesScopedTicketAndCallsProxy
 	require.Equal(t, owner.ID, parsed.OwnerUserID)
 	require.Equal(t, ref.ID, parsed.PlatformAccountRefID)
 	require.Equal(t, ref.PlatformAccountID, parsed.PlatformAccountID)
-	require.Equal(t, []string{"hoyo.credential.read_meta"}, parsed.Scopes)
-	require.Equal(t, []string{"platform-hoyoverse-service"}, []string(parsed.Audience))
+	require.Equal(t, []string{"mihomo.credential.read_meta"}, parsed.Scopes)
+	require.Equal(t, []string{"platform-mihomo-service"}, []string(parsed.Audience))
+}
+
+func TestPlatformServiceGetPlatformAccountSummaryReturnsServiceUnavailableWhenRegistryMissing(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "platform_registry_missing_summary", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	ref := model.PlatformAccountRef{
+		UserID:             owner.ID,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountID:  "hoyo_ref_11_10001",
+		DisplayName:        "Traveler",
+		Status:             model.PlatformAccountRefStatusActive,
+	}
+	require.NoError(t, db.Create(&ref).Error)
+
+	svc := NewServiceGroup(db).PlatformService
+	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+	svc.SetSummaryProxy(&fakeSummaryProxy{summary: map[string]any{"status": "active"}})
+
+	_, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"mihomo.credential.read_meta"})
+	require.ErrorIs(t, err, ErrPlatformServiceUnavailable)
+}
+
+func TestPlatformServiceGetPlatformAccountSummaryPrefersGenericProxy(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "platform_registry_generic_summary_proxy", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:9000",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{}`,
+	}).Error)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	ref := model.PlatformAccountRef{
+		UserID:             owner.ID,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountID:  "hoyo_ref_11_10001",
+		DisplayName:        "Traveler",
+		Status:             model.PlatformAccountRefStatusActive,
+	}
+	require.NoError(t, db.Create(&ref).Error)
+
+	svc := NewServiceGroup(db).PlatformService
+	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+	legacyProxy := &fakeSummaryProxy{summary: map[string]any{"path": "legacy"}}
+	genericProxy := &fakeSummaryProxy{summary: map[string]any{"path": "generic"}}
+	svc.SetSummaryProxy(legacyProxy)
+	svc.SetGenericSummaryProxy(genericProxy)
+
+	summary, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"mihomo.credential.read_meta"})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"path": "generic"}, summary)
+	require.Equal(t, 0, legacyProxy.calls)
+	require.Equal(t, 1, genericProxy.calls)
+	require.Equal(t, "127.0.0.1:9000", genericProxy.endpoint)
+	require.Equal(t, ref.PlatformAccountID, genericProxy.platformAccountID)
+}
+
+func TestPlatformServiceGetPlatformAccountSummaryReturnsGenericProxyError(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "platform_registry_generic_summary_error", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:9000",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{}`,
+	}).Error)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	ref := model.PlatformAccountRef{
+		UserID:             owner.ID,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountID:  "hoyo_ref_11_10001",
+		DisplayName:        "Traveler",
+		Status:             model.PlatformAccountRefStatusActive,
+	}
+	require.NoError(t, db.Create(&ref).Error)
+
+	svc := NewServiceGroup(db).PlatformService
+	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+	genericProxy := &fakeSummaryProxy{err: grpcstatus.Error(codes.Unavailable, "downstream unavailable")}
+	svc.SetGenericSummaryProxy(genericProxy)
+
+	_, err := svc.GetPlatformAccountSummary(context.Background(), "web_user", "session:99", owner.ID, ref.ID, []string{"mihomo.credential.read_meta"})
+	require.Error(t, err)
+	require.Equal(t, 1, genericProxy.calls)
 }

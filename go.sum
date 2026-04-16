@@ -30,8 +30,8 @@ github.com/Knetic/govaluate v3.0.1-0.20171022003610-9aa49832a739+incompatible h1
 github.com/Knetic/govaluate v3.0.1-0.20171022003610-9aa49832a739+incompatible/go.mod h1:r7JcOSlj0wfOMncg0iLm8Leh48TZaKVeNIfJntJ2wa0=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/PaiGramTeam/proto-contracts v0.0.0-20260415161147-f0505e01b851 h1:JbAosLeJE8sfympuSmV4KODn7XIu51KAQ3LAU3MrIyo=
-github.com/PaiGramTeam/proto-contracts v0.0.0-20260415161147-f0505e01b851/go.mod h1:i5FW0tHMyzubj1qI/7e04arFyrDv3YXkK1Pu5UxejBI=
+github.com/PaiGramTeam/proto-contracts v0.0.0-20260416033414-4016470bc78d h1:sRlQ5OlTFoft20wsKyi/7pVTTflEPqPcvDhOuoPMGpE=
+github.com/PaiGramTeam/proto-contracts v0.0.0-20260416033414-4016470bc78d/go.mod h1:i5FW0tHMyzubj1qI/7e04arFyrDv3YXkK1Pu5UxejBI=
 github.com/agiledragon/gomonkey/v2 v2.2.0 h1:QJWqpdEhGV/JJy70sZ/LDnhbSlMrqHAWHcNOjz1kyuI=
 github.com/agiledragon/gomonkey/v2 v2.2.0/go.mod h1:ap1AmDzcVOAz1YpeJ3TCzIgstoaWLA6jbbgxfB4w2iY=
 github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 h1:DklsrG3dyBCFEj5IhUbnKptjxatkF07cF2ak3yi77so=

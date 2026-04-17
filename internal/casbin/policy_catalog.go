@@ -66,12 +66,30 @@ var permissionPolicies = map[string][]PolicyRule{
 	model.BuildPermissionName(model.ResourcePermission, model.ActionList): {
 		{Path: "/api/v1/users/:id/permissions", Method: "GET"},
 	},
-	model.BuildPermissionName(model.ResourceBot, model.ActionCreate): {},
-	model.BuildPermissionName(model.ResourceBot, model.ActionRead):   {},
-	model.BuildPermissionName(model.ResourceBot, model.ActionUpdate): {},
-	model.BuildPermissionName(model.ResourceBot, model.ActionDelete): {},
-	model.BuildPermissionName(model.ResourceBot, model.ActionList):   {},
-	model.BuildPermissionName(model.ResourceBot, model.ActionManage): {},
+	model.BuildPermissionName(model.ResourcePlatform, model.ActionCreate): {
+		{Path: "/api/v1/platform-services", Method: "POST"},
+	},
+	model.BuildPermissionName(model.ResourcePlatform, model.ActionRead): {
+		{Path: "/api/v1/platform-services", Method: "GET"},
+		{Path: "/api/v1/platform-services/:id", Method: "GET"},
+		{Path: "/api/v1/platform-services/:id/check", Method: "POST"},
+	},
+	model.BuildPermissionName(model.ResourcePlatform, model.ActionUpdate): {
+		{Path: "/api/v1/platform-services/:id", Method: "PATCH"},
+	},
+	model.BuildPermissionName(model.ResourcePlatform, model.ActionDelete): {
+		{Path: "/api/v1/platform-services/:id", Method: "DELETE"},
+	},
+	model.BuildPermissionName(model.ResourcePlatform, model.ActionList): {
+		{Path: "/api/v1/platform-services", Method: "GET"},
+	},
+	model.BuildPermissionName(model.ResourcePlatform, model.ActionManage): {},
+	model.BuildPermissionName(model.ResourceBot, model.ActionCreate):      {},
+	model.BuildPermissionName(model.ResourceBot, model.ActionRead):        {},
+	model.BuildPermissionName(model.ResourceBot, model.ActionUpdate):      {},
+	model.BuildPermissionName(model.ResourceBot, model.ActionDelete):      {},
+	model.BuildPermissionName(model.ResourceBot, model.ActionList):        {},
+	model.BuildPermissionName(model.ResourceBot, model.ActionManage):      {},
 	model.BuildPermissionName(model.ResourceSession, model.ActionRead): {
 		{Path: "/api/v1/users/:id/sessions", Method: "GET"},
 	},
@@ -96,6 +114,7 @@ var systemRolePermissions = map[string][]string{
 		"user:create", "user:read", "user:update", "user:delete", "user:list",
 		"role:create", "role:read", "role:update", "role:delete", "role:list", "role:manage",
 		"permission:create", "permission:read", "permission:delete", "permission:list",
+		model.PermPlatformCreate, model.PermPlatformRead, model.PermPlatformUpdate, model.PermPlatformDelete, model.PermPlatformList, model.PermPlatformManage,
 		"bot:create", "bot:read", "bot:update", "bot:delete", "bot:list", "bot:manage",
 		"session:read", "session:delete", "session:list",
 		"audit:read", "audit:list",
@@ -146,6 +165,7 @@ func AllManagedPolicies() []PolicyRule {
 	for _, permissionRules := range permissionPolicies {
 		rules = append(rules, permissionRules...)
 	}
+	rules = append(rules, adminOnlyPolicies...)
 	return uniquePolicyRules(rules)
 }
 

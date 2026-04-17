@@ -1,6 +1,8 @@
 package platform
 
 import (
+	"time"
+
 	"gorm.io/gorm"
 )
 
@@ -11,5 +13,8 @@ type ServiceGroup struct {
 
 // NewServiceGroup creates the platform service group.
 func NewServiceGroup(db *gorm.DB) *ServiceGroup {
-	return &ServiceGroup{PlatformService: PlatformService{db: db}}
+	service := PlatformService{db: db}
+	service.SetHealthChecker(newGRPCHealthChecker(2 * time.Second))
+
+	return &ServiceGroup{PlatformService: service}
 }

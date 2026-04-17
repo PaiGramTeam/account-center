@@ -81,6 +81,7 @@ const (
 	ResourceUser       = "user"
 	ResourceRole       = "role"
 	ResourcePermission = "permission"
+	ResourcePlatform   = "platform"
 	ResourceBot        = "bot"
 	ResourceSession    = "session"
 	ResourceAudit      = "audit"
@@ -120,6 +121,14 @@ const (
 	PermPermissionWrite  = "permission:write"
 	PermPermissionDelete = "permission:delete"
 	PermPermissionManage = "permission:manage"
+
+	// Platform permissions
+	PermPlatformCreate = "platform:create"
+	PermPlatformRead   = "platform:read"
+	PermPlatformUpdate = "platform:update"
+	PermPlatformDelete = "platform:delete"
+	PermPlatformList   = "platform:list"
+	PermPlatformManage = "platform:manage"
 
 	// Bot permissions
 	PermBotRead   = "bot:read"

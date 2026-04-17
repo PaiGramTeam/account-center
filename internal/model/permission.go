@@ -78,13 +78,14 @@ const (
 
 // Predefined permission resources
 const (
-	ResourceUser       = "user"
-	ResourceRole       = "role"
-	ResourcePermission = "permission"
-	ResourcePlatform   = "platform"
-	ResourceBot        = "bot"
-	ResourceSession    = "session"
-	ResourceAudit      = "audit"
+	ResourceUser            = "user"
+	ResourceRole            = "role"
+	ResourcePermission      = "permission"
+	ResourcePlatform        = "platform"
+	ResourcePlatformAccount = "platform_account"
+	ResourceBot             = "bot"
+	ResourceSession         = "session"
+	ResourceAudit           = "audit"
 )
 
 // Predefined permission actions
@@ -129,6 +130,12 @@ const (
 	PermPlatformDelete = "platform:delete"
 	PermPlatformList   = "platform:list"
 	PermPlatformManage = "platform:manage"
+
+	// Platform account permissions
+	PermPlatformAccountRead   = "platform_account:read"
+	PermPlatformAccountUpdate = "platform_account:update"
+	PermPlatformAccountDelete = "platform_account:delete"
+	PermPlatformAccountList   = "platform_account:list"
 
 	// Bot permissions
 	PermBotRead   = "bot:read"

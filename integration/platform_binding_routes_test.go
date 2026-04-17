@@ -133,7 +133,7 @@ func TestPlatformBindingRoutes(t *testing.T) {
 	}
 	require.NoError(t, stack.DB.Create(&profiles).Error)
 	binding.PrimaryProfileID = sql.NullInt64{Int64: int64(profiles[0].ID), Valid: true}
-	require.NoError(t, stack.DB.Save(&binding).Error)
+	require.NoError(t, stack.DB.Model(&binding).Update("primary_profile_id", binding.PrimaryProfileID).Error)
 
 	grant := model.ConsumerGrant{
 		BindingID: binding.ID,

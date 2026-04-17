@@ -250,7 +250,15 @@ func TestPlatformServiceGetPlatformSchemaView(t *testing.T) {
 }
 
 func TestPlatformServiceGetPlatformAccountSummaryIssuesScopedTicketAndCallsProxy(t *testing.T) {
-	db := testutil.OpenMySQLTestDB(t, "platform_registry_summary_proxy", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	db := testutil.OpenMySQLTestDB(
+		t,
+		"platform_registry_summary_proxy",
+		&model.PlatformService{},
+		&model.User{},
+		&model.PlatformAccountRef{},
+		&model.PlatformAccountBinding{},
+		&model.PlatformAccountProfile{},
+	)
 	require.NoError(t, db.Create(&model.PlatformService{
 		PlatformKey:          "mihomo",
 		DisplayName:          "Mihomo",
@@ -337,7 +345,15 @@ func TestPlatformServiceGetPlatformAccountSummaryReturnsBindingProjectionWithout
 }
 
 func TestPlatformServiceGetPlatformAccountSummaryReturnsServiceUnavailableWhenRegistryMissing(t *testing.T) {
-	db := testutil.OpenMySQLTestDB(t, "platform_registry_missing_summary", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	db := testutil.OpenMySQLTestDB(
+		t,
+		"platform_registry_missing_summary",
+		&model.PlatformService{},
+		&model.User{},
+		&model.PlatformAccountRef{},
+		&model.PlatformAccountBinding{},
+		&model.PlatformAccountProfile{},
+	)
 	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
 	require.NoError(t, db.Create(&owner).Error)
 	ref := model.PlatformAccountRef{
@@ -363,7 +379,15 @@ func TestPlatformServiceGetPlatformAccountSummaryReturnsServiceUnavailableWhenRe
 }
 
 func TestPlatformServiceGetPlatformAccountSummaryPrefersGenericProxy(t *testing.T) {
-	db := testutil.OpenMySQLTestDB(t, "platform_registry_generic_summary_proxy", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	db := testutil.OpenMySQLTestDB(
+		t,
+		"platform_registry_generic_summary_proxy",
+		&model.PlatformService{},
+		&model.User{},
+		&model.PlatformAccountRef{},
+		&model.PlatformAccountBinding{},
+		&model.PlatformAccountProfile{},
+	)
 	require.NoError(t, db.Create(&model.PlatformService{
 		PlatformKey:          "mihomo",
 		DisplayName:          "Mihomo",
@@ -408,7 +432,15 @@ func TestPlatformServiceGetPlatformAccountSummaryPrefersGenericProxy(t *testing.
 }
 
 func TestPlatformServiceGetPlatformAccountSummaryReturnsGenericProxyError(t *testing.T) {
-	db := testutil.OpenMySQLTestDB(t, "platform_registry_generic_summary_error", &model.PlatformService{}, &model.User{}, &model.PlatformAccountRef{})
+	db := testutil.OpenMySQLTestDB(
+		t,
+		"platform_registry_generic_summary_error",
+		&model.PlatformService{},
+		&model.User{},
+		&model.PlatformAccountRef{},
+		&model.PlatformAccountBinding{},
+		&model.PlatformAccountProfile{},
+	)
 	require.NoError(t, db.Create(&model.PlatformService{
 		PlatformKey:          "mihomo",
 		DisplayName:          "Mihomo",

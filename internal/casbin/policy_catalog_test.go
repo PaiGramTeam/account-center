@@ -90,6 +90,41 @@ func TestPoliciesForSystemRoleAdminIncludesPlatformRegistryRoutes(t *testing.T) 
 	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id/check", Method: "POST"})
 }
 
+func TestPoliciesForPermissionPlatformAccountRoutes(t *testing.T) {
+	listRules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionList))
+	require.NotEmpty(t, listRules)
+	assert.Contains(t, listRules, PolicyRule{Path: "/api/v1/admin/platform-accounts", Method: "GET"})
+	assert.NotContains(t, listRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "GET"})
+
+	readRules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionRead))
+	require.NotEmpty(t, readRules)
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "GET"})
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/profiles", Method: "GET"})
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants", Method: "GET"})
+
+	updateRules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionUpdate))
+	require.NotEmpty(t, updateRules)
+	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants/:consumer", Method: "PUT"})
+	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/refresh", Method: "POST"})
+
+	deleteRules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionDelete))
+	require.NotEmpty(t, deleteRules)
+	assert.Contains(t, deleteRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "DELETE"})
+}
+
+func TestPoliciesForSystemRoleAdminIncludesPlatformAccountRoutes(t *testing.T) {
+	rules := PoliciesForSystemRole(model.RoleAdmin)
+	require.NotEmpty(t, rules)
+
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/platform-accounts", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/profiles", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants/:consumer", Method: "PUT"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/refresh", Method: "POST"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "DELETE"})
+}
+
 func TestPoliciesForPermissionCoversSeededCatalogRoutes(t *testing.T) {
 	testCases := []struct {
 		name       string

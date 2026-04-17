@@ -90,6 +90,29 @@ func TestSeedRoles(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, adminRole.IsSystem)
 	assert.Greater(t, len(adminRole.Permissions), 0)
+	assert.Contains(t, permissionNames(adminRole.Permissions), model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionRead))
+	assert.Contains(t, permissionNames(adminRole.Permissions), model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionList))
+	assert.Contains(t, permissionNames(adminRole.Permissions), model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionUpdate))
+	assert.Contains(t, permissionNames(adminRole.Permissions), model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionDelete))
+}
+
+func TestSeedPermissions_IncludesPlatformAccountPermissions(t *testing.T) {
+	db := setupTestDB(t)
+
+	err := SeedPermissions(db)
+	require.NoError(t, err)
+
+	for _, permissionName := range []string{
+		model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionRead),
+		model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionList),
+		model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionUpdate),
+		model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionDelete),
+	} {
+		var perm model.Permission
+		err = db.Where("name = ?", permissionName).First(&perm).Error
+		require.NoError(t, err)
+		assert.Equal(t, model.ResourcePlatformAccount, perm.Resource)
+	}
 }
 
 func TestSeedRoles_UpdatePermissions(t *testing.T) {
@@ -163,6 +186,14 @@ func TestRun(t *testing.T) {
 	err = db.Model(&model.Role{}).Count(&roleCount).Error
 	require.NoError(t, err)
 	assert.Greater(t, roleCount, int64(0))
+}
+
+func permissionNames(perms []model.Permission) []string {
+	names := make([]string, 0, len(perms))
+	for _, perm := range perms {
+		names = append(names, perm.Name)
+	}
+	return names
 }
 
 func TestSeedCasbinPoliciesAddsMissingRulesWhenPoliciesAlreadyExist(t *testing.T) {

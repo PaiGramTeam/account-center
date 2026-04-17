@@ -458,6 +458,49 @@ func TestHandler_GetUserAggregatesRolesPermissionsAndSecurity(t *testing.T) {
 	assert.Equal(t, float64(1), data["active_session_count"])
 }
 
+func TestHandler_PatchPrimaryRoleSupportsClearAndReturnsUnprocessableEntity(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	role := model.Role{Name: "member", DisplayName: "Member"}
+	otherRole := model.Role{Name: "other", DisplayName: "Other"}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&role).Error)
+	require.NoError(t, db.Create(&otherRole).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: role.ID, GrantedBy: user.ID}).Error)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.ID).Update("primary_role_id", role.ID).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.PATCH("/users/:id/primary-role", func(c *gin.Context) {
+		c.Set("user_id", user.ID)
+		handler.PatchPrimaryRole(c)
+	})
+
+	t.Run("clear primary role with null", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPatch, "/users/"+strconv.FormatUint(user.ID, 10)+"/primary-role", bytes.NewBufferString(`{"primary_role_id":null}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var updated model.User
+		require.NoError(t, db.First(&updated, user.ID).Error)
+		assert.False(t, updated.PrimaryRoleID.Valid)
+	})
+
+	t.Run("reject role not assigned with 422", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPatch, "/users/"+strconv.FormatUint(user.ID, 10)+"/primary-role", bytes.NewBufferString(`{"primary_role_id":`+strconv.FormatUint(otherRole.ID, 10)+`}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	})
+}
+
 func TestHandler_DeleteUser(t *testing.T) {
 	db := setupTestDB(t)
 	handler := setupTestHandler(db)

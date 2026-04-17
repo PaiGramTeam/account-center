@@ -13,8 +13,16 @@ func TestRouterGroupStructure(t *testing.T) {
 		assert.NotNil(t, &rg.UserRouterGroup, "RouterGroup should have UserRouterGroup field")
 	})
 
+	t.Run("has AdminRouterGroup field", func(t *testing.T) {
+		assert.NotNil(t, &rg.AdminRouterGroup, "RouterGroup should have AdminRouterGroup field")
+	})
+
 	t.Run("has AuthorityRouterGroup field", func(t *testing.T) {
 		assert.NotNil(t, &rg.AuthorityRouterGroup, "RouterGroup should have AuthorityRouterGroup field")
+	})
+
+	t.Run("has PlatformBindingRouterGroup field", func(t *testing.T) {
+		assert.NotNil(t, &rg.PlatformBindingRouterGroup, "RouterGroup should have PlatformBindingRouterGroup field")
 	})
 }
 

@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS `platform_account_bindings` (
+    `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    `owner_user_id` BIGINT UNSIGNED NOT NULL,
+    `platform` VARCHAR(64) NOT NULL,
+    `external_account_key` VARCHAR(191) NOT NULL,
+    `platform_service_key` VARCHAR(128) NOT NULL,
+    `display_name` VARCHAR(255) NOT NULL,
+    `status` VARCHAR(32) NOT NULL DEFAULT 'pending_bind',
+    `primary_profile_id` BIGINT UNSIGNED NULL,
+    `last_synced_at` DATETIME(3) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+    `deleted_at` DATETIME(3) NULL,
+    `active_binding_marker` TINYINT GENERATED ALWAYS AS (IF(`deleted_at` IS NULL, 1, NULL)) STORED,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_platform_account_bindings_active_external_account` (`platform`, `external_account_key`, `active_binding_marker`),
+    KEY `idx_platform_account_bindings_owner` (`owner_user_id`),
+    KEY `idx_platform_account_bindings_status` (`status`),
+    KEY `idx_platform_account_bindings_primary_profile_id` (`primary_profile_id`),
+    KEY `idx_platform_account_bindings_primary_profile_assignment` (`id`, `primary_profile_id`),
+    KEY `idx_platform_account_bindings_deleted_at` (`deleted_at`),
+    CONSTRAINT `fk_platform_account_bindings_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Unified platform account ownership bindings';

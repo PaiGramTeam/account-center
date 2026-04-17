@@ -56,6 +56,7 @@ func TestTicketServiceIssueIncludesAudienceAndScopes(t *testing.T) {
 	assert.Equal(t, ref.UserID, parsed.UserID)
 	assert.Equal(t, ref.Platform, parsed.Platform)
 	assert.Equal(t, ref.PlatformServiceKey, parsed.PlatformServiceKey)
+	assert.Equal(t, ref.ID, parsed.BindingID)
 	assert.Equal(t, ref.ID, parsed.PlatformAccountRefID)
 	assert.Equal(t, ref.PlatformAccountID, parsed.PlatformAccountID)
 	assert.ElementsMatch(t, []string{"profile:read", "messages:send"}, parsed.Scopes)

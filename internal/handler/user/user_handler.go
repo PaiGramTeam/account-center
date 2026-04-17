@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,17 @@ type UserServiceInterface interface {
 	CreateUser(params user.CreateUserParams) (*model.User, error)
 	UpdateUser(userID uint64, params user.UpdateUserParams) (*model.User, error)
 	DeleteUser(userID uint64) error
+	ReplaceUserRoles(userID uint64, roleIDs []uint64, primaryRoleID *uint64, grantedBy uint64) (*model.User, error)
+	SetPrimaryRole(userID uint64, primaryRoleID *uint64, clear bool) (*model.User, error)
+}
+
+type ReplaceUserRolesRequest struct {
+	RoleIDs       []uint64 `json:"role_ids"`
+	PrimaryRoleID *uint64  `json:"primary_role_id"`
+}
+
+type PatchPrimaryRoleRequest struct {
+	PrimaryRoleID *uint64 `json:"primary_role_id"`
 }
 
 // NewHandler constructs a handler with the provided user service.
@@ -1180,6 +1193,73 @@ func (h *Handler) GetUserRoles(c *gin.Context) {
 	response.SuccessWithPagination(c, roleList, total, page, pageSize)
 }
 
+// PutUserRoles replaces a user's role assignments.
+func (h *Handler) PutUserRoles(c *gin.Context) {
+	targetUserID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidUserID, "invalid user id", nil)
+		return
+	}
+
+	actorUserID, ok := middleware.GetUserID(c)
+	if !ok || actorUserID == 0 {
+		response.Unauthorized(c, "authentication required")
+		return
+	}
+
+	var req ReplaceUserRolesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request payload")
+		return
+	}
+
+	updatedUser, err := h.userService.ReplaceUserRoles(targetUserID, req.RoleIDs, req.PrimaryRoleID, actorUserID)
+	if err != nil {
+		writeUserRoleMutationError(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"primary_role_id": nullableUserRoleID(updatedUser.PrimaryRoleID)})
+}
+
+// PatchPrimaryRole updates a user's primary role.
+func (h *Handler) PatchPrimaryRole(c *gin.Context) {
+	targetUserID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	if err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidUserID, "invalid user id", nil)
+		return
+	}
+
+	var raw map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		response.BadRequest(c, "invalid request payload")
+		return
+	}
+
+	rawPrimaryRoleID, ok := raw["primary_role_id"]
+	if !ok {
+		response.BadRequest(c, "primary_role_id is required")
+		return
+	}
+
+	clear := string(rawPrimaryRoleID) == "null"
+	var req PatchPrimaryRoleRequest
+	if !clear {
+		if err := json.Unmarshal(rawPrimaryRoleID, &req.PrimaryRoleID); err != nil {
+			response.BadRequest(c, "invalid request payload")
+			return
+		}
+	}
+
+	updatedUser, err := h.userService.SetPrimaryRole(targetUserID, req.PrimaryRoleID, clear)
+	if err != nil {
+		writeUserRoleMutationError(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"primary_role_id": nullableUserRoleID(updatedUser.PrimaryRoleID)})
+}
+
 // swagger:route GET /api/v1/users/{id}/permissions users getUserPermissions
 //
 // 获取用户权限列表。
@@ -1291,4 +1371,24 @@ func (h *Handler) GetUserPermissions(c *gin.Context) {
 	}
 
 	response.Success(c, responseData)
+}
+
+func writeUserRoleMutationError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, user.ErrUserNotFound):
+		response.NotFound(c, "user not found")
+	case errors.Is(err, user.ErrRoleNotFound):
+		response.Error(c, http.StatusUnprocessableEntity, "role not found")
+	case errors.Is(err, user.ErrPrimaryRoleNotAssigned):
+		response.Error(c, http.StatusUnprocessableEntity, "primary role must belong to user")
+	default:
+		response.InternalServerError(c, "failed to update user roles")
+	}
+}
+
+func nullableUserRoleID(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
 }

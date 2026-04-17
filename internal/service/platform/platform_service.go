@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,9 +63,25 @@ func buildPlatformServiceTicketClaims(actorType, actorID string, ownerUserID, pl
 		OwnerUserID:          ownerUserID,
 		UserID:               ownerUserID,
 		Platform:             platform,
+		BindingID:            platformAccountRefID,
 		PlatformAccountRefID: platformAccountRefID,
 		PlatformAccountID:    platformAccountID,
 		Scopes:               scopes,
+	}
+}
+
+func buildBindingScopedTicketClaims(actorType, actorID string, ownerUserID, bindingID uint64, platform, platformServiceKey, platformAccountID string, scopes []string) ServiceTicketClaims {
+	claims := buildPlatformServiceTicketClaims(actorType, actorID, ownerUserID, bindingID, platform, platformAccountID, scopes)
+	claims.PlatformServiceKey = platformServiceKey
+	return claims
+}
+
+func isSupportedInternalActorType(actorType string) bool {
+	switch actorType {
+	case "user", "admin", "consumer":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -170,16 +187,13 @@ func (s *PlatformService) IssueActorScopedTicket(actorType, actorID string, owne
 	if ref == nil || ref.Status != model.PlatformAccountRefStatusActive {
 		return "", time.Time{}, gorm.ErrRecordNotFound
 	}
-	if actorType == "" || actorID == "" || audience == "" {
+	if actorType == "" || actorID == "" || audience == "" || !isSupportedInternalActorType(actorType) {
 		return "", time.Time{}, ErrInvalidTicketConfig
 	}
 
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.ttl)
-	claims := buildPlatformServiceTicketClaims(actorType, actorID, ownerUserID, ref.ID, ref.Platform, ref.PlatformAccountID, scopes)
-	if actorType == "bot" {
-		claims.BotID = actorID
-	}
+	claims := buildBindingScopedTicketClaims(actorType, actorID, ownerUserID, ref.ID, ref.Platform, ref.PlatformServiceKey, ref.PlatformAccountID, scopes)
 	claims.RegisteredClaims = jwt.RegisteredClaims{
 		Issuer:    s.issuer,
 		Subject:   fmt.Sprintf("user:%d", ownerUserID),
@@ -211,8 +225,14 @@ func (s *PlatformService) SetHealthChecker(checker platformHealthChecker) {
 }
 
 func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorType, actorID string, ownerUserID, platformAccountRefID uint64, scopes []string) (map[string]any, error) {
+	if bindingSummary, ok, err := s.getBindingSummary(ctx, ownerUserID, platformAccountRefID); err != nil {
+		return nil, err
+	} else if ok {
+		return bindingSummary, nil
+	}
+
 	if s.genericSummaryProxy == nil && s.summaryProxy == nil {
-		return nil, ErrPlatformSummaryProxyUnavailable
+		return nil, gorm.ErrRecordNotFound
 	}
 
 	var ref model.PlatformAccountRef
@@ -238,6 +258,63 @@ func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorTy
 	}
 
 	return s.summaryProxy.GetCredentialSummary(ctx, platform.Endpoint, ticket, ref.PlatformAccountID)
+}
+
+func (s *PlatformService) getBindingSummary(ctx context.Context, ownerUserID, bindingID uint64) (map[string]any, bool, error) {
+	var binding model.PlatformAccountBinding
+	err := s.db.WithContext(ctx).
+		Preload("Profiles", func(db *gorm.DB) *gorm.DB {
+			return db.Order("is_primary DESC").Order("id ASC")
+		}).
+		Where("id = ? AND owner_user_id = ?", bindingID, ownerUserID).
+		First(&binding).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	profiles := make([]map[string]any, 0, len(binding.Profiles))
+	for _, profile := range binding.Profiles {
+		profiles = append(profiles, map[string]any{
+			"id":                   profile.ID,
+			"platform_profile_key": profile.PlatformProfileKey,
+			"game_biz":             profile.GameBiz,
+			"region":               profile.Region,
+			"player_uid":           profile.PlayerUID,
+			"nickname":             profile.Nickname,
+			"level":                nullableBindingSummaryInt(profile.Level),
+			"is_primary":           profile.IsPrimary,
+			"source_updated_at":    nullableBindingSummaryTime(profile.SourceUpdatedAt),
+		})
+	}
+
+	return map[string]any{
+		"binding_id":           binding.ID,
+		"platform":             binding.Platform,
+		"external_account_key": binding.ExternalAccountKey,
+		"platform_service_key": binding.PlatformServiceKey,
+		"display_name":         binding.DisplayName,
+		"status":               binding.Status,
+		"primary_profile_id":   nullableBindingSummaryInt(binding.PrimaryProfileID),
+		"last_synced_at":       nullableBindingSummaryTime(binding.LastSyncedAt),
+		"profiles":             profiles,
+	}, true, nil
+}
+
+func nullableBindingSummaryInt(value sql.NullInt64) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Int64
+}
+
+func nullableBindingSummaryTime(value sql.NullTime) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.Time
 }
 
 func parseStringListJSON(raw string) ([]string, error) {

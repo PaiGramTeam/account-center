@@ -32,6 +32,7 @@ type User struct {
 	ID               uint64         `gorm:"primaryKey"`
 	PrimaryLoginType LoginType      `gorm:"size:32;not null;index"`
 	Status           UserStatus     `gorm:"size:32;not null;default:'pending';index"`
+	PrimaryRoleID    sql.NullInt64  `gorm:"type:bigint unsigned;index"`
 	LastLoginAt      sql.NullTime   `gorm:"type:datetime(3);index"`
 	CreatedAt        time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
 	UpdatedAt        time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`

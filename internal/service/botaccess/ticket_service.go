@@ -19,6 +19,7 @@ type ServiceTicketClaims struct {
 	UserID               uint64   `json:"user_id"`
 	Platform             string   `json:"platform"`
 	PlatformServiceKey   string   `json:"platform_service_key"`
+	BindingID            uint64   `json:"binding_id,omitempty"`
 	PlatformAccountRefID uint64   `json:"platform_account_ref_id"`
 	PlatformAccountID    string   `json:"platform_account_id,omitempty"`
 	Scopes               []string `json:"scopes"`
@@ -66,6 +67,7 @@ func (s *TicketService) Issue(botID string, ref *model.PlatformAccountRef, userI
 		UserID:               userID,
 		Platform:             ref.Platform,
 		PlatformServiceKey:   ref.PlatformServiceKey,
+		BindingID:            ref.ID,
 		PlatformAccountRefID: ref.ID,
 		PlatformAccountID:    ref.PlatformAccountID,
 		Scopes:               scopes,

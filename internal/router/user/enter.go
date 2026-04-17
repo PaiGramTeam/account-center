@@ -13,52 +13,74 @@ type RouterGroup struct{}
 
 // Init registers user routes on the provided router group.
 func (r *RouterGroup) Init(rg *gin.RouterGroup, db *gorm.DB) {
-	// Get user handler from global API group
 	userHandler := &handler.ApiGroupApp.UserApiGroup.Handler
+	registerUserManagementRoutes(rg.Group("/users"), userHandler, userRouteAccess{
+		List:            middleware.CasbinMiddleware(),
+		Create:          middleware.CasbinMiddleware(),
+		Read:            middleware.SelfOrCasbinPermission(),
+		Update:          middleware.SelfOrCasbinPermission(),
+		Delete:          middleware.CasbinMiddleware(),
+		UpdateStatus:    middleware.CasbinMiddleware(),
+		ResetPassword:   middleware.CasbinMiddleware(),
+		AuditLogs:       middleware.SelfOrCasbinPermission(),
+		Roles:           middleware.SelfOrCasbinPermission(),
+		Permissions:     middleware.SelfOrCasbinPermission(),
+		Sessions:        middleware.SelfOrCasbinPermission(),
+		RevokeSession:   middleware.SelfOrCasbinPermission(),
+		SecuritySummary: middleware.SelfOrCasbinPermission(),
+		LoginLogs:       middleware.SelfOrCasbinPermission(),
+	})
 
-	// User management routes
-	users := rg.Group("/users")
-	{
-		// List users - requires user:read permission
-		users.GET("", middleware.CasbinMiddleware(), userHandler.ListUsers)
+	_ = db
+}
 
-		// Create user - requires user:write permission
-		users.POST("", middleware.CasbinMiddleware(), userHandler.CreateUser)
+type userRouteAccess struct {
+	List            gin.HandlerFunc
+	Create          gin.HandlerFunc
+	Read            gin.HandlerFunc
+	Update          gin.HandlerFunc
+	Delete          gin.HandlerFunc
+	UpdateStatus    gin.HandlerFunc
+	ResetPassword   gin.HandlerFunc
+	AuditLogs       gin.HandlerFunc
+	Roles           gin.HandlerFunc
+	Permissions     gin.HandlerFunc
+	Sessions        gin.HandlerFunc
+	RevokeSession   gin.HandlerFunc
+	SecuritySummary gin.HandlerFunc
+	LoginLogs       gin.HandlerFunc
+}
 
-		// Get user - self or requires user:read permission
-		users.GET("/:id", middleware.SelfOrCasbinPermission(), userHandler.GetUser)
+type userRouteHandler interface {
+	ListUsers(*gin.Context)
+	CreateUser(*gin.Context)
+	GetUser(*gin.Context)
+	UpdateUser(*gin.Context)
+	DeleteUser(*gin.Context)
+	UpdateUserStatus(*gin.Context)
+	ResetUserPassword(*gin.Context)
+	GetAuditLogs(*gin.Context)
+	GetUserRoles(*gin.Context)
+	GetUserPermissions(*gin.Context)
+	GetUserSessions(*gin.Context)
+	RevokeUserSession(*gin.Context)
+	GetSecuritySummary(*gin.Context)
+	GetLoginLogs(*gin.Context)
+}
 
-		// Update user - self or requires user:write permission
-		users.PATCH("/:id", middleware.SelfOrCasbinPermission(), userHandler.UpdateUser)
-
-		// Delete user - requires user:write permission
-		users.DELETE("/:id", middleware.CasbinMiddleware(), userHandler.DeleteUser)
-
-		// Update user status - requires user:write permission
-		users.PATCH("/:id/status", middleware.CasbinMiddleware(), userHandler.UpdateUserStatus)
-
-		// Reset user password - requires user:write permission
-		users.POST("/:id/reset-password", middleware.CasbinMiddleware(), userHandler.ResetUserPassword)
-
-		// Get audit logs - self or requires audit:read permission
-		users.GET("/:id/audit-logs", middleware.SelfOrCasbinPermission(), userHandler.GetAuditLogs)
-
-		// Get user roles - self or requires role:read permission
-		users.GET("/:id/roles", middleware.SelfOrCasbinPermission(), userHandler.GetUserRoles)
-
-		// Get user permissions - self or requires permission:read permission
-		users.GET("/:id/permissions", middleware.SelfOrCasbinPermission(), userHandler.GetUserPermissions)
-
-		// Get user sessions - self or requires user:manage permission
-		users.GET("/:id/sessions", middleware.SelfOrCasbinPermission(), userHandler.GetUserSessions)
-
-		// Revoke a user session - self or requires user:manage permission
-		users.DELETE("/:id/sessions/:sessionId", middleware.SelfOrCasbinPermission(), userHandler.RevokeUserSession)
-
-		// Get user security summary - self or requires user:read permission
-		users.GET("/:id/security-summary", middleware.SelfOrCasbinPermission(), userHandler.GetSecuritySummary)
-	}
-
-	// Login log routes (under /users path)
-	userHandler.RegisterLoginLogRoutes(rg.Group("/users"))
+func registerUserManagementRoutes(users *gin.RouterGroup, userHandler userRouteHandler, access userRouteAccess) {
+	users.GET("", access.List, userHandler.ListUsers)
+	users.POST("", access.Create, userHandler.CreateUser)
+	users.GET("/:id", access.Read, userHandler.GetUser)
+	users.PATCH("/:id", access.Update, userHandler.UpdateUser)
+	users.DELETE("/:id", access.Delete, userHandler.DeleteUser)
+	users.PATCH("/:id/status", access.UpdateStatus, userHandler.UpdateUserStatus)
+	users.POST("/:id/reset-password", access.ResetPassword, userHandler.ResetUserPassword)
+	users.GET("/:id/audit-logs", access.AuditLogs, userHandler.GetAuditLogs)
+	users.GET("/:id/roles", access.Roles, userHandler.GetUserRoles)
+	users.GET("/:id/permissions", access.Permissions, userHandler.GetUserPermissions)
+	users.GET("/:id/sessions", access.Sessions, userHandler.GetUserSessions)
+	users.DELETE("/:id/sessions/:sessionId", access.RevokeSession, userHandler.RevokeUserSession)
+	users.GET("/:id/security-summary", access.SecuritySummary, userHandler.GetSecuritySummary)
+	users.GET("/:id/login-logs", access.LoginLogs, userHandler.GetLoginLogs)
 }

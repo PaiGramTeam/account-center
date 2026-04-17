@@ -49,6 +49,14 @@ var DefaultPermissions = []struct {
 	{model.BuildPermissionName(model.ResourcePermission, model.ActionDelete), model.ResourcePermission, model.ActionDelete, "Delete permissions"},
 	{model.BuildPermissionName(model.ResourcePermission, model.ActionList), model.ResourcePermission, model.ActionList, "List all permissions"},
 
+	// Platform permissions
+	{model.BuildPermissionName(model.ResourcePlatform, model.ActionCreate), model.ResourcePlatform, model.ActionCreate, "Create platform registrations"},
+	{model.BuildPermissionName(model.ResourcePlatform, model.ActionRead), model.ResourcePlatform, model.ActionRead, "View platform registration information"},
+	{model.BuildPermissionName(model.ResourcePlatform, model.ActionUpdate), model.ResourcePlatform, model.ActionUpdate, "Update platform registrations"},
+	{model.BuildPermissionName(model.ResourcePlatform, model.ActionDelete), model.ResourcePlatform, model.ActionDelete, "Delete platform registrations"},
+	{model.BuildPermissionName(model.ResourcePlatform, model.ActionList), model.ResourcePlatform, model.ActionList, "List platform registrations"},
+	{model.BuildPermissionName(model.ResourcePlatform, model.ActionManage), model.ResourcePlatform, model.ActionManage, "Manage platform registrations"},
+
 	// Bot permissions
 	{model.BuildPermissionName(model.ResourceBot, model.ActionCreate), model.ResourceBot, model.ActionCreate, "Create new bots"},
 	{model.BuildPermissionName(model.ResourceBot, model.ActionRead), model.ResourceBot, model.ActionRead, "View bot information"},

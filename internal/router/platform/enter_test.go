@@ -18,20 +18,18 @@ func TestRouterGroupInitRegistersPlatformRoutes(t *testing.T) {
 	})
 
 	routes := r.Routes()
-	registered := make(map[string]struct{}, len(routes))
-	summaryRouteCount := 0
+	routeCounts := make(map[string]int, len(routes))
 	for _, route := range routes {
-		registered[route.Method+" "+route.Path] = struct{}{}
-		if route.Method == "GET" && route.Path == "/api/v1/me/platform-accounts/:refId/summary" {
-			summaryRouteCount++
-		}
+		routeCounts[route.Method+" "+route.Path]++
 	}
 
-	_, ok := registered["GET /api/v1/me/platforms"]
-	assert.True(t, ok)
-	_, ok = registered["GET /api/v1/me/platforms/:platform/schema"]
-	assert.True(t, ok)
-	_, ok = registered["GET /api/v1/me/platform-accounts/:refId/summary"]
-	assert.True(t, ok)
-	assert.Equal(t, 1, summaryRouteCount)
+	assert.Equal(t, 1, routeCounts["GET /api/v1/me/platforms"])
+	assert.Equal(t, 1, routeCounts["GET /api/v1/me/platforms/:platform/schema"])
+	assert.Equal(t, 1, routeCounts["GET /api/v1/me/platform-accounts/:refId/summary"])
+	assert.Equal(t, 1, routeCounts["GET /api/v1/platform-services"])
+	assert.Equal(t, 1, routeCounts["GET /api/v1/platform-services/:id"])
+	assert.Equal(t, 1, routeCounts["POST /api/v1/platform-services"])
+	assert.Equal(t, 1, routeCounts["PATCH /api/v1/platform-services/:id"])
+	assert.Equal(t, 1, routeCounts["DELETE /api/v1/platform-services/:id"])
+	assert.Equal(t, 1, routeCounts["POST /api/v1/platform-services/:id/check"])
 }

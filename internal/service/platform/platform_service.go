@@ -52,6 +52,7 @@ type PlatformService struct {
 	signingKey          []byte
 	summaryProxy        platformSummaryProxy
 	genericSummaryProxy platformSummaryProxy
+	healthChecker       platformHealthChecker
 }
 
 func buildPlatformServiceTicketClaims(actorType, actorID string, ownerUserID, platformAccountRefID uint64, platform, platformAccountID string, scopes []string) ServiceTicketClaims {
@@ -203,6 +204,10 @@ func (s *PlatformService) SetSummaryProxy(proxy platformSummaryProxy) {
 
 func (s *PlatformService) SetGenericSummaryProxy(proxy platformSummaryProxy) {
 	s.genericSummaryProxy = proxy
+}
+
+func (s *PlatformService) SetHealthChecker(checker platformHealthChecker) {
+	s.healthChecker = checker
 }
 
 func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorType, actorID string, ownerUserID, platformAccountRefID uint64, scopes []string) (map[string]any, error) {

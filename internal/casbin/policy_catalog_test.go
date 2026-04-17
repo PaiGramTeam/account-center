@@ -68,6 +68,28 @@ func TestPoliciesForSystemRoleAdminIncludesAuthorityAndCasbinRoutesWithoutBroadW
 	}
 }
 
+func TestPoliciesForPermissionPlatformReadRoutes(t *testing.T) {
+	rules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatform, model.ActionRead))
+	require.NotEmpty(t, rules)
+
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id/check", Method: "POST"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "POST"})
+}
+
+func TestPoliciesForSystemRoleAdminIncludesPlatformRegistryRoutes(t *testing.T) {
+	rules := PoliciesForSystemRole(model.RoleAdmin)
+	require.NotEmpty(t, rules)
+
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "POST"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "PATCH"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "DELETE"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id/check", Method: "POST"})
+}
+
 func TestPoliciesForPermissionCoversSeededCatalogRoutes(t *testing.T) {
 	testCases := []struct {
 		name       string
@@ -154,4 +176,12 @@ func TestPoliciesForSystemRoleModeratorDerivedFromSeedPermissions(t *testing.T) 
 	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/login-logs", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/authorities", Method: "POST"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id", Method: "DELETE"})
+}
+
+func TestAllManagedPoliciesIncludesAdminOnlyPolicies(t *testing.T) {
+	rules := AllManagedPolicies()
+	require.NotEmpty(t, rules)
+
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "PUT"})
 }

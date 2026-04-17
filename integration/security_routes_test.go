@@ -157,16 +157,16 @@ func TestAdminRoutesRequireAdminRole(t *testing.T) {
 	require.Equal(t, http.StatusOK, loginRes.Code, loginRes.Body.String())
 }
 
-func TestAuthorityRoutesRequirePermissionsAndLegacyCatalogRoutesStayUnavailable(t *testing.T) {
+func TestAuthorityRoutesAndAdminRoleCatalogRoutesRequireExpectedPrivileges(t *testing.T) {
 	stack := newIntegrationStack(t)
 
 	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "catalog-actor")
 	headers := authHeaders(actorAccessToken)
 
-	for _, path := range []string{"/api/v1/authorities", "/api/v1/roles", "/api/v1/permissions"} {
+	for _, path := range []string{"/api/v1/authorities", "/api/v1/admin/roles", "/api/v1/roles", "/api/v1/permissions"} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
 		expected := http.StatusForbidden
-		if path != "/api/v1/authorities" {
+		if path == "/api/v1/roles" || path == "/api/v1/permissions" {
 			expected = http.StatusNotFound
 		}
 		require.Equal(t, expected, res.Code, "%s => %s", path, res.Body.String())
@@ -176,6 +176,9 @@ func TestAuthorityRoutesRequirePermissionsAndLegacyCatalogRoutesStayUnavailable(
 
 	listAuthoritiesAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/authorities", nil, headers)
 	require.Equal(t, http.StatusOK, listAuthoritiesAllowed.Code, listAuthoritiesAllowed.Body.String())
+
+	listAdminRolesDenied := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
+	require.Equal(t, http.StatusForbidden, listAdminRolesDenied.Code, listAdminRolesDenied.Body.String())
 
 	createAuthorityDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/authorities", map[string]any{
 		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
@@ -197,6 +200,11 @@ func TestAuthorityRoutesRequirePermissionsAndLegacyCatalogRoutesStayUnavailable(
 		"description":  "ops role",
 	}, headers)
 	require.Equal(t, http.StatusOK, createAuthorityAllowed.Code, createAuthorityAllowed.Body.String())
+
+	grantAdminRoleToUser(t, stack, actorID)
+
+	listAdminRolesAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
+	require.Equal(t, http.StatusOK, listAdminRolesAllowed.Code, listAdminRolesAllowed.Body.String())
 }
 
 func TestAuthorityMutationRoutesRequireAdminRoleEvenForRoleManagers(t *testing.T) {

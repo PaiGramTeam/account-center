@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,7 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"paigram/internal/config"
+	"paigram/internal/model"
 	serviceplatform "paigram/internal/service/platform"
+	"paigram/internal/testutil"
 )
 
 type fakePlatformService struct {
@@ -55,6 +59,14 @@ func (f *fakePlatformService) GetPlatformAccountSummary(_ context.Context, actor
 		return nil, f.summaryErr
 	}
 	return f.summary, nil
+}
+
+type realSummaryProxy struct {
+	summary map[string]any
+}
+
+func (p *realSummaryProxy) GetCredentialSummary(_ context.Context, _, _, _ string) (map[string]any, error) {
+	return p.summary, nil
 }
 
 func TestListPlatforms(t *testing.T) {
@@ -149,7 +161,7 @@ func TestGetPlatformAccountSummary(t *testing.T) {
 	g := gin.New()
 	fake := &fakePlatformService{summary: map[string]any{"status": "active"}}
 	h := NewHandler(fake)
-	g.GET("/api/v1/me/platform-accounts/:refId/summary", func(c *gin.Context) {
+	g.GET("/api/v1/me/platform-accounts/:bindingId/summary", func(c *gin.Context) {
 		c.Set("user_id", uint64(7))
 		c.Set("session_id", uint64(99))
 		h.GetPlatformAccountSummary(c)
@@ -166,11 +178,59 @@ func TestGetPlatformAccountSummary(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, "active", body.Data["status"])
 	require.Equal(t, 1, fake.summaryCalls)
-	require.Equal(t, "web_user", fake.lastActorType)
+	require.Equal(t, "user", fake.lastActorType)
 	require.Equal(t, "session:99", fake.lastActorID)
 	require.Equal(t, uint64(7), fake.lastOwnerUserID)
 	require.Equal(t, uint64(11), fake.lastRefID)
 	require.Equal(t, []string{"mihomo.credential.read_meta"}, fake.lastScopes)
+}
+
+func TestGetPlatformAccountSummaryWithRealService(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	db := testutil.OpenMySQLTestDB(t, "platform_handler_real", &model.User{}, &model.PlatformAccountBinding{}, &model.PlatformAccountProfile{})
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		ExternalAccountKey: "cn:handler-summary",
+		DisplayName:        "Traveler",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+	profile := model.PlatformAccountProfile{BindingID: binding.ID, PlatformProfileKey: "mihomo:10001", GameBiz: "hk4e_cn", Region: "cn_gf01", PlayerUID: "10001", Nickname: "Traveler", IsPrimary: true}
+	require.NoError(t, db.Create(&profile).Error)
+	require.NoError(t, db.Model(&binding).Update("primary_profile_id", profile.ID).Error)
+
+	group := serviceplatform.NewServiceGroup(db)
+	service := &group.PlatformService
+	require.NoError(t, service.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+
+	g := gin.New()
+	h := NewHandler(service)
+	g.GET("/api/v1/me/platform-accounts/:bindingId/summary", func(c *gin.Context) {
+		c.Set("user_id", owner.ID)
+		c.Set("session_id", uint64(99))
+		h.GetPlatformAccountSummary(c)
+	})
+
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/me/platform-accounts/"+fmt.Sprintf("%d", binding.ID)+"/summary", nil)
+	g.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "Traveler", body.Data["display_name"])
+	require.Equal(t, float64(profile.ID), body.Data["primary_profile_id"])
 }
 
 func TestGetPlatformAccountSummaryUnauthenticated(t *testing.T) {
@@ -178,7 +238,7 @@ func TestGetPlatformAccountSummaryUnauthenticated(t *testing.T) {
 
 	g := gin.New()
 	h := NewHandler(&fakePlatformService{})
-	g.GET("/api/v1/me/platform-accounts/:refId/summary", h.GetPlatformAccountSummary)
+	g.GET("/api/v1/me/platform-accounts/:bindingId/summary", h.GetPlatformAccountSummary)
 
 	rec := httptest.NewRecorder()
 	req, _ := http.NewRequest(http.MethodGet, "/api/v1/me/platform-accounts/11/summary", nil)
@@ -195,7 +255,7 @@ func TestGetPlatformAccountSummaryMissingSession(t *testing.T) {
 
 	g := gin.New()
 	h := NewHandler(&fakePlatformService{})
-	g.GET("/api/v1/me/platform-accounts/:refId/summary", func(c *gin.Context) {
+	g.GET("/api/v1/me/platform-accounts/:bindingId/summary", func(c *gin.Context) {
 		c.Set("user_id", uint64(7))
 		h.GetPlatformAccountSummary(c)
 	})
@@ -215,7 +275,7 @@ func TestGetPlatformAccountSummaryNotFound(t *testing.T) {
 
 	g := gin.New()
 	h := NewHandler(&fakePlatformService{summaryErr: gorm.ErrRecordNotFound})
-	g.GET("/api/v1/me/platform-accounts/:refId/summary", func(c *gin.Context) {
+	g.GET("/api/v1/me/platform-accounts/:bindingId/summary", func(c *gin.Context) {
 		c.Set("user_id", uint64(7))
 		c.Set("session_id", uint64(99))
 		h.GetPlatformAccountSummary(c)
@@ -236,7 +296,7 @@ func TestGetPlatformAccountSummaryPlatformServiceUnavailable(t *testing.T) {
 
 	g := gin.New()
 	h := NewHandler(&fakePlatformService{summaryErr: serviceplatform.ErrPlatformSummaryProxyUnavailable})
-	g.GET("/api/v1/me/platform-accounts/:refId/summary", func(c *gin.Context) {
+	g.GET("/api/v1/me/platform-accounts/:bindingId/summary", func(c *gin.Context) {
 		c.Set("user_id", uint64(7))
 		c.Set("session_id", uint64(99))
 		h.GetPlatformAccountSummary(c)
@@ -257,7 +317,7 @@ func TestGetPlatformAccountSummaryInvalidRefID(t *testing.T) {
 
 	g := gin.New()
 	h := NewHandler(&fakePlatformService{})
-	g.GET("/api/v1/me/platform-accounts/:refId/summary", func(c *gin.Context) {
+	g.GET("/api/v1/me/platform-accounts/:bindingId/summary", func(c *gin.Context) {
 		c.Set("user_id", uint64(7))
 		c.Set("session_id", uint64(99))
 		h.GetPlatformAccountSummary(c)
@@ -270,5 +330,5 @@ func TestGetPlatformAccountSummaryInvalidRefID(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "invalid platform account ref id", body["message"])
+	require.Equal(t, "invalid binding id", body["message"])
 }

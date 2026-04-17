@@ -20,7 +20,7 @@ func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
 	{
 		me.GET("/platforms", platformHandler.ListPlatforms)
 		me.GET("/platforms/:platform/schema", platformHandler.GetPlatformSchema)
-		me.GET("/platform-accounts/:refId/summary", platformHandler.GetPlatformAccountSummary)
+		me.GET("/platform-accounts/:bindingId/summary", platformHandler.GetPlatformAccountSummary)
 	}
 
 	platformServices := rg.Group("/platform-services")

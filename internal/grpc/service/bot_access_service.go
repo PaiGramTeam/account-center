@@ -105,7 +105,7 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 		return nil, err
 	}
 	if req.GetExternalUserId() == "" || req.GetPlatformAccountRefId() == 0 || req.GetAudience() == "" {
-		return nil, status.Error(codes.InvalidArgument, "external_user_id, platform_account_ref_id, and audience are required")
+		return nil, status.Error(codes.InvalidArgument, "external_user_id, platform_account_ref_id (binding id), and audience are required")
 	}
 
 	identity, ref, grant, err := s.accountRefService.GetGrantedAccount(bot.Id, req.GetExternalUserId(), req.GetPlatformAccountRefId())
@@ -113,7 +113,7 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 		return nil, mapBotAccessError("get granted account", err)
 	}
 	if req.GetAudience() != ref.PlatformServiceKey {
-		return nil, status.Error(codes.InvalidArgument, "audience does not match platform service key")
+		return nil, status.Error(codes.InvalidArgument, "audience does not match binding platform service key")
 	}
 
 	grantedScopes, err := botaccess.DecodeGrantScopes(*grant)
@@ -135,7 +135,8 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 		Ticket:    ticket,
 		Audience:  req.GetAudience(),
 		ExpiresAt: timestamppb.New(expiresAt),
-		Account:   platformAccountRefToProto(*ref),
+		// The protobuf still uses PlatformAccountRef naming while ticket issuance evolves toward binding semantics.
+		Account: platformAccountRefToProto(*ref),
 	}, nil
 }
 

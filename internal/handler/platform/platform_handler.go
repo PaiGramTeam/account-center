@@ -103,13 +103,13 @@ func (h *Handler) GetPlatformAccountSummary(c *gin.Context) {
 		response.Unauthorized(c, "session not found")
 		return
 	}
-	refID, err := strconv.ParseUint(strings.TrimSpace(c.Param("refId")), 10, 64)
-	if err != nil || refID == 0 {
-		response.BadRequest(c, "invalid platform account ref id")
+	bindingID, err := strconv.ParseUint(strings.TrimSpace(c.Param("bindingId")), 10, 64)
+	if err != nil || bindingID == 0 {
+		response.BadRequest(c, "invalid binding id")
 		return
 	}
 
-	summary, err := h.platformService.GetPlatformAccountSummary(c.Request.Context(), "web_user", fmt.Sprintf("session:%d", sessionID), userID, refID, []string{"mihomo.credential.read_meta"})
+	summary, err := h.platformService.GetPlatformAccountSummary(c.Request.Context(), "user", fmt.Sprintf("session:%d", sessionID), userID, bindingID, []string{"mihomo.credential.read_meta"})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			response.NotFound(c, "platform account not found")

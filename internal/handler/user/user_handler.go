@@ -621,7 +621,7 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		Email            string    `json:"email" binding:"required,email"`
 		Password         string    `json:"password" binding:"required,min=8,max=72"`
 		DisplayName      string    `json:"display_name" binding:"required,min=1,max=255"`
-		PrimaryLoginType string    `json:"primary_login_type" binding:"required,oneof=email oauth"`
+		PrimaryLoginType string    `json:"primary_login_type" binding:"required,oneof=email google github telegram"`
 		AvatarURL        string    `json:"avatar_url" binding:"omitempty,url"`
 		Bio              string    `json:"bio" binding:"omitempty,max=500"`
 		Locale           string    `json:"locale" binding:"omitempty"`

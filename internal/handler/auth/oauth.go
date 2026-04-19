@@ -256,7 +256,7 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		// New user
 		if errors.Is(credErr, gorm.ErrRecordNotFound) {
 			user = model.User{
-				PrimaryLoginType: model.LoginTypeOAuth,
+				PrimaryLoginType: loginTypeForOAuthProvider(provider),
 				Status:           model.UserStatusActive,
 			}
 			if err := tx.Create(&user).Error; err != nil {
@@ -519,6 +519,20 @@ func emailValue(email *model.UserEmail) string {
 		return ""
 	}
 	return email.Email
+}
+
+func loginTypeForOAuthProvider(provider string) model.LoginType {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	switch provider {
+	case string(model.LoginTypeGoogle):
+		return model.LoginTypeGoogle
+	case string(model.LoginTypeGithub):
+		return model.LoginTypeGithub
+	case string(model.LoginTypeTelegram):
+		return model.LoginTypeTelegram
+	default:
+		return model.LoginType(provider)
+	}
 }
 
 // OAuth token response structures

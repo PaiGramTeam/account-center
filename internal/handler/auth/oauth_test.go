@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"paigram/internal/config"
+	"paigram/internal/model"
 )
 
 func TestExchangeCodeForTokenTelegramUsesBasicAuth(t *testing.T) {
@@ -136,4 +137,11 @@ func TestResolveProviderIncludesTelegramConfig(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "123456789", providerCfg.ClientID)
 	assert.True(t, strings.Contains(providerCfg.AuthURL, "oauth.telegram.org"))
+}
+
+func TestOAuthProviderLoginTypeUsesConcreteProviderValue(t *testing.T) {
+	assert.Equal(t, model.LoginTypeGoogle, loginTypeForOAuthProvider("google"))
+	assert.Equal(t, model.LoginTypeGithub, loginTypeForOAuthProvider("github"))
+	assert.Equal(t, model.LoginTypeTelegram, loginTypeForOAuthProvider("telegram"))
+	assert.Equal(t, model.LoginType("custom"), loginTypeForOAuthProvider("custom"))
 }

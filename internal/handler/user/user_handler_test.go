@@ -126,6 +126,17 @@ func TestHandler_CreateUser(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			name: "valid user creation with provider primary login type",
+			body: map[string]interface{}{
+				"email":              "googleuser@example.com",
+				"password":           "TestPass123!",
+				"display_name":       "Google User",
+				"primary_login_type": "google",
+			},
+			wantStatus: http.StatusCreated,
+			wantErr:    false,
+		},
+		{
 			name: "reject roles on create",
 			body: map[string]interface{}{
 				"email":              "testuser3@example.com",
@@ -195,6 +206,17 @@ func TestHandler_CreateUser(t *testing.T) {
 				"password":           "short",
 				"display_name":       "Test User",
 				"primary_login_type": "email",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantErr:    true,
+		},
+		{
+			name: "reject legacy oauth primary_login_type",
+			body: map[string]interface{}{
+				"email":              "legacyoauth@example.com",
+				"password":           "TestPass123!",
+				"display_name":       "Legacy OAuth",
+				"primary_login_type": "oauth",
 			},
 			wantStatus: http.StatusBadRequest,
 			wantErr:    true,

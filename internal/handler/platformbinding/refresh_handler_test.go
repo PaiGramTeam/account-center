@@ -25,10 +25,10 @@ func (refreshBindingStub) GetBindingByID(uint64) (*model.PlatformAccountBinding,
 func (refreshBindingStub) GetBindingForOwner(uint64, uint64) (*model.PlatformAccountBinding, error) {
 	panic("unexpected call")
 }
-func (refreshBindingStub) ListBindings() ([]model.PlatformAccountBinding, error) {
+func (refreshBindingStub) ListBindings(serviceplatformbinding.ListParams) ([]model.PlatformAccountBinding, int64, error) {
 	panic("unexpected call")
 }
-func (refreshBindingStub) ListBindingsByOwner(uint64) ([]model.PlatformAccountBinding, error) {
+func (refreshBindingStub) ListBindingsByOwner(uint64, serviceplatformbinding.ListParams) ([]model.PlatformAccountBinding, int64, error) {
 	panic("unexpected call")
 }
 func (refreshBindingStub) UpdateBindingForOwner(uint64, uint64, serviceplatformbinding.UpdateBindingInput) (*model.PlatformAccountBinding, error) {

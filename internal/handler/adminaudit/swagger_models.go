@@ -1,6 +1,9 @@
 package adminaudit
 
-import serviceaudit "paigram/internal/service/audit"
+import (
+	"paigram/internal/response"
+	serviceaudit "paigram/internal/service/audit"
+)
 
 // swagger:model adminAuditErrorResponse
 type AdminAuditErrorResponse struct {
@@ -19,10 +22,8 @@ type swaggerAdminAuditErrorResponse struct {
 
 // swagger:model adminAuditListData
 type AdminAuditListData struct {
-	Items    []serviceaudit.AuditEventView `json:"items"`
-	Total    int64                         `json:"total"`
-	Page     int                           `json:"page"`
-	PageSize int                           `json:"page_size"`
+	Items      []serviceaudit.AuditEventView `json:"items"`
+	Pagination *response.PaginationMeta      `json:"pagination"`
 }
 
 // swagger:response adminAuditListResponse

@@ -1,6 +1,7 @@
 package response
 
 import (
+	"math"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -28,11 +29,15 @@ type PaginationMeta struct {
 	TotalPages int   `json:"total_pages"` // Total number of pages
 }
 
-// PaginatedResponse represents a paginated response
-type PaginatedResponse struct {
-	Data       interface{}     `json:"data"`       // Paginated data
-	Pagination *PaginationMeta `json:"pagination"` // Pagination metadata
+// PaginatedPayload represents the canonical paginated payload shape.
+type PaginatedPayload struct {
+	Items      interface{}     `json:"items"`          // Paginated items
+	Pagination *PaginationMeta `json:"pagination"`     // Pagination metadata
+	Meta       interface{}     `json:"meta,omitempty"` // Optional payload-specific metadata
 }
+
+// PaginatedResponse is kept as an alias for existing references.
+type PaginatedResponse = PaginatedPayload
 
 // Success 返回成功响应
 func Success(c *gin.Context, data interface{}) {
@@ -177,19 +182,15 @@ func Custom(c *gin.Context, httpCode int, code int, data interface{}, message st
 
 // SuccessWithPagination 返回分页成功响应
 func SuccessWithPagination(c *gin.Context, data interface{}, total int64, page, pageSize int) {
-	totalPages := int(total) / pageSize
-	if int(total)%pageSize > 0 {
-		totalPages++
-	}
+	SuccessWithPaginationMeta(c, data, total, page, pageSize, nil)
+}
 
-	paginatedData := PaginatedResponse{
-		Data: data,
-		Pagination: &PaginationMeta{
-			Total:      total,
-			Page:       page,
-			PageSize:   pageSize,
-			TotalPages: totalPages,
-		},
+// SuccessWithPaginationMeta returns a paginated success response with optional metadata.
+func SuccessWithPaginationMeta(c *gin.Context, items interface{}, total int64, page, pageSize int, meta interface{}) {
+	paginatedData := PaginatedPayload{
+		Items:      items,
+		Pagination: NewPaginationMeta(total, page, pageSize),
+		Meta:       meta,
 	}
 
 	c.JSON(http.StatusOK, Response{
@@ -201,9 +202,24 @@ func SuccessWithPagination(c *gin.Context, data interface{}, total int64, page, 
 
 // NewPaginationMeta creates a new PaginationMeta instance
 func NewPaginationMeta(total int64, page, pageSize int) *PaginationMeta {
-	totalPages := int(total) / pageSize
-	if int(total)%pageSize > 0 {
-		totalPages++
+	if total == 0 || pageSize <= 0 {
+		return &PaginationMeta{
+			Total:      total,
+			Page:       page,
+			PageSize:   pageSize,
+			TotalPages: 0,
+		}
+	}
+
+	pageSize64 := int64(pageSize)
+	totalPages64 := total / pageSize64
+	if total%pageSize64 > 0 {
+		totalPages64++
+	}
+
+	totalPages := math.MaxInt
+	if totalPages64 <= int64(math.MaxInt) {
+		totalPages = int(totalPages64)
 	}
 
 	return &PaginationMeta{

@@ -2,6 +2,7 @@ package platformbinding
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -220,6 +221,34 @@ func TestBindingServiceUpdatesOwnerEditableFields(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "New Name", updated.DisplayName)
 	assert.Equal(t, "mihomo-new", updated.PlatformServiceKey)
+}
+
+func TestListBindingsPaginatesAdminAndOwnerCollections(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewBindingService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+
+	for i := 0; i < 3; i++ {
+		_, err := service.CreateBinding(CreateBindingInput{
+			OwnerUserID:        owner.ID,
+			Platform:           "mihomo",
+			ExternalAccountKey: ns(fmt.Sprintf("cn:%d", i)),
+			PlatformServiceKey: "mihomo",
+			DisplayName:        fmt.Sprintf("Binding %d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	items, total, err := service.ListBindings(ListParams{Page: 2, PageSize: 1})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), total)
+	require.Len(t, items, 1)
+
+	ownerItems, ownerTotal, err := service.ListBindingsByOwner(owner.ID, ListParams{Page: 1, PageSize: 2})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), ownerTotal)
+	require.Len(t, ownerItems, 2)
 }
 
 func TestPersistRuntimeSummaryUpdatesResolvedIdentityAndStatus(t *testing.T) {

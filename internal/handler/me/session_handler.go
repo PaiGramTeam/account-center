@@ -17,7 +17,7 @@ type SessionView = serviceme.SessionView
 
 // SessionReaderWriter describes the session service dependency.
 type SessionReaderWriter interface {
-	ListSessions(context.Context, uint64, string) ([]serviceme.SessionView, error)
+	ListSessions(context.Context, uint64, int, int, string) ([]serviceme.SessionView, int64, error)
 	RevokeSession(context.Context, uint64, uint64) error
 }
 
@@ -40,6 +40,14 @@ func NewSessionHandler(service SessionReaderWriter) *SessionHandler {
 // Produces:
 //   - application/json
 //
+// Parameters:
+//   + name: page
+//     in: query
+//     type: integer
+//   + name: page_size
+//     in: query
+//     type: integer
+//
 // Security:
 //   - BearerAuth: []
 //
@@ -55,12 +63,20 @@ func (h *SessionHandler) ListSessions(c *gin.Context) {
 		response.Unauthorized(c, "user not authenticated")
 		return
 	}
-	sessions, err := h.service.ListSessions(c.Request.Context(), userID, bearerToken(c.GetHeader("Authorization")))
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	sessions, total, err := h.service.ListSessions(c.Request.Context(), userID, page, pageSize, bearerToken(c.GetHeader("Authorization")))
 	if err != nil {
 		response.InternalServerError(c, "failed to load sessions")
 		return
 	}
-	response.Success(c, sessions)
+	response.SuccessWithPagination(c, sessions, total, page, pageSize)
 }
 
 // swagger:route DELETE /api/v1/me/sessions/{sessionId} me revokeMeSession

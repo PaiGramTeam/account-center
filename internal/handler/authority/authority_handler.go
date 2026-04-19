@@ -130,7 +130,7 @@ func (h *AuthorityHandler) ListAuthorities(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, result)
+	response.SuccessWithPagination(c, result.Data, int64(result.Total), result.Page, result.PageSize)
 }
 
 // UpdateAuthority 更新角色

@@ -3,6 +3,7 @@ package authority
 import (
 	"time"
 
+	"paigram/internal/response"
 	serviceauthority "paigram/internal/service/authority"
 )
 
@@ -30,7 +31,10 @@ type ReplaceAuthorityUsersRequest struct {
 }
 
 // ListAuthoritiesResponse 角色列表响应
-type ListAuthoritiesResponse = serviceauthority.ListAuthoritiesResult
+type ListAuthoritiesResponse struct {
+	Items      []serviceauthority.RoleWithPermissions `json:"items"`
+	Pagination *response.PaginationMeta               `json:"pagination"`
+}
 
 // AuthorityUserItem 角色下的用户信息
 type AuthorityUserItem struct {

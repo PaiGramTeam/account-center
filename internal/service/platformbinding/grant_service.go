@@ -104,25 +104,33 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 	return &grant, nil
 }
 
-func (s *GrantService) ListGrants(bindingID uint64) ([]model.ConsumerGrant, error) {
+func (s *GrantService) ListGrants(bindingID uint64, params ListParams) ([]model.ConsumerGrant, int64, error) {
+	params = normalizeListParams(params)
+
 	if err := s.ensureBindingExists(bindingID); err != nil {
-		return nil, err
+		return nil, 0, err
+	}
+
+	query := s.db.Model(&model.ConsumerGrant{}).Where("binding_id = ?", bindingID)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
 
 	var grants []model.ConsumerGrant
-	if err := s.db.Where("binding_id = ?", bindingID).Order("id ASC").Find(&grants).Error; err != nil {
-		return nil, err
+	if err := query.Order("id ASC").Offset(pageOffset(params)).Limit(params.PageSize).Find(&grants).Error; err != nil {
+		return nil, 0, err
 	}
 
-	return grants, nil
+	return grants, total, nil
 }
 
-func (s *GrantService) ListGrantsForOwner(ownerUserID, bindingID uint64) ([]model.ConsumerGrant, error) {
+func (s *GrantService) ListGrantsForOwner(ownerUserID, bindingID uint64, params ListParams) ([]model.ConsumerGrant, int64, error) {
 	if err := s.ensureBindingOwnedByUser(ownerUserID, bindingID); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	return s.ListGrants(bindingID)
+	return s.ListGrants(bindingID, params)
 }
 
 func (s *GrantService) UpsertGrantForOwner(ownerUserID uint64, input UpsertGrantInput) (*model.ConsumerGrant, bool, error) {

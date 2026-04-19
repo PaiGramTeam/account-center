@@ -49,6 +49,10 @@ var DefaultPermissions = []struct {
 	{model.BuildPermissionName(model.ResourcePermission, model.ActionDelete), model.ResourcePermission, model.ActionDelete, "Delete permissions"},
 	{model.BuildPermissionName(model.ResourcePermission, model.ActionList), model.ResourcePermission, model.ActionList, "List all permissions"},
 
+	// System permissions
+	{model.BuildPermissionName(model.ResourceSystem, model.ActionRead), model.ResourceSystem, model.ActionRead, "View system settings and auth controls"},
+	{model.BuildPermissionName(model.ResourceSystem, model.ActionUpdate), model.ResourceSystem, model.ActionUpdate, "Update system settings and auth controls"},
+
 	// Platform permissions
 	{model.BuildPermissionName(model.ResourcePlatform, model.ActionCreate), model.ResourcePlatform, model.ActionCreate, "Create platform registrations"},
 	{model.BuildPermissionName(model.ResourcePlatform, model.ActionRead), model.ResourcePlatform, model.ActionRead, "View platform registration information"},

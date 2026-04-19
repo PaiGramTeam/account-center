@@ -3,7 +3,6 @@ package me
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strconv"
 	"time"
 
@@ -25,7 +24,6 @@ type CurrentUserReader interface {
 	VerifyEmail(context.Context, serviceme.VerifyEmailInput) (*serviceme.VerificationEmailView, error)
 	PatchPrimaryEmail(context.Context, uint64, uint64) error
 	ListLoginMethods(context.Context, uint64) ([]serviceme.LoginMethodView, error)
-	PutLoginMethod(context.Context, serviceme.PutLoginMethodInput) (*serviceme.LoginMethodView, error)
 	DeleteLoginMethod(context.Context, uint64, string) error
 }
 
@@ -34,10 +32,6 @@ type createEmailRequest struct {
 }
 
 type CurrentUserView = serviceme.CurrentUserView
-
-type putLoginMethodRequest struct {
-	ProviderData map[string]any `json:"provider_data" binding:"required"`
-}
 
 // CurrentUserHandler serves the /me identity surface.
 type CurrentUserHandler struct {
@@ -374,55 +368,6 @@ func (h *CurrentUserHandler) ListLoginMethods(c *gin.Context) {
 		return
 	}
 	response.Success(c, methods)
-}
-
-// swagger:route PUT /api/v1/me/login-methods/{provider} me putMeLoginMethod
-//
-// Bind current-user login method.
-//
-// Creates or updates an external login method binding for the authenticated account.
-//
-// Produces:
-//   - application/json
-//
-// Consumes:
-//   - application/json
-//
-// Security:
-//   - BearerAuth: []
-//
-// Responses:
-//
-//	200: meLoginMethodResponse
-//	400: meErrorResponse
-//	401: meErrorResponse
-//	409: meErrorResponse
-//
-// PutLoginMethod binds a new login method for the authenticated user.
-func (h *CurrentUserHandler) PutLoginMethod(c *gin.Context) {
-	userID, ok := middleware.GetUserID(c)
-	if !ok || userID == 0 {
-		response.Unauthorized(c, "user not authenticated")
-		return
-	}
-	var req putLoginMethodRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
-		return
-	}
-	method, err := h.service.PutLoginMethod(c.Request.Context(), serviceme.PutLoginMethodInput{UserID: userID, Provider: c.Param("provider"), ProviderData: req.ProviderData})
-	if err != nil {
-		switch {
-		case errors.Is(err, serviceme.ErrLoginMethodBindingUnavailable):
-			response.Error(c, http.StatusNotImplemented, err.Error())
-		case errors.Is(err, serviceme.ErrProviderAlreadyBound):
-			response.ConflictWithCode(c, "PROVIDER_ALREADY_BOUND", err.Error(), nil)
-		default:
-			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
-		}
-		return
-	}
-	response.SuccessWithMessage(c, method, "login method updated successfully")
 }
 
 // swagger:route DELETE /api/v1/me/login-methods/{provider} me deleteMeLoginMethod

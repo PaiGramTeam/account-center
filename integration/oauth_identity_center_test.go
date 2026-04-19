@@ -3,6 +3,7 @@
 package integration
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -61,13 +62,70 @@ func TestOAuthBindFlowRejectsProviderAlreadyBoundToAnotherUser(t *testing.T) {
 	callbackRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/oauth/github/callback", map[string]any{
 		"state": state,
 		"code":  "provider-code",
-	}, nil)
+	}, authHeaders(binderAccessToken))
 	require.Equal(t, http.StatusConflict, callbackRes.Code, callbackRes.Body.String())
 	assert.Equal(t, "PROVIDER_ALREADY_BOUND", decodeErrorCode(t, callbackRes))
 
 	var binderSessionCount int64
 	require.NoError(t, stack.DB.Model(&model.UserSession{}).Where("user_id = ?", binderSession.UserID).Count(&binderSessionCount).Error)
 	assert.Equal(t, int64(1), binderSessionCount)
+}
+
+func TestOAuthBindFlowRequiresAuthenticatedSessionForCallback(t *testing.T) {
+	provider := newIntegrationOAuthProvider(t)
+
+	stack := newIntegrationStackWithConfig(t, func(cfg *config.Config) {
+		cfg.Auth.OAuthStateTTLSeconds = 300
+		cfg.Auth.DefaultOAuthRedirectURL = "https://app.example.com/auth/callback"
+		cfg.Auth.AllowedOAuthProviders = []string{"github"}
+		cfg.Auth.OAuthProviders = map[string]config.OAuthProviderConfig{
+			"github": {
+				ClientID:     provider.clientID,
+				ClientSecret: provider.clientSecret,
+				RedirectURL:  "https://app.example.com/auth/callback",
+				AuthURL:      "https://oauth.github.test/auth",
+				TokenURL:     provider.tokenURL,
+				UserInfoURL:  provider.userInfoURL,
+			},
+		}
+	})
+
+	binderUserID, binderAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "oauth-bind-callback-user")
+	_, otherAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "oauth-bind-callback-other")
+
+	initRes := performJSONRequest(t, stack.Router, http.MethodPut, "/api/v1/me/login-methods/github", map[string]any{
+		"redirect_to": "https://app.example.com/settings/login-methods",
+	}, authHeaders(binderAccessToken))
+	require.Equal(t, http.StatusOK, initRes.Code, initRes.Body.String())
+
+	initData := decodeResponseData(t, initRes)
+	state, _ := initData["state"].(string)
+	require.NotEmpty(t, state)
+
+	noAuthRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/oauth/github/callback", map[string]any{
+		"state": state,
+		"code":  "provider-code",
+	}, nil)
+	require.Equal(t, http.StatusUnauthorized, noAuthRes.Code, noAuthRes.Body.String())
+	assert.Equal(t, "UNAUTHORIZED", decodeErrorCode(t, noAuthRes))
+
+	stateRow := model.UserOAuthState{
+		Provider:     "github",
+		State:        state,
+		Purpose:      string(model.OAuthPurposeBindLoginMethod),
+		UserID:       sql.NullInt64{Int64: int64(binderUserID), Valid: true},
+		RedirectTo:   "https://app.example.com/settings/login-methods",
+		CodeVerifier: "reissued-verifier",
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
+	}
+	require.NoError(t, stack.DB.Create(&stateRow).Error)
+
+	mismatchRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/oauth/github/callback", map[string]any{
+		"state": state,
+		"code":  "provider-code",
+	}, authHeaders(otherAccessToken))
+	require.Equal(t, http.StatusForbidden, mismatchRes.Code, mismatchRes.Body.String())
+	assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, mismatchRes))
 }
 
 type integrationOAuthProvider struct {

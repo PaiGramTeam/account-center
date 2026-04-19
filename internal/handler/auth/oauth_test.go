@@ -132,6 +132,80 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderAlreadyBelongsToAn
 	assert.Zero(t, sessionCount)
 }
 
+func TestHandleOAuthCallbackRequiresAuthenticatedSessionForBindPurpose(t *testing.T) {
+	db := setupTestDB(t)
+	ensureUserOAuthStatesTable(t, db)
+	h := setupOAuthTestHandler(db)
+
+	binder := createTestUser(t, db, "binder-no-auth@example.com", "Password123!", true)
+	state := model.UserOAuthState{
+		Provider:     "telegram",
+		State:        "bind-no-auth-state",
+		Purpose:      string(model.OAuthPurposeBindLoginMethod),
+		UserID:       sql.NullInt64{Int64: int64(binder.ID), Valid: true},
+		RedirectTo:   "https://app.example.com/settings/login-methods",
+		Nonce:        "expected-nonce",
+		CodeVerifier: "expected-verifier",
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
+	}
+	require.NoError(t, db.Create(&state).Error)
+
+	provider := configureTelegramOAuthProviderForTest(t, h, "expected-nonce")
+	_ = provider
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := bytes.NewBufferString(`{"state":"bind-no-auth-state","code":"provider-code"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/telegram/callback", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "provider", Value: "telegram"}}
+
+	h.HandleOAuthCallback(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	assert.Equal(t, "UNAUTHORIZED", decodeOAuthErrorCode(t, w))
+
+	assertOAuthStateDeleted(t, db, state.State)
+}
+
+func TestHandleOAuthCallbackRejectsBindPurposeForDifferentAuthenticatedUser(t *testing.T) {
+	db := setupTestDB(t)
+	ensureUserOAuthStatesTable(t, db)
+	h := setupOAuthTestHandler(db)
+
+	binder := createTestUser(t, db, "binder-mismatch@example.com", "Password123!", true)
+	otherUser := createTestUser(t, db, "other-mismatch@example.com", "Password123!", true)
+	state := model.UserOAuthState{
+		Provider:     "telegram",
+		State:        "bind-mismatch-state",
+		Purpose:      string(model.OAuthPurposeBindLoginMethod),
+		UserID:       sql.NullInt64{Int64: int64(binder.ID), Valid: true},
+		RedirectTo:   "https://app.example.com/settings/login-methods",
+		Nonce:        "expected-nonce",
+		CodeVerifier: "expected-verifier",
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
+	}
+	require.NoError(t, db.Create(&state).Error)
+
+	provider := configureTelegramOAuthProviderForTest(t, h, "expected-nonce")
+	_ = provider
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := bytes.NewBufferString(`{"state":"bind-mismatch-state","code":"provider-code"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/telegram/callback", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "provider", Value: "telegram"}}
+	middleware.SetUserID(c, otherUser.ID)
+
+	h.HandleOAuthCallback(c)
+
+	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	assert.Equal(t, "FORBIDDEN", decodeOAuthErrorCode(t, w))
+
+	assertOAuthStateDeleted(t, db, state.State)
+}
+
 func ensureUserOAuthStatesTable(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Exec(`
@@ -159,6 +233,41 @@ func setupOAuthTestHandler(db *gorm.DB) *Handler {
 	h.cfg.OAuthStateTTLSeconds = 300
 	h.cfg.DefaultOAuthRedirectURL = "https://app.example.com/auth/callback"
 	return h
+}
+
+func configureTelegramOAuthProviderForTest(t *testing.T, h *Handler, nonce string) *telegramOAuthTestProvider {
+	t.Helper()
+
+	provider := newTelegramOAuthTestProvider(t, nonce)
+	originalJWKSURL := telegramOIDCJWKSURL
+	originalIssuer := telegramOIDCIssuer
+	telegramOIDCJWKSURL = provider.jwksURL
+	telegramOIDCIssuer = provider.issuer
+	t.Cleanup(func() {
+		telegramOIDCJWKSURL = originalJWKSURL
+		telegramOIDCIssuer = originalIssuer
+	})
+
+	h.cfg.AllowedOAuthProviders = []string{"telegram"}
+	h.cfg.OAuthProviders = map[string]config.OAuthProviderConfig{
+		"telegram": {
+			ClientID:     provider.clientID,
+			ClientSecret: provider.clientSecret,
+			RedirectURL:  "https://app.example.com/auth/callback",
+			AuthURL:      "https://oauth.telegram.test/auth",
+			TokenURL:     provider.tokenURL,
+		},
+	}
+
+	return provider
+}
+
+func assertOAuthStateDeleted(t *testing.T, db *gorm.DB, state string) {
+	t.Helper()
+
+	var count int64
+	require.NoError(t, db.Model(&model.UserOAuthState{}).Where("state = ?", state).Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func decodeOAuthErrorCode(t *testing.T, recorder *httptest.ResponseRecorder) string {

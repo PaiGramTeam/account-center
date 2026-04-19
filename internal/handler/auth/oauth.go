@@ -25,6 +25,7 @@ import (
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	"paigram/internal/service"
 )
 
 var (
@@ -32,6 +33,8 @@ var (
 	telegramOIDCJWKSURL     = "https://oauth.telegram.org/.well-known/jwks.json"
 	errProviderAlreadyBound = errors.New("provider already bound to another user")
 	errMissingBindUser      = errors.New("missing oauth bind user")
+	errBindAuthRequired     = errors.New("bind callback requires authenticated user")
+	errBindUserMismatch     = errors.New("bind callback authenticated user mismatch")
 )
 
 type initiateOAuthRequest struct {
@@ -279,6 +282,19 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 
 	purpose := oauthPurposeFromState(stateRecord)
 	if purpose == model.OAuthPurposeBindLoginMethod {
+		if err := h.authorizeBindCallback(c, stateRecord); err != nil {
+			if errors.Is(err, errBindAuthRequired) {
+				response.UnauthorizedWithCode(c, "UNAUTHORIZED", "bind callback requires authentication", nil)
+				return
+			}
+			if errors.Is(err, errBindUserMismatch) {
+				response.ForbiddenWithCode(c, "FORBIDDEN", "authenticated user does not match bind state", nil)
+				return
+			}
+			response.InternalServerErrorWithCode(c, "AUTH_ERROR", "authentication failed", nil)
+			return
+		}
+
 		err = h.bindOAuthLoginMethod(provider, stateRecord, userInfo, tokenResp, now)
 		if err != nil {
 			if errors.Is(err, errProviderAlreadyBound) {
@@ -409,6 +425,30 @@ func oauthPurposeFromState(state model.UserOAuthState) model.OAuthPurpose {
 		return model.OAuthPurposeBindLoginMethod
 	}
 	return model.OAuthPurposeLogin
+}
+
+func (h *Handler) authorizeBindCallback(c *gin.Context, stateRecord model.UserOAuthState) error {
+	if !stateRecord.UserID.Valid || stateRecord.UserID.Int64 <= 0 {
+		return errMissingBindUser
+	}
+
+	authenticatedUserID, ok := middleware.GetUserID(c)
+	if !ok || authenticatedUserID == 0 {
+		return errBindAuthRequired
+	}
+	if authenticatedUserID != uint64(stateRecord.UserID.Int64) {
+		return errBindUserMismatch
+	}
+
+	middlewareService := &service.ServiceGroupApp.UserServiceGroup.MiddlewareService
+	userPtr, err := middlewareService.GetUserByID(authenticatedUserID)
+	if err != nil {
+		return err
+	}
+	if userPtr == nil || userPtr.Status != model.UserStatusActive {
+		return errBindAuthRequired
+	}
+	return nil
 }
 
 func (h *Handler) bindOAuthLoginMethod(provider string, stateRecord model.UserOAuthState, userInfo *oauthUserInfo, tokenResp *oauthTokenResponse, now time.Time) error {

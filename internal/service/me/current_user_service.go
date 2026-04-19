@@ -88,13 +88,6 @@ type CreateEmailInput struct {
 	VerificationTTL time.Duration
 }
 
-// PutLoginMethodInput describes a self-service login-method bind request.
-type PutLoginMethodInput struct {
-	UserID       uint64
-	Provider     string
-	ProviderData map[string]any
-}
-
 // VerifyEmailInput describes a resend-verification request.
 type VerifyEmailInput struct {
 	UserID          uint64
@@ -400,13 +393,6 @@ func (s *CurrentUserService) ListLoginMethods(ctx context.Context, userID uint64
 	return buildLoginMethodViews(user.PrimaryLoginType, credentials), nil
 }
 
-// PutLoginMethod binds a new login method for the current user.
-func (s *CurrentUserService) PutLoginMethod(ctx context.Context, input PutLoginMethodInput) (*LoginMethodView, error) {
-	_ = ctx
-	_ = input
-	return nil, ErrLoginMethodBindingUnavailable
-}
-
 // DeleteLoginMethod unbinds a login method for the current user.
 func (s *CurrentUserService) DeleteLoginMethod(ctx context.Context, userID uint64, provider string) error {
 	provider = strings.ToLower(strings.TrimSpace(provider))
@@ -524,44 +510,6 @@ func primaryEmail(emails []model.UserEmail) string {
 		}
 	}
 	return ""
-}
-
-func extractProviderBinding(provider string, providerData map[string]any) (string, string, string, error) {
-	var providerAccountID string
-	var displayName string
-	var avatarURL string
-
-	switch provider {
-	case "telegram":
-		if sub, ok := providerData["sub"].(string); ok {
-			providerAccountID = sub
-		}
-		if name, ok := providerData["name"].(string); ok {
-			displayName = name
-		}
-		if picture, ok := providerData["picture"].(string); ok {
-			avatarURL = picture
-		}
-	case "github":
-		if id, ok := providerData["id"].(float64); ok {
-			providerAccountID = fmt.Sprintf("%.0f", id)
-		}
-		if name, ok := providerData["name"].(string); ok && name != "" {
-			displayName = name
-		} else if login, ok := providerData["login"].(string); ok {
-			displayName = login
-		}
-		if avatar, ok := providerData["avatar_url"].(string); ok {
-			avatarURL = avatar
-		}
-	default:
-		return "", "", "", ErrLoginMethodInputInvalid
-	}
-
-	if providerAccountID == "" {
-		return "", "", "", ErrLoginMethodInputInvalid
-	}
-	return providerAccountID, displayName, avatarURL, nil
 }
 
 func nullTimePtr(value sql.NullTime) *time.Time {

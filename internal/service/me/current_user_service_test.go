@@ -123,23 +123,6 @@ func TestCurrentUserServiceDeleteLoginMethodAllowsSecondaryOAuthButProtectsPrima
 	assert.EqualValues(t, 1, googleCount)
 }
 
-func TestCurrentUserServicePutLoginMethodReturnsUnavailable(t *testing.T) {
-	db := setupMeServiceTestDB(t)
-	service := NewCurrentUserService(db)
-
-	method, err := service.PutLoginMethod(context.Background(), PutLoginMethodInput{
-		UserID:   7,
-		Provider: "github",
-		ProviderData: map[string]any{
-			"id":         42,
-			"login":      "attacker",
-			"avatar_url": "https://example.com/avatar.png",
-		},
-	})
-	require.ErrorIs(t, err, ErrLoginMethodBindingUnavailable)
-	require.Nil(t, method)
-}
-
 func TestCurrentUserServiceDeleteEmailPromotesRemainingEmailToPrimary(t *testing.T) {
 	db := setupMeServiceTestDB(t)
 	service := NewCurrentUserService(db)

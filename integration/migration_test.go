@@ -100,6 +100,13 @@ func TestUnifiedUserPlatformSchemaConstraints(t *testing.T) {
 	require.Error(t, err, "expected binding to reject another binding's profile")
 }
 
+func TestIdentityCredentialUniqueIndexesExist(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	requireIndexExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "user_credentials", "uniq_provider_account")
+	requireIndexExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "user_credentials", "uniq_user_provider")
+}
+
 func insertTestUser(t *testing.T, ctx context.Context, db *sql.DB) uint64 {
 	t.Helper()
 

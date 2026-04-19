@@ -97,6 +97,16 @@ func TestAdminManagementRoutes(t *testing.T) {
 		createdUserData := decodeResponseData(t, createUserResp)
 		createdUserID := uint64(createdUserData["id"].(float64))
 
+		rejectProviderPrimaryResp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", map[string]any{
+			"email":              fmt.Sprintf("created-provider-user-%d@example.com", time.Now().UnixNano()),
+			"password":           "Password123!",
+			"display_name":       "Rejected Provider Primary",
+			"primary_login_type": "github",
+			"status":             "active",
+		}, targetHeaders)
+		require.Equal(t, http.StatusBadRequest, rejectProviderPrimaryResp.Code, rejectProviderPrimaryResp.Body.String())
+		assert.Contains(t, rejectProviderPrimaryResp.Body.String(), "primary_login_type=email is required")
+
 		listUsersResp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/users", nil, targetHeaders)
 		require.Equal(t, http.StatusOK, listUsersResp.Code, listUsersResp.Body.String())
 		listUsersData := decodeResponseData(t, listUsersResp)

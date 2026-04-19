@@ -637,6 +637,10 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		response.BadRequest(c, "roles must be managed via authorities")
 		return
 	}
+	if model.LoginType(req.PrimaryLoginType) != model.LoginTypeEmail {
+		response.BadRequest(c, "primary_login_type=email is required until provider credential provisioning is supported")
+		return
+	}
 
 	// Normalize and validate email
 	email := strings.ToLower(strings.TrimSpace(req.Email))

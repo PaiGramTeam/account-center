@@ -126,15 +126,15 @@ func TestHandler_CreateUser(t *testing.T) {
 			wantErr:    false,
 		},
 		{
-			name: "valid user creation with provider primary login type",
+			name: "reject provider primary login type when create flow cannot provision provider credential",
 			body: map[string]interface{}{
 				"email":              "googleuser@example.com",
 				"password":           "TestPass123!",
 				"display_name":       "Google User",
 				"primary_login_type": "google",
 			},
-			wantStatus: http.StatusCreated,
-			wantErr:    false,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    true,
 		},
 		{
 			name: "reject roles on create",

@@ -35,7 +35,7 @@ func TestUnifiedUserPlatformSchema(t *testing.T) {
 	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "platform_account_bindings")
 	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "platform_account_profiles")
 	requireTableExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "consumer_grants")
-	requireColumnExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "platform_account_bindings", "active_binding_marker")
+	requireColumnExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "platform_account_bindings", "active_external_account_marker")
 	requireColumnExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "platform_account_profiles", "primary_profile_marker")
 
 	requireIndexExists(t, stack.SQLDB, stack.DatabaseCfg.Dbname, "users", "idx_users_primary_role_id")

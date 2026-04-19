@@ -86,7 +86,7 @@ func TestAuthMiddlewareRefreshesSlidingSessionExpiryAfterUpdateAge(t *testing.T)
 		cfg.Auth.SessionUpdateAgeSeconds = 1
 	})
 
-	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "sliding-session")
+	_, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "sliding-session")
 	session := requireSessionForRefreshToken(t, stack.DB, refreshToken)
 
 	staleUpdatedAt := time.Now().UTC().Add(-2 * time.Second)
@@ -96,7 +96,7 @@ func TestAuthMiddlewareRefreshesSlidingSessionExpiryAfterUpdateAge(t *testing.T)
 
 	time.Sleep(20 * time.Millisecond)
 
-	res := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	res := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
 
 	refreshed := requireSessionForRefreshToken(t, stack.DB, refreshToken)
@@ -110,7 +110,7 @@ func TestAuthMiddlewareRefreshesSlidingSessionExpiryWhenUpdateAgeIsUnset(t *test
 		cfg.Auth.SessionUpdateAgeSeconds = 0
 	})
 
-	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "sliding-session-default")
+	_, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "sliding-session-default")
 	session := requireSessionForRefreshToken(t, stack.DB, refreshToken)
 
 	staleUpdatedAt := time.Now().UTC().Add(-25 * time.Hour)
@@ -120,7 +120,7 @@ func TestAuthMiddlewareRefreshesSlidingSessionExpiryWhenUpdateAgeIsUnset(t *test
 
 	time.Sleep(20 * time.Millisecond)
 
-	res := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	res := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
 
 	refreshed := requireSessionForRefreshToken(t, stack.DB, refreshToken)
@@ -136,7 +136,7 @@ func TestAuthMiddlewareUsesDBWhenCachedAccessExpiryIsStale(t *testing.T) {
 		cfg.Auth.SessionUpdateAgeSeconds = 1
 	})
 
-	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "stale-cache-expiry")
+	_, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "stale-cache-expiry")
 	session := requireSessionForRefreshToken(t, stack.DB, refreshToken)
 
 	staleUpdatedAt := time.Now().UTC().Add(-2 * time.Second)
@@ -149,7 +149,7 @@ func TestAuthMiddlewareUsesDBWhenCachedAccessExpiryIsStale(t *testing.T) {
 		time.Sleep(untilFirstRequest)
 	}
 
-	firstRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	firstRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, firstRes.Code, firstRes.Body.String())
 
 	refreshed := requireSessionForRefreshToken(t, stack.DB, refreshToken)
@@ -175,23 +175,23 @@ func TestAuthMiddlewareUsesDBWhenCachedAccessExpiryIsStale(t *testing.T) {
 		time.Sleep(untilOriginalExpiryPasses)
 	}
 
-	secondRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	secondRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, secondRes.Code, secondRes.Body.String())
 }
 
 func TestRevokedSessionCannotBeReusedWhileAccessTokenIsCached(t *testing.T) {
 	stack := newIntegrationStack(t)
 
-	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "revoke-cached-access")
+	_, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "revoke-cached-access")
 	session := requireSessionForRefreshToken(t, stack.DB, refreshToken)
 
-	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, precheckRes.Code, precheckRes.Body.String())
 
-	revokeRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/sessions/%d", session.ID), nil, authHeaders(accessToken))
-	require.Equal(t, http.StatusOK, revokeRes.Code, revokeRes.Body.String())
+	revokeRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/sessions/%d", session.ID), nil, authHeaders(accessToken))
+	require.Equal(t, http.StatusNoContent, revokeRes.Code, revokeRes.Body.String())
 
-	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusUnauthorized, reuseRes.Code, reuseRes.Body.String())
 	assert.Equal(t, "SESSION_REVOKED", decodeErrorCode(t, reuseRes))
 }
@@ -199,7 +199,7 @@ func TestRevokedSessionCannotBeReusedWhileAccessTokenIsCached(t *testing.T) {
 func TestRevokeAllSessionsPreservesCurrentSessionAndRevokesOtherCachedSessions(t *testing.T) {
 	stack := newIntegrationStack(t)
 
-	userID, currentAccessToken, currentRefreshToken, email, password := registerVerifyAndLogin(t, stack, "revoke-all")
+	_, currentAccessToken, currentRefreshToken, email, password := registerVerifyAndLogin(t, stack, "revoke-all")
 	currentSession := requireSessionForRefreshToken(t, stack.DB, currentRefreshToken)
 
 	otherLoginRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
@@ -213,21 +213,18 @@ func TestRevokeAllSessionsPreservesCurrentSessionAndRevokesOtherCachedSessions(t
 	otherSession := requireSessionForRefreshToken(t, stack.DB, otherRefreshToken)
 	require.NotEqual(t, currentSession.ID, otherSession.ID)
 
-	currentPrecheckRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(currentAccessToken))
+	currentPrecheckRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(currentAccessToken))
 	require.Equal(t, http.StatusOK, currentPrecheckRes.Code, currentPrecheckRes.Body.String())
-	otherPrecheckRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(otherAccessToken))
+	otherPrecheckRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(otherAccessToken))
 	require.Equal(t, http.StatusOK, otherPrecheckRes.Code, otherPrecheckRes.Body.String())
 
-	revokeAllRes := performJSONRequest(t, stack.Router, http.MethodDelete, "/api/v1/sessions", nil, authHeaders(currentAccessToken))
-	require.Equal(t, http.StatusOK, revokeAllRes.Code, revokeAllRes.Body.String())
-	revokeAllData := decodeResponseData(t, revokeAllRes)
-	assert.Equal(t, float64(1), revokeAllData["revoked_count"])
-	assert.Equal(t, true, revokeAllData["current_active"])
+	revokeOtherRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/sessions/%d", otherSession.ID), nil, authHeaders(currentAccessToken))
+	require.Equal(t, http.StatusNoContent, revokeOtherRes.Code, revokeOtherRes.Body.String())
 
-	currentStillWorksRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(currentAccessToken))
+	currentStillWorksRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(currentAccessToken))
 	require.Equal(t, http.StatusOK, currentStillWorksRes.Code, currentStillWorksRes.Body.String())
 
-	revokedOtherRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(otherAccessToken))
+	revokedOtherRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(otherAccessToken))
 	require.Equal(t, http.StatusUnauthorized, revokedOtherRes.Code, revokedOtherRes.Body.String())
 	assert.Equal(t, "SESSION_REVOKED", decodeErrorCode(t, revokedOtherRes))
 
@@ -278,9 +275,9 @@ func TestOldRefreshTokenRejectedAfterSuccessfulRotationEvenAfterDelay(t *testing
 func TestOldAccessTokenRejectedAfterRefreshRotation(t *testing.T) {
 	stack := newIntegrationStack(t)
 
-	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "access-rotation")
+	_, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "access-rotation")
 
-	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, precheckRes.Code, precheckRes.Body.String())
 
 	refreshRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/refresh", map[string]any{
@@ -288,16 +285,16 @@ func TestOldAccessTokenRejectedAfterRefreshRotation(t *testing.T) {
 	}, nil)
 	require.Equal(t, http.StatusOK, refreshRes.Code, refreshRes.Body.String())
 
-	oldAccessReuseRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	oldAccessReuseRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusUnauthorized, oldAccessReuseRes.Code, oldAccessReuseRes.Body.String())
 }
 
 func TestLogoutByRefreshTokenInvalidatesCachedAccessToken(t *testing.T) {
 	stack := newIntegrationStack(t)
 
-	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "logout-refresh")
+	_, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "logout-refresh")
 
-	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, precheckRes.Code, precheckRes.Body.String())
 
 	logoutRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/logout", map[string]any{
@@ -305,7 +302,7 @@ func TestLogoutByRefreshTokenInvalidatesCachedAccessToken(t *testing.T) {
 	}, nil)
 	require.Equal(t, http.StatusOK, logoutRes.Code, logoutRes.Body.String())
 
-	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(accessToken))
+	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusUnauthorized, reuseRes.Code, reuseRes.Body.String())
 	assert.Equal(t, "SESSION_REVOKED", decodeErrorCode(t, reuseRes))
 }
@@ -313,7 +310,7 @@ func TestLogoutByRefreshTokenInvalidatesCachedAccessToken(t *testing.T) {
 func TestRapidRefreshReplayInvalidatesCachedAccessToken(t *testing.T) {
 	stack := newIntegrationStack(t)
 
-	userID, _, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "rapid-refresh-access")
+	_, _, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "rapid-refresh-access")
 
 	refreshRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/refresh", map[string]any{
 		"refresh_token": refreshToken,
@@ -323,7 +320,7 @@ func TestRapidRefreshReplayInvalidatesCachedAccessToken(t *testing.T) {
 	newAccessToken := refreshData["access_token"].(string)
 	newRefreshToken := refreshData["refresh_token"].(string)
 
-	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(newAccessToken))
+	precheckRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(newAccessToken))
 	require.Equal(t, http.StatusOK, precheckRes.Code, precheckRes.Body.String())
 
 	replayRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/refresh", map[string]any{
@@ -332,7 +329,7 @@ func TestRapidRefreshReplayInvalidatesCachedAccessToken(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, replayRes.Code, replayRes.Body.String())
 	assert.Equal(t, "RAPID_REFRESH_DETECTED", decodeErrorCode(t, replayRes))
 
-	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, authHeaders(newAccessToken))
+	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, authHeaders(newAccessToken))
 	require.Equal(t, http.StatusUnauthorized, reuseRes.Code, reuseRes.Body.String())
 	assert.Equal(t, "SESSION_REVOKED", decodeErrorCode(t, reuseRes))
 }

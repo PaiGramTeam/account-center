@@ -93,35 +93,43 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 	return profiles, nil
 }
 
-func (s *ProfileProjectionService) ListProfiles(bindingID uint64) ([]model.PlatformAccountProfile, error) {
+func (s *ProfileProjectionService) ListProfiles(bindingID uint64, params ListParams) ([]model.PlatformAccountProfile, int64, error) {
+	params = normalizeListParams(params)
+
 	var binding model.PlatformAccountBinding
 	if err := s.db.Select("id").First(&binding, bindingID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrBindingNotFound
+			return nil, 0, ErrBindingNotFound
 		}
 
-		return nil, err
+		return nil, 0, err
+	}
+
+	query := s.db.Model(&model.PlatformAccountProfile{}).Where("binding_id = ?", bindingID)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
 
 	var profiles []model.PlatformAccountProfile
-	if err := s.db.Where("binding_id = ?", bindingID).Order("is_primary DESC").Order("id ASC").Find(&profiles).Error; err != nil {
-		return nil, err
+	if err := query.Order("is_primary DESC").Order("id ASC").Offset(pageOffset(params)).Limit(params.PageSize).Find(&profiles).Error; err != nil {
+		return nil, 0, err
 	}
 
-	return profiles, nil
+	return profiles, total, nil
 }
 
-func (s *ProfileProjectionService) ListProfilesForOwner(ownerUserID, bindingID uint64) ([]model.PlatformAccountProfile, error) {
+func (s *ProfileProjectionService) ListProfilesForOwner(ownerUserID, bindingID uint64, params ListParams) ([]model.PlatformAccountProfile, int64, error) {
 	var binding model.PlatformAccountBinding
 	if err := s.db.Select("id").Where("owner_user_id = ?", ownerUserID).First(&binding, bindingID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrBindingNotFound
+			return nil, 0, ErrBindingNotFound
 		}
 
-		return nil, err
+		return nil, 0, err
 	}
 
-	return s.ListProfiles(bindingID)
+	return s.ListProfiles(bindingID, params)
 }
 
 func (s *ProfileProjectionService) SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error) {

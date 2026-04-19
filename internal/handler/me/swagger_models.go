@@ -172,9 +172,17 @@ type swaggerBackupCodesResponse struct {
 type swaggerSessionsResponse struct {
 	// in: body
 	Body struct {
-		Code    int                     `json:"code"`
-		Data    []serviceme.SessionView `json:"data"`
-		Message string                  `json:"message"`
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Items      []serviceme.SessionView `json:"items"`
+			Pagination struct {
+				Total      int64 `json:"total"`
+				Page       int   `json:"page"`
+				PageSize   int   `json:"page_size"`
+				TotalPages int   `json:"total_pages"`
+			} `json:"pagination"`
+		} `json:"data"`
 	}
 }
 
@@ -185,7 +193,7 @@ type swaggerActivityLogsResponse struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 		Data    struct {
-			Data       []serviceme.ActivityLogView `json:"data"`
+			Items      []serviceme.ActivityLogView `json:"items"`
 			Pagination struct {
 				Total      int64 `json:"total"`
 				Page       int   `json:"page"`
@@ -283,6 +291,19 @@ type revokeMeSessionParams struct {
 	// in: path
 	// required: true
 	SessionID uint64 `json:"sessionId"`
+}
+
+// swagger:parameters listMeSessions
+type listMeSessionsParams struct {
+	// Page number.
+	// in: query
+	// default: 1
+	Page int `json:"page"`
+	// Items per page.
+	// in: query
+	// default: 20
+	// maximum: 100
+	PageSize int `json:"page_size"`
 }
 
 // swagger:parameters listMeActivityLogs

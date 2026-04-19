@@ -42,10 +42,17 @@ func NewSessionService(db *gorm.DB, cache sessioncache.Store) *SessionService {
 }
 
 // ListSessions returns active sessions for the current user.
-func (s *SessionService) ListSessions(ctx context.Context, userID uint64, accessToken string) ([]SessionView, error) {
+func (s *SessionService) ListSessions(ctx context.Context, userID uint64, page, pageSize int, accessToken string) ([]SessionView, int64, error) {
+	var total int64
+	baseQuery := s.db.WithContext(ctx).Model(&model.UserSession{}).Where("user_id = ? AND revoked_at IS NULL", userID)
+	if err := baseQuery.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
 	var sessions []model.UserSession
-	if err := s.db.WithContext(ctx).Where("user_id = ? AND revoked_at IS NULL", userID).Order("created_at DESC").Find(&sessions).Error; err != nil {
-		return nil, err
+	offset := (page - 1) * pageSize
+	if err := baseQuery.Order("created_at DESC, id DESC").Offset(offset).Limit(pageSize).Find(&sessions).Error; err != nil {
+		return nil, 0, err
 	}
 
 	var devices []model.UserDevice
@@ -78,7 +85,7 @@ func (s *SessionService) ListSessions(ctx context.Context, userID uint64, access
 		}
 		views = append(views, view)
 	}
-	return views, nil
+	return views, total, nil
 }
 
 // RevokeSession revokes a specific current-user session.

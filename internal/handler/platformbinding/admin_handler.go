@@ -32,13 +32,14 @@ func NewAdminHandler(bindingService bindingService, profileService profileServic
 // swagger:route GET /api/v1/admin/platform-accounts platformbinding-admin listPlatformBindings
 // List platform bindings across all users.
 func (h *AdminHandler) ListBindings(c *gin.Context) {
-	items, err := h.bindingService.ListBindings()
+	page, pageSize := parseListParams(c)
+	items, total, err := h.bindingService.ListBindings(serviceplatformbinding.ListParams{Page: page, PageSize: pageSize})
 	if err != nil {
 		response.InternalServerError(c, "failed to list platform bindings")
 		return
 	}
 
-	response.Success(c, gin.H{"items": buildAdminBindingViews(items)})
+	response.SuccessWithPagination(c, buildAdminBindingViews(items), total, page, pageSize)
 }
 
 // swagger:route GET /api/v1/admin/platform-accounts/{bindingId} platformbinding-admin getPlatformBinding
@@ -71,13 +72,14 @@ func (h *AdminHandler) ListProfiles(c *gin.Context) {
 		return
 	}
 
-	items, err := h.profileService.ListProfiles(bindingID)
+	page, pageSize := parseListParams(c)
+	items, total, err := h.profileService.ListProfiles(bindingID, serviceplatformbinding.ListParams{Page: page, PageSize: pageSize})
 	if err != nil {
 		writeBindingError(c, err, "failed to list platform binding profiles")
 		return
 	}
 
-	response.Success(c, gin.H{"items": buildProfileViews(items)})
+	response.SuccessWithPagination(c, buildProfileViews(items), total, page, pageSize)
 }
 
 // swagger:route GET /api/v1/admin/platform-accounts/{bindingId}/consumer-grants platformbinding-admin listPlatformBindingConsumerGrants
@@ -93,13 +95,14 @@ func (h *AdminHandler) ListConsumerGrants(c *gin.Context) {
 		return
 	}
 
-	items, err := h.grantService.ListGrants(bindingID)
+	page, pageSize := parseListParams(c)
+	items, total, err := h.grantService.ListGrants(bindingID, serviceplatformbinding.ListParams{Page: page, PageSize: pageSize})
 	if err != nil {
 		writeBindingError(c, err, "failed to list platform binding consumer grants")
 		return
 	}
 
-	response.Success(c, gin.H{"items": buildGrantViews(items)})
+	response.SuccessWithPagination(c, buildGrantViews(items), total, page, pageSize)
 }
 
 // swagger:route PUT /api/v1/admin/platform-accounts/{bindingId}/consumer-grants/{consumer} platformbinding-admin putPlatformBindingConsumerGrant

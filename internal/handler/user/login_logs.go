@@ -30,7 +30,7 @@ func (h *Handler) RegisterLoginLogRoutes(rg *gin.RouterGroup) {
 // @Param status query string false "Filter by status" enum(success,failed)
 // @Param date_from query string false "Start date (YYYY-MM-DD)"
 // @Param date_to query string false "End date (YYYY-MM-DD)"
-// @Success 200 {object} response.PaginatedResponse
+// @Success 200 {object} LoginLogsResponse
 // @Failure 400 {object} gin.H
 // @Failure 403 {object} gin.H
 // @Failure 404 {object} gin.H
@@ -84,10 +84,6 @@ func (h *Handler) GetLoginLogs(c *gin.Context) {
 
 	// Calculate pagination
 	offset := (page - 1) * pageSize
-	totalPages := int(total) / pageSize
-	if int(total)%pageSize > 0 {
-		totalPages++
-	}
 
 	// Fetch logs
 	var logs []model.LoginLog
@@ -123,15 +119,7 @@ func (h *Handler) GetLoginLogs(c *gin.Context) {
 		logList = append(logList, logItem)
 	}
 
-	response.Success(c, gin.H{
-		"data": logList,
-		"pagination": gin.H{
-			"total":       total,
-			"page":        page,
-			"page_size":   pageSize,
-			"total_pages": totalPages,
-		},
-	})
+	response.SuccessWithPagination(c, logList, total, page, pageSize)
 }
 
 // LogLoginAttempt logs a login attempt (to be called from auth handler)

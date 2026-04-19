@@ -4,7 +4,9 @@ import (
 	stderrors "errors"
 	"fmt"
 	"testing"
+	"time"
 
+	"github.com/glebarez/sqlite"
 	internalcasbin "paigram/internal/casbin"
 	"paigram/internal/model"
 	servicecasbin "paigram/internal/service/casbin"
@@ -58,6 +60,59 @@ func TestGetAuthorityPreloadsPermissions(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, loadedRole.Permissions, 1)
 	assert.Equal(t, perm.ID, loadedRole.Permissions[0].ID)
+}
+
+func TestListAuthoritiesCarriesRequestedPageSize(t *testing.T) {
+	db := setupAuthorityServiceTestDB(t)
+	require.NoError(t, db.Create(&model.Role{Name: "list-role", DisplayName: "List Role"}).Error)
+
+	service := &AuthorityService{db: db}
+	result, err := service.ListAuthorities(ListAuthoritiesParams{Page: 2, PageSize: 25})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 2, result.Page)
+	assert.Equal(t, 25, result.PageSize)
+	assert.Equal(t, 1, result.Total)
+	assert.Len(t, result.Data, 0)
+}
+
+func TestListAuthoritiesUsesDeterministicOrdering(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(`CREATE TABLE roles (id integer PRIMARY KEY AUTOINCREMENT, name text NOT NULL, display_name text NOT NULL, description text, is_system numeric NOT NULL DEFAULT 0, created_at datetime NOT NULL, updated_at datetime NOT NULL, deleted_at datetime)`).Error)
+
+	createdAt := time.Now().UTC().Truncate(time.Second)
+	for _, role := range []struct {
+		id   int
+		name string
+	}{
+		{id: 1, name: "authority-a"},
+		{id: 2, name: "authority-b"},
+		{id: 3, name: "authority-c"},
+	} {
+		require.NoError(t, db.Exec(
+			`INSERT INTO roles (id, name, display_name, description, is_system, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			role.id,
+			role.name,
+			role.name,
+			"test role",
+			false,
+			createdAt,
+			createdAt,
+		).Error)
+	}
+
+	service := &AuthorityService{db: db}
+	firstPage, err := service.ListAuthorities(ListAuthoritiesParams{Page: 1, PageSize: 2})
+	require.NoError(t, err)
+	require.Len(t, firstPage.Data, 2)
+	assert.Equal(t, "authority-c", firstPage.Data[0].Name)
+	assert.Equal(t, "authority-b", firstPage.Data[1].Name)
+
+	secondPage, err := service.ListAuthorities(ListAuthoritiesParams{Page: 2, PageSize: 2})
+	require.NoError(t, err)
+	require.Len(t, secondPage.Data, 1)
+	assert.Equal(t, "authority-a", secondPage.Data[0].Name)
 }
 
 func TestCreateAuthorityRollsBackWhenCasbinSyncFails(t *testing.T) {

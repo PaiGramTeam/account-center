@@ -100,8 +100,8 @@ func TestAdminManagementRoutes(t *testing.T) {
 		listUsersResp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/users", nil, targetHeaders)
 		require.Equal(t, http.StatusOK, listUsersResp.Code, listUsersResp.Body.String())
 		listUsersData := decodeResponseData(t, listUsersResp)
-		listUsers, ok := listUsersData["data"].([]any)
-		require.True(t, ok, "expected admin users list, got %T", listUsersData["data"])
+		listUsers, ok := listUsersData["items"].([]any)
+		require.True(t, ok, "expected admin users items list, got %T", listUsersData["items"])
 		assert.NotEmpty(t, listUsers)
 
 		getUserResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d", targetID), nil, targetHeaders)
@@ -127,15 +127,15 @@ func TestAdminManagementRoutes(t *testing.T) {
 		auditResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/audit-logs", targetID), nil, targetHeaders)
 		require.Equal(t, http.StatusOK, auditResp.Code, auditResp.Body.String())
 		auditData := decodeResponseData(t, auditResp)
-		auditLogs, ok := auditData["data"].([]any)
-		require.True(t, ok, "expected audit logs list, got %T", auditData["data"])
+		auditLogs, ok := auditData["items"].([]any)
+		require.True(t, ok, "expected audit log items list, got %T", auditData["items"])
 		assert.NotEmpty(t, auditLogs)
 
 		userRolesResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/roles", targetID), nil, targetHeaders)
 		require.Equal(t, http.StatusOK, userRolesResp.Code, userRolesResp.Body.String())
 		userRolesData := decodeResponseData(t, userRolesResp)
-		userRoles, ok := userRolesData["data"].([]any)
-		require.True(t, ok, "expected user role list, got %T", userRolesData["data"])
+		userRoles, ok := userRolesData["items"].([]any)
+		require.True(t, ok, "expected user role items list, got %T", userRolesData["items"])
 		assert.NotEmpty(t, userRoles)
 
 		replaceRolesResp := performJSONRequest(t, stack.Router, http.MethodPut, fmt.Sprintf("/api/v1/admin/users/%d/roles", targetID), map[string]any{
@@ -176,15 +176,15 @@ func TestAdminManagementRoutes(t *testing.T) {
 		userPermissionsResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/permissions", targetID), nil, targetHeaders)
 		require.Equal(t, http.StatusOK, userPermissionsResp.Code, userPermissionsResp.Body.String())
 		userPermissionsData := decodeResponseData(t, userPermissionsResp)
-		permissionItems, ok := userPermissionsData["data"].([]any)
-		require.True(t, ok, "expected permission list, got %T", userPermissionsData["data"])
+		permissionItems, ok := userPermissionsData["items"].([]any)
+		require.True(t, ok, "expected permission items list, got %T", userPermissionsData["items"])
 		assert.NotEmpty(t, permissionItems)
 
 		sessionsResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/sessions", targetID), nil, targetHeaders)
 		require.Equal(t, http.StatusOK, sessionsResp.Code, sessionsResp.Body.String())
 		sessionsData := decodeResponseData(t, sessionsResp)
-		sessionItems, ok := sessionsData["data"].([]any)
-		require.True(t, ok, "expected session list, got %T", sessionsData["data"])
+		sessionItems, ok := sessionsData["items"].([]any)
+		require.True(t, ok, "expected session items list, got %T", sessionsData["items"])
 		assert.NotEmpty(t, sessionItems)
 
 		revokeSessionResp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d/sessions/%d", targetID, targetSession.ID), nil, targetHeaders)
@@ -201,8 +201,8 @@ func TestAdminManagementRoutes(t *testing.T) {
 		loginLogsResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/login-logs", targetID), nil, targetHeaders)
 		require.Equal(t, http.StatusOK, loginLogsResp.Code, loginLogsResp.Body.String())
 		loginLogsData := decodeResponseData(t, loginLogsResp)
-		loginLogs, ok := loginLogsData["data"].([]any)
-		require.True(t, ok, "expected login logs list, got %T", loginLogsData["data"])
+		loginLogs, ok := loginLogsData["items"].([]any)
+		require.True(t, ok, "expected login log items list, got %T", loginLogsData["items"])
 		assert.NotEmpty(t, loginLogs)
 
 		resetResp := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/admin/users/%d/reset-password", targetID), map[string]any{

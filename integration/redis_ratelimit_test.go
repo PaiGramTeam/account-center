@@ -5,6 +5,7 @@ package integration
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -12,14 +13,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"paigram/internal/middleware"
+	"paigram/internal/testutil/integrationenv"
 )
 
 func TestRedisRateLimitStoreBlocksExceededRequests(t *testing.T) {
-	env := loadIntegrationEnv(t)
+	env, err := integrationenv.Load(integrationenv.LoadOptions{})
+	require.NoError(t, err)
+	if missing := env.MissingRequired(); len(missing) > 0 {
+		t.Skipf("integration env not configured: missing %s", strings.Join(missing, ", "))
+	}
+
 	redisClient := openRedis(t, env)
 	defer func() { _ = redisClient.Close() }()
 
-	prefix := uniqueRedisPrefix(t.Name(), env.RedisPrefix)
+	prefix := env.UniqueRedisPrefix(t.Name())
 	cleanupRedisPrefix(t, redisClient, prefix)
 	defer cleanupRedisPrefix(t, redisClient, prefix)
 

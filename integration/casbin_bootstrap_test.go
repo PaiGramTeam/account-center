@@ -31,8 +31,8 @@ func TestFreshBootstrapSeedsUsableCasbinPoliciesForDefaultAdmin(t *testing.T) {
 	loginData := decodeResponseData(t, loginRes)
 	accessToken := loginData["access_token"].(string)
 
-	authoritiesRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/authorities", nil, map[string]string{
+	rolesRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, map[string]string{
 		"Authorization": "Bearer " + accessToken,
 	})
-	require.Equal(t, http.StatusOK, authoritiesRes.Code, authoritiesRes.Body.String())
+	require.Equal(t, http.StatusOK, rolesRes.Code, rolesRes.Body.String())
 }

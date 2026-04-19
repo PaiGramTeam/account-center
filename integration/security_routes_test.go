@@ -329,7 +329,7 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 
 	firstLog, ok := logItems[0].(map[string]any)
 	require.True(t, ok, "expected first login log entry map, got %T", logItems[0])
-	assert.Equal(t, float64(userID), firstLog["user_id"])
+	assert.Equal(t, "session.self_viewed", firstLog["action"])
 	assert.NotEmpty(t, firstLog["action"])
 
 	otherUserID, _, _, _, _ := registerVerifyAndLogin(t, stack, "self-service-target")
@@ -387,7 +387,7 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 	createDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", createBody, headers)
 	require.Equal(t, http.StatusForbidden, createDenied.Code, createDenied.Body.String())
 
-	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceUser, model.ActionCreate), model.PermRoleRead, model.PermPermissionRead, model.PermUserRead)
+	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceUser, model.ActionCreate), model.BuildPermissionName(model.ResourceUser, model.ActionUpdate), model.PermRoleRead, model.PermPermissionRead, model.PermUserRead)
 
 	createAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", createBody, headers)
 	require.Equal(t, http.StatusBadRequest, createAllowed.Code, createAllowed.Body.String())

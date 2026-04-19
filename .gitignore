@@ -29,6 +29,7 @@ go.work.sum
 
 # env file
 .env
+.env.integration.local
 
 # Editor/IDE
 .idea/

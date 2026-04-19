@@ -106,13 +106,13 @@ jobs:
       - name: Run integration tests
         run: go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./integration/...
         env:
-          PAI_DATABASE_ADDR: 127.0.0.1:3306
-          PAI_DATABASE_USERNAME: root
-          PAI_DATABASE_PASSWORD: root
-          PAI_DATABASE_DBNAME: paigram_test
-          PAI_DATABASE_CONFIG: charset=utf8mb4&parseTime=True&loc=UTC&multiStatements=true
-          PAI_REDIS_ADDR: 127.0.0.1:6379
-          PAI_REDIS_PREFIX: gha-itest
+          PAI_TEST_DATABASE_ADDR: 127.0.0.1:3306
+          PAI_TEST_DATABASE_USERNAME: root
+          PAI_TEST_DATABASE_PASSWORD: root
+          PAI_TEST_DATABASE_DBNAME: paigram_test
+          PAI_TEST_DATABASE_CONFIG: charset=utf8mb4&parseTime=True&loc=UTC&multiStatements=true
+          PAI_TEST_REDIS_ADDR: 127.0.0.1:6379
+          PAI_TEST_REDIS_PREFIX: gha-itest
 
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@v5

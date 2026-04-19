@@ -70,12 +70,19 @@ func (f *fakeCurrentUserService) VerifyEmail(context.Context, serviceme.VerifyEm
 }
 
 type fakeSessionService struct {
-	sessions  []SessionView
-	revokeErr error
+	sessions        []SessionView
+	total           int64
+	revokeErr       error
+	listPage        int
+	listPageSize    int
+	listAccessToken string
 }
 
-func (f *fakeSessionService) ListSessions(_ context.Context, _ uint64, _ string) ([]SessionView, error) {
-	return f.sessions, nil
+func (f *fakeSessionService) ListSessions(_ context.Context, _ uint64, page, pageSize int, accessToken string) ([]SessionView, int64, error) {
+	f.listPage = page
+	f.listPageSize = pageSize
+	f.listAccessToken = accessToken
+	return f.sessions, f.total, nil
 }
 
 func (f *fakeSessionService) RevokeSession(_ context.Context, _ uint64, _ uint64) error {
@@ -137,13 +144,44 @@ func TestCurrentUserHandlerGetDashboardSummaryReturnsSummary(t *testing.T) {
 }
 
 func TestSessionHandlerListSessionsUsesMeRoute(t *testing.T) {
-	handler := NewSessionHandler(&fakeSessionService{sessions: []SessionView{{ID: 9, IsCurrent: true}}})
-	ctx, rec := testContextWithUser(t, http.MethodGet, "/api/v1/me/sessions", 7)
+	handler := NewSessionHandler(&fakeSessionService{sessions: []SessionView{{ID: 9, IsCurrent: true}}, total: 1})
+	ctx, rec := testContextWithUser(t, http.MethodGet, "/api/v1/me/sessions?page=2&page_size=1", 7)
+	ctx.Request.Header.Set("Authorization", "Bearer current-token")
 
 	handler.ListSessions(ctx)
 
 	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), `"id":9`)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	data, ok := payload["data"].(map[string]any)
+	require.True(t, ok)
+	items, ok := data["items"].([]any)
+	require.True(t, ok)
+	require.Len(t, items, 1)
+	assert.Equal(t, float64(9), items[0].(map[string]any)["id"])
+	pagination, ok := data["pagination"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(1), pagination["total"])
+	assert.Equal(t, float64(2), pagination["page"])
+	assert.Equal(t, float64(1), pagination["page_size"])
+	assert.Equal(t, float64(1), pagination["total_pages"])
+	service := handler.service.(*fakeSessionService)
+	assert.Equal(t, 2, service.listPage)
+	assert.Equal(t, 1, service.listPageSize)
+	assert.Equal(t, "current-token", service.listAccessToken)
+}
+
+func TestSessionHandlerListSessionsNormalizesInvalidPagination(t *testing.T) {
+	fake := &fakeSessionService{sessions: []SessionView{}, total: 0}
+	handler := NewSessionHandler(fake)
+	ctx, rec := testContextWithUser(t, http.MethodGet, "/api/v1/me/sessions?page=0&page_size=101", 7)
+
+	handler.ListSessions(ctx)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 1, fake.listPage)
+	assert.Equal(t, 20, fake.listPageSize)
 }
 
 func TestSessionHandlerRevokeSessionReturnsInternalServerErrorWhenServiceFails(t *testing.T) {

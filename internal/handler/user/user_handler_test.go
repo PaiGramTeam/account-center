@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -44,6 +45,24 @@ func setupTestDB(t *testing.T) *gorm.DB {
 func setupTestHandler(db *gorm.DB) *Handler {
 	serviceGroup := serviceUser.NewServiceGroup(db)
 	return NewHandlerWithDB(&serviceGroup.UserService, db)
+}
+
+func setupListUsersContractTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+
+	statements := []string{
+		`CREATE TABLE users (id integer PRIMARY KEY AUTOINCREMENT, primary_login_type text NOT NULL, status text NOT NULL, primary_role_id integer, last_login_at datetime, created_at datetime NOT NULL, updated_at datetime NOT NULL, deleted_at datetime)`,
+		`CREATE TABLE user_profiles (id integer PRIMARY KEY AUTOINCREMENT, user_id integer NOT NULL, display_name text NOT NULL, avatar_url text, bio text, locale text, created_at datetime, updated_at datetime)`,
+		`CREATE TABLE roles (id integer PRIMARY KEY AUTOINCREMENT, name text NOT NULL, display_name text NOT NULL, description text, is_system numeric NOT NULL DEFAULT 0, created_at datetime, updated_at datetime, deleted_at datetime)`,
+		`CREATE TABLE user_roles (id integer PRIMARY KEY AUTOINCREMENT, user_id integer NOT NULL, role_id integer NOT NULL, granted_by integer NOT NULL, created_at datetime NOT NULL, updated_at datetime NOT NULL)`,
+	}
+	for _, stmt := range statements {
+		require.NoError(t, db.Exec(stmt).Error)
+	}
+
+	return db
 }
 
 func TestManagementSwaggerAnnotationsUseAdminUserNamespace(t *testing.T) {
@@ -300,30 +319,48 @@ func TestHandler_ListUsers(t *testing.T) {
 		query      string
 		wantStatus int
 		wantCount  int
+		wantPage   int
+		wantSize   int
 	}{
 		{
 			name:       "default pagination",
 			query:      "",
 			wantStatus: http.StatusOK,
 			wantCount:  20,
+			wantPage:   1,
+			wantSize:   20,
 		},
 		{
 			name:       "custom page size",
 			query:      "?page=1&page_size=10",
 			wantStatus: http.StatusOK,
 			wantCount:  10,
+			wantPage:   1,
+			wantSize:   10,
 		},
 		{
 			name:       "second page",
 			query:      "?page=2&page_size=10",
 			wantStatus: http.StatusOK,
 			wantCount:  10,
+			wantPage:   2,
+			wantSize:   10,
 		},
 		{
 			name:       "filter by status",
 			query:      "?status=active",
 			wantStatus: http.StatusOK,
 			wantCount:  20,
+			wantPage:   1,
+			wantSize:   20,
+		},
+		{
+			name:       "invalid pagination is normalized in metadata",
+			query:      "?page=0&page_size=0",
+			wantStatus: http.StatusOK,
+			wantCount:  20,
+			wantPage:   1,
+			wantSize:   20,
 		},
 	}
 
@@ -341,16 +378,96 @@ func TestHandler_ListUsers(t *testing.T) {
 			require.NoError(t, err)
 			data, ok := resp.Data.(map[string]interface{})
 			require.True(t, ok)
-			items, ok := data["data"].([]interface{})
+			items, ok := data["items"].([]interface{})
 			require.True(t, ok)
 			pagination, ok := data["pagination"].(map[string]interface{})
 			require.True(t, ok)
 			assert.Equal(t, tt.wantCount, len(items))
 			assert.Equal(t, float64(25), pagination["total"])
+			assert.Equal(t, float64(tt.wantPage), pagination["page"])
+			assert.Equal(t, float64(tt.wantSize), pagination["page_size"])
 			first := items[0].(map[string]interface{})
+			assert.Contains(t, first, "avatar_url")
+			assert.NotContains(t, first, "primary_email")
 			assert.NotEmpty(t, first["roles"])
 		})
 	}
+}
+
+func TestHandler_ListUsersNormalizesPaginationMetadataAndUsesCanonicalEnvelope(t *testing.T) {
+	db := setupListUsersContractTestDB(t)
+	handler := setupTestHandler(db)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	for i := 1; i <= 25; i++ {
+		require.NoError(t, db.Exec(
+			`INSERT INTO users (id, primary_login_type, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			i,
+			string(model.LoginTypeEmail),
+			string(model.UserStatusActive),
+			now.Add(time.Duration(i)*time.Minute),
+			now.Add(time.Duration(i)*time.Minute),
+		).Error)
+		require.NoError(t, db.Exec(
+			`INSERT INTO user_profiles (user_id, display_name, avatar_url, locale, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			i,
+			fmt.Sprintf("User %d", i),
+			fmt.Sprintf("https://example.com/avatar-%d.png", i),
+			"en_US",
+			now,
+			now,
+		).Error)
+		require.NoError(t, db.Exec(
+			`INSERT INTO roles (id, name, display_name, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			i,
+			fmt.Sprintf("role-%d", i),
+			fmt.Sprintf("Role %d", i),
+			"test role",
+			now,
+			now,
+		).Error)
+		require.NoError(t, db.Exec(
+			`INSERT INTO user_roles (user_id, role_id, granted_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+			i,
+			i,
+			i,
+			now,
+			now,
+		).Error)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/users", handler.ListUsers)
+
+	req := httptest.NewRequest(http.MethodGet, "/users?page=0&page_size=0", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp response.Response
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data, ok := resp.Data.(map[string]interface{})
+	require.True(t, ok)
+	assert.NotContains(t, data, "data")
+
+	items, ok := data["items"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, items, 20)
+
+	pagination, ok := data["pagination"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, float64(25), pagination["total"])
+	assert.Equal(t, float64(1), pagination["page"])
+	assert.Equal(t, float64(20), pagination["page_size"])
+	assert.Equal(t, float64(2), pagination["total_pages"])
+
+	first, ok := items[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Contains(t, first, "avatar_url")
+	assert.NotContains(t, first, "primary_email")
+	assert.NotEmpty(t, first["roles"])
 }
 
 func TestHandler_UpdateUser(t *testing.T) {
@@ -474,6 +591,104 @@ func TestHandler_GetUserAggregatesRolesPermissionsAndSecurity(t *testing.T) {
 	assert.Equal(t, []interface{}{model.PermAuditRead}, data["permissions"])
 	assert.Equal(t, true, data["two_factor_enabled"])
 	assert.Equal(t, float64(1), data["active_session_count"])
+}
+
+func TestHandler_GetUserPermissionsReturnsNotFoundForMissingUser(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/users"))
+
+	req := httptest.NewRequest(http.MethodGet, "/users/99999/permissions", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNotFound, w.Code)
+	assert.Contains(t, w.Body.String(), "user not found")
+}
+
+func TestHandler_GetUserPermissionsReturnsStablePaginatedPermissionsWithMeta(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&user).Error)
+
+	roleA := model.Role{Name: "zeta", DisplayName: "Zeta"}
+	roleB := model.Role{Name: "alpha", DisplayName: "Alpha"}
+	require.NoError(t, db.Create(&roleA).Error)
+	require.NoError(t, db.Create(&roleB).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: roleA.ID, GrantedBy: user.ID}).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: roleB.ID, GrantedBy: user.ID}).Error)
+
+	permissions := []model.Permission{
+		{Name: "users:read", Resource: "users", Action: "read", Description: "read users"},
+		{Name: "audit:read", Resource: "audit", Action: "read", Description: "read audit"},
+		{Name: "audit:write", Resource: "audit", Action: "write", Description: "write audit"},
+	}
+	for i := range permissions {
+		require.NoError(t, db.Create(&permissions[i]).Error)
+	}
+
+	require.NoError(t, db.Create(&model.RolePermission{RoleID: roleA.ID, PermissionID: permissions[0].ID}).Error)
+	require.NoError(t, db.Create(&model.RolePermission{RoleID: roleA.ID, PermissionID: permissions[2].ID}).Error)
+	require.NoError(t, db.Create(&model.RolePermission{RoleID: roleB.ID, PermissionID: permissions[1].ID}).Error)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler.RegisterRoutes(router.Group("/users"))
+
+	var firstRun []map[string]any
+	for i := 0; i < 20; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/users/"+strconv.FormatUint(user.ID, 10)+"/permissions?page=1&page_size=2", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var resp response.Response
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+
+		data, ok := resp.Data.(map[string]any)
+		require.True(t, ok)
+		items, ok := data["items"].([]any)
+		require.True(t, ok)
+		require.Len(t, items, 2)
+
+		current := make([]map[string]any, 0, len(items))
+		for _, raw := range items {
+			item, ok := raw.(map[string]any)
+			require.True(t, ok)
+			current = append(current, item)
+		}
+
+		if i == 0 {
+			firstRun = current
+		} else {
+			assert.Equal(t, firstRun, current)
+		}
+
+		pagination, ok := data["pagination"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, float64(3), pagination["total"])
+		assert.Equal(t, float64(1), pagination["page"])
+		assert.Equal(t, float64(2), pagination["page_size"])
+		assert.Equal(t, float64(2), pagination["total_pages"])
+
+		meta, ok := data["meta"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, []any{"alpha", "zeta"}, meta["roles"])
+	}
+
+	require.Len(t, firstRun, 2)
+	assert.Equal(t, "audit", firstRun[0]["resource"])
+	assert.Equal(t, "read", firstRun[0]["action"])
+	assert.Equal(t, "audit:read", firstRun[0]["name"])
+	assert.Equal(t, "audit", firstRun[1]["resource"])
+	assert.Equal(t, "write", firstRun[1]["action"])
+	assert.Equal(t, "audit:write", firstRun[1]["name"])
 }
 
 func TestHandler_PatchPrimaryRoleSupportsClearAndReturnsUnprocessableEntity(t *testing.T) {

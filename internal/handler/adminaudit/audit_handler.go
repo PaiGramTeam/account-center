@@ -92,12 +92,7 @@ func (h *AuditHandler) ListAuditLogs(c *gin.Context) {
 		response.InternalServerError(c, "failed to load audit logs")
 		return
 	}
-	response.Success(c, gin.H{
-		"items":     items,
-		"total":     total,
-		"page":      page,
-		"page_size": pageSize,
-	})
+	response.SuccessWithPagination(c, items, total, page, pageSize)
 }
 
 // swagger:route GET /api/v1/admin/audit-logs/{id} admin-audit getAuditLog

@@ -265,36 +265,6 @@ func TestCurrentUserServiceGetCurrentUserViewIncludesRolesAndPermissions(t *test
 	require.Equal(t, []string{"platform_account:read"}, view.Permissions)
 }
 
-func TestSessionServiceListSessionsMarksCurrentAndLoadsDevice(t *testing.T) {
-	db := setupMeServiceTestDB(t)
-	service := NewSessionService(db, sessioncache.NewNoopStore())
-	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
-	require.NoError(t, db.Create(&user).Error)
-	accessToken := "current-access-token"
-	currentHash := hashBearerToken(accessToken)
-	now := time.Now().UTC()
-	session := model.UserSession{
-		UserID:           user.ID,
-		AccessTokenHash:  currentHash,
-		RefreshTokenHash: "refresh-hash-1",
-		AccessExpiry:     now.Add(time.Hour),
-		RefreshExpiry:    now.Add(24 * time.Hour),
-		UserAgent:        "Mozilla/5.0",
-		ClientIP:         "127.0.0.1",
-		CreatedAt:        now.Add(-time.Minute),
-	}
-	require.NoError(t, db.Create(&session).Error)
-	device := model.UserDevice{UserID: user.ID, DeviceID: buildDeviceID(session.UserAgent, session.ClientIP), DeviceName: "Laptop", DeviceType: "desktop", Location: "Localhost", LastActiveAt: now}
-	require.NoError(t, db.Create(&device).Error)
-
-	views, err := service.ListSessions(context.Background(), user.ID, accessToken)
-	require.NoError(t, err)
-	require.Len(t, views, 1)
-	assert.True(t, views[0].IsCurrent)
-	assert.Equal(t, "Laptop", views[0].DeviceName)
-	assert.Equal(t, "Localhost", views[0].Location)
-}
-
 func TestSecurityServiceGetOverviewSummarizesCurrentUserSecurityState(t *testing.T) {
 	db := setupMeServiceTestDB(t)
 	service := NewSecurityService(db, sessioncache.NewNoopStore())

@@ -107,22 +107,38 @@ func (s *BindingService) DeleteBindingForOwner(ownerUserID, bindingID uint64) (*
 	return s.DeleteBinding(bindingID)
 }
 
-func (s *BindingService) ListBindings() ([]model.PlatformAccountBinding, error) {
-	var bindings []model.PlatformAccountBinding
-	if err := s.db.Order("id ASC").Find(&bindings).Error; err != nil {
-		return nil, err
+func (s *BindingService) ListBindings(params ListParams) ([]model.PlatformAccountBinding, int64, error) {
+	params = normalizeListParams(params)
+	query := s.db.Model(&model.PlatformAccountBinding{})
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
 
-	return bindings, nil
+	var bindings []model.PlatformAccountBinding
+	if err := query.Order("id ASC").Offset(pageOffset(params)).Limit(params.PageSize).Find(&bindings).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return bindings, total, nil
 }
 
-func (s *BindingService) ListBindingsByOwner(ownerUserID uint64) ([]model.PlatformAccountBinding, error) {
-	var bindings []model.PlatformAccountBinding
-	if err := s.db.Where("owner_user_id = ?", ownerUserID).Order("id ASC").Find(&bindings).Error; err != nil {
-		return nil, err
+func (s *BindingService) ListBindingsByOwner(ownerUserID uint64, params ListParams) ([]model.PlatformAccountBinding, int64, error) {
+	params = normalizeListParams(params)
+	query := s.db.Model(&model.PlatformAccountBinding{}).Where("owner_user_id = ?", ownerUserID)
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
 	}
 
-	return bindings, nil
+	var bindings []model.PlatformAccountBinding
+	if err := query.Order("id ASC").Offset(pageOffset(params)).Limit(params.PageSize).Find(&bindings).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return bindings, total, nil
 }
 
 func (s *BindingService) UpdateBindingStatus(bindingID uint64, status model.PlatformAccountBindingStatus) (*model.PlatformAccountBinding, error) {

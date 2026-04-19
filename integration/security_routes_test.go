@@ -291,8 +291,8 @@ func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
 	require.NoError(t, json.Unmarshal(sessionsRes.Body.Bytes(), &sessionsPayload))
 	sessionsData, ok := sessionsPayload.Data.(map[string]any)
 	require.True(t, ok, "expected sessions response data map, got %T", sessionsPayload.Data)
-	items, ok := sessionsData["data"].([]any)
-	require.True(t, ok, "expected sessions data slice, got %T", sessionsData["data"])
+	items, ok := sessionsData["items"].([]any)
+	require.True(t, ok, "expected sessions items slice, got %T", sessionsData["items"])
 	require.NotEmpty(t, items)
 
 	summaryRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/security-summary", targetID), nil, headers)
@@ -323,8 +323,8 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 	require.Equal(t, http.StatusOK, loginLogsRes.Code, loginLogsRes.Body.String())
 
 	loginLogsData := decodeResponseData(t, loginLogsRes)
-	logItems, ok := loginLogsData["data"].([]any)
-	require.True(t, ok, "expected login log list, got %T", loginLogsData["data"])
+	logItems, ok := loginLogsData["items"].([]any)
+	require.True(t, ok, "expected login log items list, got %T", loginLogsData["items"])
 	require.NotEmpty(t, logItems)
 
 	firstLog, ok := logItems[0].(map[string]any)
@@ -410,8 +410,8 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 	getRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/roles", createdUserID), nil, headers)
 	require.Equal(t, http.StatusOK, getRolesRes.Code, getRolesRes.Body.String())
 	getRolesData := decodeResponseData(t, getRolesRes)
-	roleItems, ok := getRolesData["data"].([]any)
-	require.True(t, ok, "expected paginated role payload, got %T", getRolesData["data"])
+	roleItems, ok := getRolesData["items"].([]any)
+	require.True(t, ok, "expected paginated role items, got %T", getRolesData["items"])
 	require.Empty(t, roleItems)
 
 	updateDeniedHeaders := authHeaders(actorAccessToken)
@@ -425,8 +425,8 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 	unchangedRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/roles", createdUserID), nil, headers)
 	require.Equal(t, http.StatusOK, unchangedRolesRes.Code, unchangedRolesRes.Body.String())
 	unchangedRolesData := decodeResponseData(t, unchangedRolesRes)
-	unchangedRoleItems, ok := unchangedRolesData["data"].([]any)
-	require.True(t, ok, "expected paginated role payload, got %T", unchangedRolesData["data"])
+	unchangedRoleItems, ok := unchangedRolesData["items"].([]any)
+	require.True(t, ok, "expected paginated role items, got %T", unchangedRolesData["items"])
 	require.Empty(t, unchangedRoleItems)
 
 	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d", createdUserID), nil, headers)

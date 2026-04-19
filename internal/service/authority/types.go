@@ -24,9 +24,10 @@ type ListAuthoritiesParams struct {
 
 // ListAuthoritiesResult 角色列表查询结果
 type ListAuthoritiesResult struct {
-	Total int                   `json:"total"`
-	Page  int                   `json:"page"`
-	Data  []RoleWithPermissions `json:"data"`
+	Total    int                   `json:"total"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"page_size"`
+	Data     []RoleWithPermissions `json:"data"`
 }
 
 // RoleWithPermissions 角色及其权限

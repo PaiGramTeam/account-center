@@ -2,17 +2,20 @@ package platformbinding
 
 // swagger:model platformBindingItem
 type swaggerPlatformBindingItem struct {
-	ID                 uint64  `json:"id"`
-	OwnerUserID        uint64  `json:"owner_user_id,omitempty"`
-	Platform           string  `json:"platform"`
-	ExternalAccountKey string  `json:"external_account_key"`
-	PlatformServiceKey string  `json:"platform_service_key"`
-	DisplayName        string  `json:"display_name"`
-	Status             string  `json:"status"`
-	PrimaryProfileID   *int64  `json:"primary_profile_id,omitempty"`
-	LastSyncedAt       *string `json:"last_synced_at,omitempty"`
-	CreatedAt          string  `json:"created_at"`
-	UpdatedAt          string  `json:"updated_at"`
+	ID                  uint64  `json:"id"`
+	OwnerUserID         uint64  `json:"owner_user_id,omitempty"`
+	Platform            string  `json:"platform"`
+	ExternalAccountKey  *string `json:"external_account_key,omitempty"`
+	PlatformServiceKey  string  `json:"platform_service_key"`
+	DisplayName         string  `json:"display_name"`
+	Status              string  `json:"status"`
+	StatusReasonCode    *string `json:"status_reason_code,omitempty"`
+	StatusReasonMessage *string `json:"status_reason_message,omitempty"`
+	PrimaryProfileID    *int64  `json:"primary_profile_id,omitempty"`
+	LastValidatedAt     *string `json:"last_validated_at,omitempty"`
+	LastSyncedAt        *string `json:"last_synced_at,omitempty"`
+	CreatedAt           string  `json:"created_at"`
+	UpdatedAt           string  `json:"updated_at"`
 }
 
 // swagger:model platformBindingProfileItem

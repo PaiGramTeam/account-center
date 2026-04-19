@@ -2,11 +2,13 @@ package platformbinding
 
 import (
 	"database/sql"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"paigram/internal/model"
 )
@@ -19,7 +21,7 @@ func TestProfileProjectionServiceSyncProfilesUpsertsAndUpdatesPrimary(t *testing
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:profile",
+		ExternalAccountKey: ns("cn:profile"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "Profile Sync",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -90,7 +92,7 @@ func TestProfileProjectionServiceSyncProfilesUpsertsAndUpdatesPrimary(t *testing
 	var bindingAfter model.PlatformAccountBinding
 	require.NoError(t, db.First(&bindingAfter, binding.ID).Error)
 	assert.True(t, bindingAfter.PrimaryProfileID.Valid)
-	assert.WithinDuration(t, resyncedAt, bindingAfter.LastSyncedAt.Time, time.Millisecond)
+	assert.False(t, bindingAfter.LastSyncedAt.Valid)
 
 	var primary model.PlatformAccountProfile
 	require.NoError(t, db.First(&primary, bindingAfter.PrimaryProfileID.Int64).Error)
@@ -111,7 +113,7 @@ func TestProfileProjectionServiceRejectsMultiplePrimaryProfiles(t *testing.T) {
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:multi-primary",
+		ExternalAccountKey: ns("cn:multi-primary"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "Invalid Primary",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -126,4 +128,80 @@ func TestProfileProjectionServiceRejectsMultiplePrimaryProfiles(t *testing.T) {
 		},
 	})
 	require.ErrorIs(t, err, ErrMultiplePrimaryProfiles)
+}
+
+func TestProfileProjectionServiceSyncProfilesDoesNotClobberRuntimeSummaryFields(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	projectionService := NewProfileProjectionService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:         owner.ID,
+		Platform:            "mihomo",
+		ExternalAccountKey:  ns("cn:stale-before-sync"),
+		PlatformServiceKey:  "mihomo",
+		DisplayName:         "Profile Sync Race",
+		Status:              model.PlatformAccountBindingStatusPendingBind,
+		StatusReasonCode:    "pending_sync",
+		StatusReasonMessage: "waiting",
+	}
+	require.NoError(t, db.Create(&binding).Error)
+
+	var once sync.Once
+	callbackName := "test:binding-save-runtime-summary"
+	db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Table != "platform_account_bindings" {
+			return
+		}
+		once.Do(func() {
+			err := tx.Exec(`
+				UPDATE platform_account_bindings
+				SET external_account_key = ?,
+				    status = ?,
+				    status_reason_code = ?,
+				    last_validated_at = ?,
+				    last_synced_at = ?
+				WHERE id = ?
+			`,
+				"cn:runtime-summary-owned",
+				model.PlatformAccountBindingStatusCredentialInvalid,
+				"challenge_required",
+				time.Date(2026, 4, 19, 12, 34, 56, 0, time.UTC),
+				time.Date(2026, 4, 19, 13, 34, 56, 0, time.UTC),
+				binding.ID,
+			).Error
+			require.NoError(t, err)
+		})
+	})
+	defer db.Callback().Update().Remove(callbackName)
+
+	profiles, err := projectionService.SyncProfiles(SyncProfilesInput{
+		BindingID: binding.ID,
+		SyncedAt:  time.Date(2026, 4, 19, 14, 0, 0, 0, time.UTC),
+		Profiles: []ProfileProjectionInput{
+			{
+				PlatformProfileKey: "gs:runtime-owned",
+				GameBiz:            "hk4e_cn",
+				Region:             "cn_gf01",
+				PlayerUID:          "10001",
+				Nickname:           "Traveler",
+				Level:              sql.NullInt64{Int64: 60, Valid: true},
+				IsPrimary:          true,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, profiles, 1)
+
+	bindingService := NewBindingService(db)
+	updatedBinding, err := bindingService.GetBindingByID(binding.ID)
+	require.NoError(t, err)
+	require.True(t, updatedBinding.ExternalAccountKey.Valid)
+	assert.Equal(t, "cn:runtime-summary-owned", updatedBinding.ExternalAccountKey.String)
+	assert.Equal(t, model.PlatformAccountBindingStatusCredentialInvalid, updatedBinding.Status)
+	assert.Equal(t, "challenge_required", updatedBinding.StatusReasonCode)
+	assert.True(t, updatedBinding.LastValidatedAt.Valid)
+	assert.Equal(t, int64(profiles[0].ID), updatedBinding.PrimaryProfileID.Int64)
+	assert.True(t, updatedBinding.LastSyncedAt.Valid)
+	assert.WithinDuration(t, time.Date(2026, 4, 19, 13, 34, 56, 0, time.UTC), updatedBinding.LastSyncedAt.Time, time.Millisecond)
 }

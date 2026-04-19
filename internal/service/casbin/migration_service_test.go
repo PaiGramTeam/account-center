@@ -38,9 +38,15 @@ func TestMigratePermissionsToCasbinPreservesCustomPolicies(t *testing.T) {
 
 	policies := enforcer.GetFilteredPolicy(0, fmt.Sprint(11))
 	assert.Contains(t, policies, []string{"11", "/api/v1/custom/authority-policy", "GET"})
-	assert.Contains(t, policies, []string{"11", "/api/v1/authorities/:id/users", "GET"})
+	assert.Contains(t, policies, []string{"11", "/api/v1/admin/roles/:id/users", "GET"})
+	assert.Contains(t, policies, []string{"11", "/api/v1/admin/roles/:id/users", "PUT"})
+	assert.Contains(t, policies, []string{"11", "/api/v1/admin/roles/:id/permissions", "GET"})
+	assert.Contains(t, policies, []string{"11", "/api/v1/admin/roles/:id/permissions", "PUT"})
+	assert.Contains(t, policies, []string{"11", "/api/v1/admin/users/:id/roles", "PUT"})
+	assert.Contains(t, policies, []string{"11", "/api/v1/admin/users/:id/primary-role", "PATCH"})
 	assert.NotContains(t, policies, []string{"11", "/api/v1/casbin/authorities/:id/policies", "GET"})
 	assert.NotContains(t, policies, []string{"11", "/api/v1/casbin/authorities/:id/policies", "PUT"})
+	assert.NotContains(t, policies, []string{"11", "/api/v1/authorities/:id/users", "GET"})
 }
 
 func TestMigratePermissionsToCasbinMapsLegacyUserManageToSessionAndSecurityRoutes(t *testing.T) {
@@ -63,8 +69,13 @@ func TestMigratePermissionsToCasbinMapsLegacyUserManageToSessionAndSecurityRoute
 	require.NoError(t, service.MigratePermissionsToCasbin())
 
 	policies := internalcasbin.GetEnforcer().GetFilteredPolicy(0, fmt.Sprint(21))
-	assert.Contains(t, policies, []string{"21", "/api/v1/users/:id/sessions", "GET"})
-	assert.Contains(t, policies, []string{"21", "/api/v1/users/:id/sessions/:sessionId", "DELETE"})
-	assert.Contains(t, policies, []string{"21", "/api/v1/users/:id/security-summary", "GET"})
-	assert.NotContains(t, policies, []string{"21", "/api/v1/users/:id/login-logs", "GET"})
+	assert.Contains(t, policies, []string{"21", "/api/v1/admin/users", "GET"})
+	assert.Contains(t, policies, []string{"21", "/api/v1/admin/users/:id", "GET"})
+	assert.Contains(t, policies, []string{"21", "/api/v1/admin/users/:id/sessions", "GET"})
+	assert.Contains(t, policies, []string{"21", "/api/v1/admin/users/:id/sessions/:sessionId", "DELETE"})
+	assert.Contains(t, policies, []string{"21", "/api/v1/admin/users/:id/security-summary", "GET"})
+	assert.NotContains(t, policies, []string{"21", "/api/v1/admin/users/:id/login-logs", "GET"})
+	assert.NotContains(t, policies, []string{"21", "/api/v1/users/:id/sessions", "GET"})
+	assert.NotContains(t, policies, []string{"21", "/api/v1/users/:id/sessions/:sessionId", "DELETE"})
+	assert.NotContains(t, policies, []string{"21", "/api/v1/users/:id/security-summary", "GET"})
 }

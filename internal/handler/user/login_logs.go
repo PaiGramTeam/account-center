@@ -35,7 +35,7 @@ func (h *Handler) RegisterLoginLogRoutes(rg *gin.RouterGroup) {
 // @Failure 403 {object} gin.H
 // @Failure 404 {object} gin.H
 // @Failure 500 {object} gin.H
-// @Router /api/v1/users/{id}/login-logs [get]
+// @Router /api/v1/admin/users/{id}/login-logs [get]
 func (h *Handler) GetLoginLogs(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {

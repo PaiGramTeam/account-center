@@ -43,7 +43,7 @@ func TestInitializerRunAutoSeedCreatesAdminAndCasbinPolicies(t *testing.T) {
 	var adminRole model.Role
 	require.NoError(t, db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error)
 
-	hasPolicy, err := casbin.GetEnforcer().Enforce(strconv.FormatUint(adminRole.ID, 10), "/api/v1/casbin/authorities/1/policies", "GET")
+	hasPolicy, err := casbin.GetEnforcer().Enforce(strconv.FormatUint(adminRole.ID, 10), "/api/v1/admin/roles/1/permissions", "PUT")
 	require.NoError(t, err)
 	assert.True(t, hasPolicy)
 

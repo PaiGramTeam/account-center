@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -195,7 +196,7 @@ func TestGetPlatformAccountSummaryWithRealService(t *testing.T) {
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
 		PlatformServiceKey: "platform-mihomo-service",
-		ExternalAccountKey: "cn:handler-summary",
+		ExternalAccountKey: sql.NullString{String: "cn:handler-summary", Valid: true},
 		DisplayName:        "Traveler",
 		Status:             model.PlatformAccountBindingStatusActive,
 	}

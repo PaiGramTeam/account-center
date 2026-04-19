@@ -32,7 +32,6 @@ func NewCasbinHandler(service *servicecasbin.CasbinService) *CasbinHandler {
 // @Failure   403   {object}  response.Response
 // @Failure   404   {object}  response.Response
 // @Failure   500   {object}  response.Response
-// @Router    /api/v1/casbin/authorities/{id}/policies [put]
 func (h *CasbinHandler) ReplaceAuthorityPolicies(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -78,7 +77,6 @@ func (h *CasbinHandler) ReplaceAuthorityPolicies(c *gin.Context) {
 // @Failure   403  {object}  response.Response
 // @Failure   404  {object}  response.Response
 // @Failure   500  {object}  response.Response
-// @Router    /api/v1/casbin/authorities/{id}/policies [get]
 func (h *CasbinHandler) GetAuthorityPolicies(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {

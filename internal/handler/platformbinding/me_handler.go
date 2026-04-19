@@ -1,7 +1,9 @@
 package platformbinding
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -25,7 +27,6 @@ type bindingService interface {
 	UpdateBindingForOwner(ownerUserID, bindingID uint64, input serviceplatformbinding.UpdateBindingInput) (*model.PlatformAccountBinding, error)
 	DeleteBinding(bindingID uint64) (*model.PlatformAccountBinding, error)
 	DeleteBindingForOwner(ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
-	RefreshBinding(bindingID uint64) (*model.PlatformAccountBinding, error)
 }
 
 type profileService interface {
@@ -43,11 +44,23 @@ type grantService interface {
 	RevokeGrantForOwner(ownerUserID uint64, input serviceplatformbinding.RevokeGrantInput) (*model.ConsumerGrant, error)
 }
 
+type orchestrationService interface {
+	PutCredentialForOwner(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
+	PutCredentialAsAdmin(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
+	RefreshBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
+	RefreshBindingAsAdmin(ctx context.Context, bindingID uint64) (*model.PlatformAccountBinding, error)
+}
+
+type runtimeSummaryService interface {
+	GetRuntimeSummary(ctx context.Context, ownerUserID, bindingID uint64) (*serviceplatformbinding.RuntimeSummary, error)
+	GetRuntimeSummaryAsAdmin(ctx context.Context, bindingID uint64) (*serviceplatformbinding.RuntimeSummary, error)
+}
+
 type CreateBindingRequest struct {
-	Platform           string `json:"platform"`
-	ExternalAccountKey string `json:"external_account_key"`
-	PlatformServiceKey string `json:"platform_service_key"`
-	DisplayName        string `json:"display_name"`
+	Platform           string  `json:"platform"`
+	ExternalAccountKey *string `json:"external_account_key"`
+	PlatformServiceKey string  `json:"platform_service_key"`
+	DisplayName        string  `json:"display_name"`
 }
 
 type PutConsumerGrantRequest struct {
@@ -65,17 +78,21 @@ type PatchPrimaryProfileRequest struct {
 
 // MeHandler manages self-service platform binding routes.
 type MeHandler struct {
-	bindingService bindingService
-	profileService profileService
-	grantService   grantService
+	bindingService        bindingService
+	profileService        profileService
+	grantService          grantService
+	orchestrationService  orchestrationService
+	runtimeSummaryService runtimeSummaryService
 }
 
 // NewMeHandler constructs a self-service platform binding handler.
-func NewMeHandler(bindingService bindingService, profileService profileService, grantService grantService) *MeHandler {
+func NewMeHandler(bindingService bindingService, profileService profileService, grantService grantService, orchestrationService orchestrationService, runtimeSummaryService runtimeSummaryService) *MeHandler {
 	return &MeHandler{
-		bindingService: bindingService,
-		profileService: profileService,
-		grantService:   grantService,
+		bindingService:        bindingService,
+		profileService:        profileService,
+		grantService:          grantService,
+		orchestrationService:  orchestrationService,
+		runtimeSummaryService: runtimeSummaryService,
 	}
 }
 
@@ -113,7 +130,7 @@ func (h *MeHandler) CreateBinding(c *gin.Context) {
 	binding, err := h.bindingService.CreateBinding(serviceplatformbinding.CreateBindingInput{
 		OwnerUserID:        userID,
 		Platform:           strings.TrimSpace(req.Platform),
-		ExternalAccountKey: strings.TrimSpace(req.ExternalAccountKey),
+		ExternalAccountKey: normalizeExternalAccountKey(req.ExternalAccountKey),
 		PlatformServiceKey: strings.TrimSpace(req.PlatformServiceKey),
 		DisplayName:        strings.TrimSpace(req.DisplayName),
 	})
@@ -217,6 +234,84 @@ func (h *MeHandler) DeleteBinding(c *gin.Context) {
 	}
 
 	response.NoContent(c)
+}
+
+// swagger:route POST /api/v1/me/platform-accounts/{bindingId}/refresh platformbinding-me refreshMyPlatformBinding
+// Mark one current-user platform binding as requiring refresh.
+func (h *MeHandler) RefreshBinding(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	bindingID, ok := parseBindingID(c)
+	if !ok {
+		return
+	}
+
+	binding, err := h.orchestrationService.RefreshBindingForOwner(c.Request.Context(), userID, bindingID)
+	if err != nil {
+		writeBindingError(c, err, "failed to refresh platform binding")
+		return
+	}
+
+	response.Success(c, buildMeBindingView(binding))
+}
+
+// swagger:route PUT /api/v1/me/platform-accounts/{bindingId}/credential platformbinding-me putMyPlatformBindingCredential
+// Update one current-user platform binding credential via orchestration.
+func (h *MeHandler) PutCredential(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	bindingID, ok := parseBindingID(c)
+	if !ok {
+		return
+	}
+
+	payload, ok := readCredentialPayload(c)
+	if !ok {
+		return
+	}
+
+	actorID := actorIDFromSession(c, userID)
+	summary, err := h.orchestrationService.PutCredentialForOwner(c.Request.Context(), serviceplatformbinding.PutCredentialInput{
+		OwnerUserID:       userID,
+		BindingID:         bindingID,
+		ActorType:         "user",
+		ActorID:           actorID,
+		CredentialPayload: payload,
+	})
+	if err != nil {
+		writeBindingError(c, err, "failed to update platform credential")
+		return
+	}
+
+	response.Success(c, summary)
+}
+
+// swagger:route GET /api/v1/me/platform-accounts/{bindingId}/runtime-summary platformbinding-me getMyPlatformBindingRuntimeSummary
+// Get one current-user platform binding runtime summary.
+func (h *MeHandler) GetRuntimeSummary(c *gin.Context) {
+	userID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	bindingID, ok := parseBindingID(c)
+	if !ok {
+		return
+	}
+
+	summary, err := h.runtimeSummaryService.GetRuntimeSummary(c.Request.Context(), userID, bindingID)
+	if err != nil {
+		writeBindingError(c, err, "failed to get runtime summary")
+		return
+	}
+
+	response.Success(c, summary)
 }
 
 // swagger:route PATCH /api/v1/me/platform-accounts/{bindingId}/primary-profile platformbinding-me patchMyPlatformBindingPrimaryProfile
@@ -427,9 +522,15 @@ func writeBindingError(c *gin.Context, err error, fallback string) {
 		response.Conflict(c, "platform binding already owned by another user")
 	case errors.Is(err, serviceplatformbinding.ErrConsumerNotSupported):
 		response.BadRequest(c, "consumer is not supported")
+	case errors.Is(err, serviceplatformbinding.ErrBindingRuntimeSummaryNotReady):
+		response.Conflict(c, "platform binding runtime summary is not ready")
 	case errors.Is(err, serviceplatformbinding.ErrPrimaryProfileNotOwned):
 		response.Error(c, http.StatusUnprocessableEntity, "primary profile must belong to platform binding")
 	default:
+		if serviceplatformbinding.IsExecutionPlaneUnavailableError(err) {
+			response.Error(c, http.StatusServiceUnavailable, "platform service unavailable")
+			return
+		}
 		response.InternalServerError(c, fallback)
 	}
 }
@@ -454,16 +555,19 @@ func buildAdminBindingViews(items []model.PlatformAccountBinding) []gin.H {
 
 func buildMeBindingView(binding *model.PlatformAccountBinding) gin.H {
 	return gin.H{
-		"id":                   binding.ID,
-		"platform":             binding.Platform,
-		"external_account_key": binding.ExternalAccountKey,
-		"platform_service_key": binding.PlatformServiceKey,
-		"display_name":         binding.DisplayName,
-		"status":               binding.Status,
-		"primary_profile_id":   nullableInt64(binding.PrimaryProfileID),
-		"last_synced_at":       nullableTime(binding.LastSyncedAt),
-		"created_at":           binding.CreatedAt,
-		"updated_at":           binding.UpdatedAt,
+		"id":                    binding.ID,
+		"platform":              binding.Platform,
+		"external_account_key":  nullableString(binding.ExternalAccountKey),
+		"platform_service_key":  binding.PlatformServiceKey,
+		"display_name":          binding.DisplayName,
+		"status":                binding.Status,
+		"status_reason_code":    binding.StatusReasonCode,
+		"status_reason_message": binding.StatusReasonMessage,
+		"primary_profile_id":    nullableInt64(binding.PrimaryProfileID),
+		"last_validated_at":     nullableTime(binding.LastValidatedAt),
+		"last_synced_at":        nullableTime(binding.LastSyncedAt),
+		"created_at":            binding.CreatedAt,
+		"updated_at":            binding.UpdatedAt,
 	}
 }
 
@@ -532,4 +636,43 @@ func nullableTime(value sql.NullTime) any {
 	}
 
 	return value.Time
+}
+
+func nullableString(value sql.NullString) any {
+	if !value.Valid {
+		return nil
+	}
+
+	return value.String
+}
+
+func normalizeExternalAccountKey(value *string) sql.NullString {
+	if value == nil {
+		return sql.NullString{}
+	}
+
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return sql.NullString{}
+	}
+
+	return sql.NullString{String: trimmed, Valid: true}
+}
+
+func readCredentialPayload(c *gin.Context) (json.RawMessage, bool) {
+	var payload json.RawMessage
+	if err := c.ShouldBindJSON(&payload); err != nil || len(payload) == 0 {
+		response.BadRequest(c, "invalid request payload")
+		return nil, false
+	}
+
+	return payload, true
+}
+
+func actorIDFromSession(c *gin.Context, userID uint64) string {
+	if sessionID, ok := middleware.GetSessionID(c); ok && sessionID != 0 {
+		return "session:" + strconv.FormatUint(sessionID, 10)
+	}
+
+	return "user:" + strconv.FormatUint(userID, 10)
 }

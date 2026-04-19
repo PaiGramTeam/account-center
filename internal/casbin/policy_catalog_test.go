@@ -13,57 +13,57 @@ func TestPoliciesForPermissionUserReadDoesNotSpillIntoPrivilegedSubresources(t *
 	rules := PoliciesForPermission(model.BuildPermissionName(model.ResourceUser, model.ActionRead))
 	require.NotEmpty(t, rules)
 
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id", Method: "GET"})
 
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/me", Method: "GET"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/roles", Method: "GET"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/roles", Method: "POST"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/permissions", Method: "GET"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/audit-logs", Method: "GET"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/login-logs", Method: "GET"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/sessions", Method: "GET"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/sessions/:sessionId", Method: "DELETE"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/me", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/roles", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/roles", Method: "POST"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/permissions", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/audit-logs", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/login-logs", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/sessions", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/sessions/:sessionId", Method: "DELETE"})
 }
 
 func TestPoliciesForSystemRoleAdminIncludesAuthorityAndCasbinRoutesWithoutBroadWildcards(t *testing.T) {
 	rules := PoliciesForSystemRole(model.RoleAdmin)
 	require.NotEmpty(t, rules)
 
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities", Method: "POST"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id", Method: "PUT"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id", Method: "DELETE"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id/permissions", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id/permissions", Method: "POST"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id/users", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id/users", Method: "PUT"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "PUT"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/profiles/:id", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/profiles/:id", Method: "PATCH"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/status", Method: "PATCH"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/reset-password", Method: "POST"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/audit-logs", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/login-logs", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/roles", Method: "GET"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/roles", Method: "POST"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/roles/:roleId", Method: "DELETE"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/permissions", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles", Method: "POST"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id", Method: "PUT"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id", Method: "DELETE"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id/permissions", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id/permissions", Method: "PUT"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id/users", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id/users", Method: "PUT"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/status", Method: "PATCH"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/reset-password", Method: "POST"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/audit-logs", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/login-logs", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/roles", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/roles", Method: "PUT"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/primary-role", Method: "PATCH"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/roles", Method: "POST"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/roles/:roleId", Method: "DELETE"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/permissions", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/roles", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/roles/:id", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/permissions", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/permissions/:id", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/sessions", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/sessions/:sessionId", Method: "DELETE"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/security-summary", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/sessions", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/sessions/:sessionId", Method: "DELETE"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/security-summary", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/menu", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/me", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/authorities", Method: "GET"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "GET"})
 
 	for _, rule := range rules {
 		assert.NotEqual(t, "/api/v1/*", rule.Path)
-		assert.NotEqual(t, "/api/v1/users/*", rule.Path)
+		assert.NotEqual(t, "/api/v1/admin/users/*", rule.Path)
 		assert.NotEqual(t, "/api/v1/authorities/*", rule.Path)
 	}
 }
@@ -72,22 +72,22 @@ func TestPoliciesForPermissionPlatformReadRoutes(t *testing.T) {
 	rules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatform, model.ActionRead))
 	require.NotEmpty(t, rules)
 
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id/check", Method: "POST"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "POST"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services/:id", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services/:id/check", Method: "POST"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services", Method: "POST"})
 }
 
 func TestPoliciesForSystemRoleAdminIncludesPlatformRegistryRoutes(t *testing.T) {
 	rules := PoliciesForSystemRole(model.RoleAdmin)
 	require.NotEmpty(t, rules)
 
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services", Method: "POST"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "PATCH"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id", Method: "DELETE"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/platform-services/:id/check", Method: "POST"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services/:id", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services", Method: "POST"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services/:id", Method: "PATCH"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services/:id", Method: "DELETE"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/system/platform-services/:id/check", Method: "POST"})
 }
 
 func TestPoliciesForPermissionPlatformAccountRoutes(t *testing.T) {
@@ -100,16 +100,43 @@ func TestPoliciesForPermissionPlatformAccountRoutes(t *testing.T) {
 	require.NotEmpty(t, readRules)
 	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "GET"})
 	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/profiles", Method: "GET"})
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/runtime-summary", Method: "GET"})
 	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants", Method: "GET"})
 
 	updateRules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionUpdate))
 	require.NotEmpty(t, updateRules)
+	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/credential", Method: "PUT"})
 	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants/:consumer", Method: "PUT"})
 	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId/refresh", Method: "POST"})
 
 	deleteRules := PoliciesForPermission(model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionDelete))
 	require.NotEmpty(t, deleteRules)
 	assert.Contains(t, deleteRules, PolicyRule{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "DELETE"})
+}
+
+func TestPoliciesForPermissionSystemRoutes(t *testing.T) {
+	readRules := PoliciesForPermission(model.BuildPermissionName(model.ResourceSystem, model.ActionRead))
+	require.NotEmpty(t, readRules)
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/system/settings/site", Method: "GET"})
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/system/settings/legal", Method: "GET"})
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/system/auth-controls", Method: "GET"})
+
+	updateRules := PoliciesForPermission(model.BuildPermissionName(model.ResourceSystem, model.ActionUpdate))
+	require.NotEmpty(t, updateRules)
+	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/system/settings/site", Method: "PATCH"})
+	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/system/settings/legal", Method: "PATCH"})
+	assert.Contains(t, updateRules, PolicyRule{Path: "/api/v1/admin/system/auth-controls", Method: "PATCH"})
+}
+
+func TestPoliciesForPermissionAuditRoutesCoverGlobalAuditSurface(t *testing.T) {
+	readRules := PoliciesForPermission(model.BuildPermissionName(model.ResourceAudit, model.ActionRead))
+	require.NotEmpty(t, readRules)
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/audit-logs", Method: "GET"})
+	assert.Contains(t, readRules, PolicyRule{Path: "/api/v1/admin/audit-logs/:id", Method: "GET"})
+
+	listRules := PoliciesForPermission(model.BuildPermissionName(model.ResourceAudit, model.ActionList))
+	require.NotEmpty(t, listRules)
+	assert.Contains(t, listRules, PolicyRule{Path: "/api/v1/admin/audit-logs", Method: "GET"})
 }
 
 func TestPoliciesForSystemRoleAdminIncludesPlatformAccountRoutes(t *testing.T) {
@@ -135,44 +162,45 @@ func TestPoliciesForPermissionCoversSeededCatalogRoutes(t *testing.T) {
 			name:       "role read",
 			permission: model.BuildPermissionName(model.ResourceRole, model.ActionRead),
 			contains: []PolicyRule{
-				{Path: "/api/v1/authorities", Method: "GET"},
-				{Path: "/api/v1/users/:id/roles", Method: "GET"},
+				{Path: "/api/v1/admin/roles", Method: "GET"},
+				{Path: "/api/v1/admin/users/:id/roles", Method: "GET"},
 			},
 		},
 		{
 			name:       "role manage",
 			permission: model.BuildPermissionName(model.ResourceRole, model.ActionManage),
 			contains: []PolicyRule{
-				{Path: "/api/v1/authorities/:id/users", Method: "GET"},
-				{Path: "/api/v1/authorities/:id/users", Method: "PUT"},
+				{Path: "/api/v1/admin/roles/:id/users", Method: "GET"},
+				{Path: "/api/v1/admin/roles/:id/users", Method: "PUT"},
+				{Path: "/api/v1/admin/roles/:id/permissions", Method: "PUT"},
 			},
 		},
 		{
 			name:       "permission read",
 			permission: model.BuildPermissionName(model.ResourcePermission, model.ActionRead),
 			contains: []PolicyRule{
-				{Path: "/api/v1/users/:id/permissions", Method: "GET"},
+				{Path: "/api/v1/admin/users/:id/permissions", Method: "GET"},
 			},
 		},
 		{
 			name:       "session delete",
 			permission: model.BuildPermissionName(model.ResourceSession, model.ActionDelete),
-			contains:   []PolicyRule{{Path: "/api/v1/users/:id/sessions/:sessionId", Method: "DELETE"}},
+			contains:   []PolicyRule{{Path: "/api/v1/admin/users/:id/sessions/:sessionId", Method: "DELETE"}},
 		},
 		{
 			name:       "audit read",
 			permission: model.BuildPermissionName(model.ResourceAudit, model.ActionRead),
 			contains: []PolicyRule{
-				{Path: "/api/v1/users/:id/audit-logs", Method: "GET"},
-				{Path: "/api/v1/users/:id/login-logs", Method: "GET"},
+				{Path: "/api/v1/admin/users/:id/audit-logs", Method: "GET"},
+				{Path: "/api/v1/admin/users/:id/login-logs", Method: "GET"},
 			},
 		},
 		{
 			name:       "user read derived routes",
 			permission: model.BuildPermissionName(model.ResourceUser, model.ActionRead),
 			contains: []PolicyRule{
-				{Path: "/api/v1/profiles/:id", Method: "GET"},
-				{Path: "/api/v1/users/:id/security-summary", Method: "GET"},
+				{Path: "/api/v1/admin/users/:id", Method: "GET"},
+				{Path: "/api/v1/admin/users/:id/security-summary", Method: "GET"},
 			},
 		},
 	}
@@ -187,6 +215,8 @@ func TestPoliciesForPermissionCoversSeededCatalogRoutes(t *testing.T) {
 			if tc.permission == model.BuildPermissionName(model.ResourceRole, model.ActionManage) {
 				assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "GET"})
 				assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "PUT"})
+				assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id/users", Method: "GET"})
+				assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/authorities/:id/users", Method: "PUT"})
 				assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/roles", Method: "POST"})
 				assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id/roles/:roleId", Method: "DELETE"})
 			}
@@ -200,23 +230,21 @@ func TestPoliciesForSystemRoleModeratorDerivedFromSeedPermissions(t *testing.T) 
 	rules := PoliciesForSystemRole(model.RoleModerator)
 	require.NotEmpty(t, rules)
 
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/profiles/:id", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id", Method: "PATCH"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/profiles/:id", Method: "PATCH"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/sessions", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/security-summary", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/audit-logs", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/users/:id/login-logs", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id", Method: "PATCH"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/sessions", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/security-summary", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/audit-logs", Method: "GET"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id/login-logs", Method: "GET"})
 	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/authorities", Method: "POST"})
-	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/users/:id", Method: "DELETE"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/admin/users/:id", Method: "DELETE"})
 }
 
 func TestAllManagedPoliciesIncludesAdminOnlyPolicies(t *testing.T) {
 	rules := AllManagedPolicies()
 	require.NotEmpty(t, rules)
 
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "GET"})
-	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "PUT"})
+	assert.Contains(t, rules, PolicyRule{Path: "/api/v1/admin/roles/:id/permissions", Method: "PUT"})
+	assert.NotContains(t, rules, PolicyRule{Path: "/api/v1/casbin/authorities/:id/policies", Method: "GET"})
 }

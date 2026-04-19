@@ -15,11 +15,15 @@ func NewApiGroup(serviceGroup *serviceplatformbinding.ServiceGroup) *ApiGroup {
 			&serviceGroup.BindingService,
 			&serviceGroup.ProfileProjectionService,
 			&serviceGroup.GrantService,
+			&serviceGroup.OrchestrationService,
+			&serviceGroup.RuntimeSummaryService,
 		),
 		AdminHandler: *NewAdminHandler(
 			&serviceGroup.BindingService,
 			&serviceGroup.ProfileProjectionService,
 			&serviceGroup.GrantService,
+			&serviceGroup.OrchestrationService,
+			&serviceGroup.RuntimeSummaryService,
 		),
 	}
 }

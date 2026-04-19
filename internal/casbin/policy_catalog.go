@@ -8,91 +8,105 @@ type PolicyRule struct {
 	Method string
 }
 
-var adminOnlyPolicies = []PolicyRule{
-	{Path: "/api/v1/casbin/authorities/:id/policies", Method: "GET"},
-	{Path: "/api/v1/casbin/authorities/:id/policies", Method: "PUT"},
-}
+var adminOnlyPolicies = []PolicyRule{}
 
 var permissionPolicies = map[string][]PolicyRule{
 	model.BuildPermissionName(model.ResourceUser, model.ActionCreate): {
-		{Path: "/api/v1/users", Method: "POST"},
+		{Path: "/api/v1/admin/users", Method: "POST"},
 	},
 	model.BuildPermissionName(model.ResourceUser, model.ActionRead): {
-		{Path: "/api/v1/users", Method: "GET"},
-		{Path: "/api/v1/users/:id", Method: "GET"},
-		{Path: "/api/v1/profiles/:id", Method: "GET"},
-		{Path: "/api/v1/users/:id/security-summary", Method: "GET"},
+		{Path: "/api/v1/admin/users", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/security-summary", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourceUser, model.ActionUpdate): {
-		{Path: "/api/v1/users/:id", Method: "PATCH"},
-		{Path: "/api/v1/users/:id/status", Method: "PATCH"},
-		{Path: "/api/v1/users/:id/reset-password", Method: "POST"},
-		{Path: "/api/v1/profiles/:id", Method: "PATCH"},
+		{Path: "/api/v1/admin/users/:id", Method: "PATCH"},
+		{Path: "/api/v1/admin/users/:id/status", Method: "PATCH"},
+		{Path: "/api/v1/admin/users/:id/reset-password", Method: "POST"},
 	},
 	model.BuildPermissionName(model.ResourceUser, model.ActionDelete): {
-		{Path: "/api/v1/users/:id", Method: "DELETE"},
+		{Path: "/api/v1/admin/users/:id", Method: "DELETE"},
 	},
 	model.BuildPermissionName(model.ResourceUser, model.ActionList): {
-		{Path: "/api/v1/users", Method: "GET"},
+		{Path: "/api/v1/admin/users", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourceRole, model.ActionCreate): {
-		{Path: "/api/v1/authorities", Method: "POST"},
+		{Path: "/api/v1/admin/roles", Method: "POST"},
 	},
 	model.BuildPermissionName(model.ResourceRole, model.ActionRead): {
-		{Path: "/api/v1/authorities", Method: "GET"},
-		{Path: "/api/v1/authorities/:id", Method: "GET"},
-		{Path: "/api/v1/users/:id/roles", Method: "GET"},
+		{Path: "/api/v1/admin/roles", Method: "GET"},
+		{Path: "/api/v1/admin/roles/:id", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/roles", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourceRole, model.ActionUpdate): {
-		{Path: "/api/v1/authorities/:id", Method: "PUT"},
+		{Path: "/api/v1/admin/roles/:id", Method: "PUT"},
+		{Path: "/api/v1/admin/roles/:id", Method: "PATCH"},
 	},
 	model.BuildPermissionName(model.ResourceRole, model.ActionDelete): {
-		{Path: "/api/v1/authorities/:id", Method: "DELETE"},
+		{Path: "/api/v1/admin/roles/:id", Method: "DELETE"},
 	},
 	model.BuildPermissionName(model.ResourceRole, model.ActionList): {
-		{Path: "/api/v1/authorities", Method: "GET"},
+		{Path: "/api/v1/admin/roles", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourceRole, model.ActionManage): {
-		{Path: "/api/v1/authorities/:id/users", Method: "GET"},
-		{Path: "/api/v1/authorities/:id/users", Method: "PUT"},
-		{Path: "/api/v1/authorities/:id/permissions", Method: "GET"},
-		{Path: "/api/v1/authorities/:id/permissions", Method: "POST"},
+		{Path: "/api/v1/admin/roles/:id/users", Method: "GET"},
+		{Path: "/api/v1/admin/roles/:id/users", Method: "PUT"},
+		{Path: "/api/v1/admin/roles/:id/permissions", Method: "GET"},
+		{Path: "/api/v1/admin/roles/:id/permissions", Method: "PUT"},
+		{Path: "/api/v1/admin/users/:id/roles", Method: "PUT"},
+		{Path: "/api/v1/admin/users/:id/primary-role", Method: "PATCH"},
 	},
 	model.BuildPermissionName(model.ResourcePermission, model.ActionCreate): {},
 	model.BuildPermissionName(model.ResourcePermission, model.ActionRead): {
-		{Path: "/api/v1/users/:id/permissions", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/permissions", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourcePermission, model.ActionDelete): {},
 	model.BuildPermissionName(model.ResourcePermission, model.ActionList): {
-		{Path: "/api/v1/users/:id/permissions", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/permissions", Method: "GET"},
+	},
+	model.BuildPermissionName(model.ResourceSystem, model.ActionRead): {
+		{Path: "/api/v1/admin/system/settings/site", Method: "GET"},
+		{Path: "/api/v1/admin/system/settings/registration", Method: "GET"},
+		{Path: "/api/v1/admin/system/settings/email", Method: "GET"},
+		{Path: "/api/v1/admin/system/settings/legal", Method: "GET"},
+		{Path: "/api/v1/admin/system/auth-controls", Method: "GET"},
+	},
+	model.BuildPermissionName(model.ResourceSystem, model.ActionUpdate): {
+		{Path: "/api/v1/admin/system/settings/site", Method: "PATCH"},
+		{Path: "/api/v1/admin/system/settings/registration", Method: "PATCH"},
+		{Path: "/api/v1/admin/system/settings/email", Method: "PATCH"},
+		{Path: "/api/v1/admin/system/settings/legal", Method: "PATCH"},
+		{Path: "/api/v1/admin/system/auth-controls", Method: "PATCH"},
 	},
 	model.BuildPermissionName(model.ResourcePlatform, model.ActionCreate): {
-		{Path: "/api/v1/platform-services", Method: "POST"},
+		{Path: "/api/v1/admin/system/platform-services", Method: "POST"},
 	},
 	model.BuildPermissionName(model.ResourcePlatform, model.ActionRead): {
-		{Path: "/api/v1/platform-services", Method: "GET"},
-		{Path: "/api/v1/platform-services/:id", Method: "GET"},
-		{Path: "/api/v1/platform-services/:id/check", Method: "POST"},
+		{Path: "/api/v1/admin/system/platform-services", Method: "GET"},
+		{Path: "/api/v1/admin/system/platform-services/:id", Method: "GET"},
+		{Path: "/api/v1/admin/system/platform-services/:id/check", Method: "POST"},
 	},
 	model.BuildPermissionName(model.ResourcePlatform, model.ActionUpdate): {
-		{Path: "/api/v1/platform-services/:id", Method: "PATCH"},
+		{Path: "/api/v1/admin/system/platform-services/:id", Method: "PATCH"},
 	},
 	model.BuildPermissionName(model.ResourcePlatform, model.ActionDelete): {
-		{Path: "/api/v1/platform-services/:id", Method: "DELETE"},
+		{Path: "/api/v1/admin/system/platform-services/:id", Method: "DELETE"},
 	},
 	model.BuildPermissionName(model.ResourcePlatform, model.ActionList): {
-		{Path: "/api/v1/platform-services", Method: "GET"},
+		{Path: "/api/v1/admin/system/platform-services", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourcePlatform, model.ActionManage): {},
 	model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionRead): {
 		{Path: "/api/v1/admin/platform-accounts/:bindingId", Method: "GET"},
 		{Path: "/api/v1/admin/platform-accounts/:bindingId/profiles", Method: "GET"},
+		{Path: "/api/v1/admin/platform-accounts/:bindingId/runtime-summary", Method: "GET"},
 		{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionList): {
 		{Path: "/api/v1/admin/platform-accounts", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionUpdate): {
+		{Path: "/api/v1/admin/platform-accounts/:bindingId/credential", Method: "PUT"},
 		{Path: "/api/v1/admin/platform-accounts/:bindingId/consumer-grants/:consumer", Method: "PUT"},
 		{Path: "/api/v1/admin/platform-accounts/:bindingId/refresh", Method: "POST"},
 	},
@@ -106,21 +120,24 @@ var permissionPolicies = map[string][]PolicyRule{
 	model.BuildPermissionName(model.ResourceBot, model.ActionList):   {},
 	model.BuildPermissionName(model.ResourceBot, model.ActionManage): {},
 	model.BuildPermissionName(model.ResourceSession, model.ActionRead): {
-		{Path: "/api/v1/users/:id/sessions", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/sessions", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourceSession, model.ActionDelete): {
-		{Path: "/api/v1/users/:id/sessions/:sessionId", Method: "DELETE"},
+		{Path: "/api/v1/admin/users/:id/sessions/:sessionId", Method: "DELETE"},
 	},
 	model.BuildPermissionName(model.ResourceSession, model.ActionList): {
-		{Path: "/api/v1/users/:id/sessions", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/sessions", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourceAudit, model.ActionRead): {
-		{Path: "/api/v1/users/:id/audit-logs", Method: "GET"},
-		{Path: "/api/v1/users/:id/login-logs", Method: "GET"},
+		{Path: "/api/v1/admin/audit-logs", Method: "GET"},
+		{Path: "/api/v1/admin/audit-logs/:id", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/audit-logs", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/login-logs", Method: "GET"},
 	},
 	model.BuildPermissionName(model.ResourceAudit, model.ActionList): {
-		{Path: "/api/v1/users/:id/audit-logs", Method: "GET"},
-		{Path: "/api/v1/users/:id/login-logs", Method: "GET"},
+		{Path: "/api/v1/admin/audit-logs", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/audit-logs", Method: "GET"},
+		{Path: "/api/v1/admin/users/:id/login-logs", Method: "GET"},
 	},
 }
 
@@ -129,6 +146,7 @@ var systemRolePermissions = map[string][]string{
 		"user:create", "user:read", "user:update", "user:delete", "user:list",
 		"role:create", "role:read", "role:update", "role:delete", "role:list", "role:manage",
 		"permission:create", "permission:read", "permission:delete", "permission:list",
+		model.PermSystemRead, model.PermSystemUpdate,
 		model.PermPlatformCreate, model.PermPlatformRead, model.PermPlatformUpdate, model.PermPlatformDelete, model.PermPlatformList, model.PermPlatformManage,
 		model.PermPlatformAccountRead, model.PermPlatformAccountList, model.PermPlatformAccountUpdate, model.PermPlatformAccountDelete,
 		"bot:create", "bot:read", "bot:update", "bot:delete", "bot:list", "bot:manage",

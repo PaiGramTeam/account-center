@@ -1,7 +1,9 @@
 package platformbinding
 
 import (
+	"database/sql"
 	"errors"
+	"time"
 
 	mysql "github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
@@ -23,17 +25,19 @@ func NewBindingService(db *gorm.DB) *BindingService {
 }
 
 func (s *BindingService) CreateBinding(input CreateBindingInput) (*model.PlatformAccountBinding, error) {
-	var existing model.PlatformAccountBinding
-	err := s.db.Where("platform = ? AND external_account_key = ?", input.Platform, input.ExternalAccountKey).First(&existing).Error
-	if err == nil {
-		if existing.OwnerUserID != input.OwnerUserID {
-			return nil, ErrBindingAlreadyOwned
-		}
+	if input.ExternalAccountKey.Valid {
+		var existing model.PlatformAccountBinding
+		err := s.db.Where("platform = ? AND external_account_key = ?", input.Platform, input.ExternalAccountKey.String).First(&existing).Error
+		if err == nil {
+			if existing.OwnerUserID != input.OwnerUserID {
+				return nil, ErrBindingAlreadyOwned
+			}
 
-		return &existing, nil
-	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
+			return &existing, nil
+		}
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
 	}
 
 	binding := &model.PlatformAccountBinding{
@@ -135,8 +139,61 @@ func (s *BindingService) UpdateBindingStatus(bindingID uint64, status model.Plat
 	return binding, nil
 }
 
+func (s *BindingService) PersistRuntimeSummary(bindingID uint64, summary RuntimeSummary) (*model.PlatformAccountBinding, error) {
+	binding, err := s.GetBindingByID(bindingID)
+	if err != nil {
+		return nil, err
+	}
+
+	updates := map[string]any{
+		"status":                bindingStatusFromRuntimeSummary(summary.Status, binding.Status),
+		"status_reason_code":    statusReasonCodeFromRuntimeSummary(summary.Status),
+		"status_reason_message": "",
+		"last_validated_at":     nullableRuntimeTime(summary.LastValidatedAt),
+		"last_synced_at":        nullableRuntimeTime(summary.LastRefreshedAt),
+	}
+	if summary.PlatformAccountID != "" {
+		updates["external_account_key"] = summary.PlatformAccountID
+	}
+
+	if err := s.db.Model(&model.PlatformAccountBinding{}).Where("id = ?", binding.ID).Updates(updates).Error; err != nil {
+		return s.handlePersistRuntimeSummaryError(err, binding, summary)
+	}
+
+	return s.GetBindingByID(binding.ID)
+}
+
+func (s *BindingService) handlePersistRuntimeSummaryError(err error, binding *model.PlatformAccountBinding, summary RuntimeSummary) (*model.PlatformAccountBinding, error) {
+	if !isDuplicateBindingError(err) {
+		return nil, err
+	}
+	if binding == nil || summary.PlatformAccountID == "" {
+		return nil, ErrBindingAlreadyOwned
+	}
+
+	var existing model.PlatformAccountBinding
+	lookupErr := s.db.Where("platform = ? AND external_account_key = ?", binding.Platform, summary.PlatformAccountID).First(&existing).Error
+	if lookupErr != nil {
+		return nil, ErrBindingAlreadyOwned
+	}
+	if existing.ID != binding.ID {
+		return nil, ErrBindingAlreadyOwned
+	}
+
+	return &existing, nil
+}
+
 func (s *BindingService) RefreshBinding(bindingID uint64) (*model.PlatformAccountBinding, error) {
 	return s.UpdateBindingStatus(bindingID, model.PlatformAccountBindingStatusRefreshRequired)
+}
+
+func (s *BindingService) RefreshBindingForOwner(ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error) {
+	binding, err := s.GetBindingForOwner(ownerUserID, bindingID)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.UpdateBindingStatus(binding.ID, model.PlatformAccountBindingStatusRefreshRequired)
 }
 
 func (s *BindingService) DeleteBinding(bindingID uint64) (*model.PlatformAccountBinding, error) {
@@ -198,9 +255,12 @@ func (s *BindingService) handleCreateBindingError(err error, input CreateBinding
 	if !isDuplicateBindingError(err) {
 		return nil, err
 	}
+	if !input.ExternalAccountKey.Valid {
+		return nil, err
+	}
 
 	var existing model.PlatformAccountBinding
-	lookupErr := s.db.Where("platform = ? AND external_account_key = ?", input.Platform, input.ExternalAccountKey).First(&existing).Error
+	lookupErr := s.db.Where("platform = ? AND external_account_key = ?", input.Platform, input.ExternalAccountKey.String).First(&existing).Error
 	if lookupErr != nil {
 		return nil, ErrBindingAlreadyOwned
 	}
@@ -217,4 +277,44 @@ func isDuplicateBindingError(err error) bool {
 
 	var mysqlErr *mysql.MySQLError
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1062
+}
+
+func bindingStatusFromRuntimeSummary(status string, fallback model.PlatformAccountBindingStatus) model.PlatformAccountBindingStatus {
+	switch status {
+	case "active":
+		return model.PlatformAccountBindingStatusActive
+	case "expired", "invalid", "challenge_required":
+		return model.PlatformAccountBindingStatusCredentialInvalid
+	case "":
+		return fallback
+	default:
+		return fallback
+	}
+}
+
+func statusReasonCodeFromRuntimeSummary(status string) string {
+	switch status {
+	case "expired", "invalid", "challenge_required":
+		return status
+	default:
+		return ""
+	}
+}
+
+func nullableRuntimeTime(value any) sql.NullTime {
+	switch typed := value.(type) {
+	case string:
+		if typed == "" {
+			return sql.NullTime{}
+		}
+		parsed, err := time.Parse(time.RFC3339, typed)
+		if err != nil {
+			return sql.NullTime{}
+		}
+		return sql.NullTime{Time: parsed.UTC(), Valid: true}
+	case time.Time:
+		return sql.NullTime{Time: typed.UTC(), Valid: true}
+	default:
+		return sql.NullTime{}
+	}
 }

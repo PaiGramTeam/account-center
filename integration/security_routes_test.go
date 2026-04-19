@@ -85,6 +85,25 @@ func TestSensitiveSecurityRoutesRequireFreshSession(t *testing.T) {
 	assert.Equal(t, "SESSION_NOT_FRESH", decodeErrorCode(t, staleRes))
 }
 
+func TestLegacyBotAuthorizationRouteStaysNotFoundForAuthenticatedUsers(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	_, accessToken, _, _, _ := registerVerifyAndLogin(t, stack, "legacy-botauth-not-found")
+
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/bot-authorizations"},
+		{method: http.MethodPost, path: "/api/v1/bot-authorizations"},
+		{method: http.MethodGet, path: "/api/v1/bot-authorizations/1"},
+		{method: http.MethodDelete, path: "/api/v1/bot-authorizations/1"},
+	} {
+		res := performJSONRequest(t, stack.Router, tc.method, tc.path, nil, authHeaders(accessToken))
+		require.Equal(t, http.StatusNotFound, res.Code, "%s %s => %s", tc.method, tc.path, res.Body.String())
+	}
+}
+
 func TestCrossUserRoutesRequirePermissions(t *testing.T) {
 	stack := newIntegrationStack(t)
 

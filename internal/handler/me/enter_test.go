@@ -24,7 +24,6 @@ type fakeCurrentUserService struct {
 	err               error
 	deleteEmailErr    error
 	verifyEmailErr    error
-	putLoginMethodErr error
 	verificationEmail *serviceme.VerificationEmailView
 	createdEmail      *serviceme.CreatedEmailView
 }
@@ -51,10 +50,6 @@ func (f *fakeCurrentUserService) PatchPrimaryEmail(context.Context, uint64, uint
 
 func (f *fakeCurrentUserService) ListLoginMethods(context.Context, uint64) ([]serviceme.LoginMethodView, error) {
 	return nil, nil
-}
-
-func (f *fakeCurrentUserService) PutLoginMethod(context.Context, serviceme.PutLoginMethodInput) (*serviceme.LoginMethodView, error) {
-	return nil, f.putLoginMethodErr
 }
 
 func (f *fakeCurrentUserService) DeleteLoginMethod(context.Context, uint64, string) error {
@@ -207,24 +202,6 @@ func TestCurrentUserHandlerCreateEmailDoesNotLeakVerificationToken(t *testing.T)
 	assert.Equal(t, "alt@example.com", data["email"])
 	assert.NotContains(t, data, "verification_token")
 	assert.NotEmpty(t, data["verification_expires_at"])
-}
-
-func TestCurrentUserHandlerPutLoginMethodReturnsNotImplementedWhenBindingUnavailable(t *testing.T) {
-	handler := NewCurrentUserHandler(&fakeCurrentUserService{putLoginMethodErr: serviceme.ErrLoginMethodBindingUnavailable})
-
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	body := bytes.NewBufferString(`{"provider_data":{"id":42,"login":"attacker"}}`)
-	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/v1/me/login-methods/github", body)
-	ctx.Request.Header.Set("Content-Type", "application/json")
-	ctx.Params = []gin.Param{{Key: "provider", Value: "github"}}
-	middleware.SetUserID(ctx, 7)
-
-	handler.PutLoginMethod(ctx)
-
-	require.Equal(t, http.StatusNotImplemented, rec.Code)
-	assert.Contains(t, rec.Body.String(), "self-service login-method binding is not available yet")
 }
 
 func TestCurrentUserHandlerDeleteEmailReturnsNotFoundWhenServiceFails(t *testing.T) {

@@ -138,16 +138,6 @@ type swaggerLoginMethodsResponse struct {
 	}
 }
 
-// swagger:response meLoginMethodResponse
-type swaggerLoginMethodResponse struct {
-	// in: body
-	Body struct {
-		Code    int                       `json:"code"`
-		Data    serviceme.LoginMethodView `json:"data"`
-		Message string                    `json:"message"`
-	}
-}
-
 // swagger:response meSecurityOverviewResponse
 type swaggerSecurityOverviewResponse struct {
 	// in: body
@@ -223,21 +213,6 @@ type meEmailIDParams struct {
 	// in: path
 	// required: true
 	EmailID uint64 `json:"emailId"`
-}
-
-// swagger:parameters putMeLoginMethod
-type putMeLoginMethodParams struct {
-	// Provider key.
-	// in: path
-	// required: true
-	// example: telegram
-	Provider string `json:"provider"`
-	// Provider binding payload.
-	// in: body
-	// required: true
-	Body struct {
-		ProviderData map[string]interface{} `json:"provider_data"`
-	} `json:"body"`
 }
 
 // swagger:parameters deleteMeLoginMethod

@@ -3,35 +3,13 @@ package user
 import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
-
-	"paigram/internal/handler"
-	"paigram/internal/middleware"
 )
 
 // RouterGroup holds user-related routers.
 type RouterGroup struct{}
 
-// Init registers user routes on the provided router group.
-func (r *RouterGroup) Init(rg *gin.RouterGroup, db *gorm.DB) {
-	userHandler := &handler.ApiGroupApp.UserApiGroup.Handler
-	registerUserManagementRoutes(rg.Group("/users"), userHandler, userRouteAccess{
-		List:            middleware.CasbinMiddleware(),
-		Create:          middleware.CasbinMiddleware(),
-		Read:            middleware.SelfOrCasbinPermission(),
-		Update:          middleware.SelfOrCasbinPermission(),
-		Delete:          middleware.CasbinMiddleware(),
-		UpdateStatus:    middleware.CasbinMiddleware(),
-		ResetPassword:   middleware.CasbinMiddleware(),
-		AuditLogs:       middleware.SelfOrCasbinPermission(),
-		Roles:           middleware.SelfOrCasbinPermission(),
-		Permissions:     middleware.SelfOrCasbinPermission(),
-		Sessions:        middleware.SelfOrCasbinPermission(),
-		RevokeSession:   middleware.SelfOrCasbinPermission(),
-		SecuritySummary: middleware.SelfOrCasbinPermission(),
-		LoginLogs:       middleware.SelfOrCasbinPermission(),
-	})
-
-	_ = db
+// Init no longer registers public user management routes.
+func (r *RouterGroup) Init(_ *gin.RouterGroup, _ *gorm.DB) {
 }
 
 type userRouteAccess struct {

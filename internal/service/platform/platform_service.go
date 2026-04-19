@@ -212,6 +212,43 @@ func (s *PlatformService) IssueActorScopedTicket(actorType, actorID string, owne
 	return signed, expiresAt, nil
 }
 
+func (s *PlatformService) IssueBindingScopedTicket(actorType, actorID string, binding *model.PlatformAccountBinding, scopes []string) (string, time.Time, error) {
+	if len(s.signingKey) == 0 || s.ttl <= 0 {
+		return "", time.Time{}, ErrInvalidTicketConfig
+	}
+	if binding == nil || actorType == "" || actorID == "" || !isSupportedInternalActorType(actorType) {
+		return "", time.Time{}, ErrInvalidTicketConfig
+	}
+
+	platformRow, err := s.GetEnabledPlatform(binding.Platform)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", time.Time{}, ErrPlatformServiceUnavailable
+		}
+		return "", time.Time{}, err
+	}
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(s.ttl)
+	claims := buildBindingScopedTicketClaims(actorType, actorID, binding.OwnerUserID, binding.ID, binding.Platform, binding.PlatformServiceKey, nullableBindingExternalAccountKey(binding.ExternalAccountKey), scopes)
+	claims.RegisteredClaims = jwt.RegisteredClaims{
+		Issuer:    s.issuer,
+		Subject:   fmt.Sprintf("user:%d", binding.OwnerUserID),
+		Audience:  jwt.ClaimStrings{platformRow.ServiceAudience},
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(expiresAt),
+		ID:        fmt.Sprintf("%s:%s:%d:%d", actorType, actorID, binding.ID, now.UnixNano()),
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(s.signingKey)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	return signed, expiresAt, nil
+}
+
 func (s *PlatformService) SetSummaryProxy(proxy platformSummaryProxy) {
 	s.summaryProxy = proxy
 }
@@ -260,6 +297,38 @@ func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorTy
 	return s.summaryProxy.GetCredentialSummary(ctx, platform.Endpoint, ticket, ref.PlatformAccountID)
 }
 
+func (s *PlatformService) GetBindingRuntimeSummary(ctx context.Context, actorType, actorID string, binding *model.PlatformAccountBinding, scopes []string) (map[string]any, error) {
+	if binding == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if !binding.ExternalAccountKey.Valid {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if s.genericSummaryProxy == nil && s.summaryProxy == nil {
+		return nil, ErrPlatformSummaryProxyUnavailable
+	}
+
+	platformRow, err := s.GetEnabledPlatform(binding.Platform)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrPlatformServiceUnavailable
+		}
+		return nil, err
+	}
+
+	ticket, _, err := s.IssueBindingScopedTicket(actorType, actorID, binding, scopes)
+	if err != nil {
+		return nil, err
+	}
+
+	platformAccountID := nullableBindingExternalAccountKey(binding.ExternalAccountKey)
+	if s.genericSummaryProxy != nil {
+		return s.genericSummaryProxy.GetCredentialSummary(ctx, platformRow.Endpoint, ticket, platformAccountID)
+	}
+
+	return s.summaryProxy.GetCredentialSummary(ctx, platformRow.Endpoint, ticket, platformAccountID)
+}
+
 func (s *PlatformService) getBindingSummary(ctx context.Context, ownerUserID, bindingID uint64) (map[string]any, bool, error) {
 	var binding model.PlatformAccountBinding
 	err := s.db.WithContext(ctx).
@@ -291,15 +360,19 @@ func (s *PlatformService) getBindingSummary(ctx context.Context, ownerUserID, bi
 	}
 
 	return map[string]any{
-		"binding_id":           binding.ID,
-		"platform":             binding.Platform,
-		"external_account_key": binding.ExternalAccountKey,
-		"platform_service_key": binding.PlatformServiceKey,
-		"display_name":         binding.DisplayName,
-		"status":               binding.Status,
-		"primary_profile_id":   nullableBindingSummaryInt(binding.PrimaryProfileID),
-		"last_synced_at":       nullableBindingSummaryTime(binding.LastSyncedAt),
-		"profiles":             profiles,
+		"binding_id":            binding.ID,
+		"platform":              binding.Platform,
+		"external_account_key":  nullableBindingSummaryString(binding.ExternalAccountKey),
+		"platform_service_key":  binding.PlatformServiceKey,
+		"display_name":          binding.DisplayName,
+		"status":                binding.Status,
+		"status_reason_code":    binding.StatusReasonCode,
+		"status_reason_message": binding.StatusReasonMessage,
+		"primary_profile_id":    nullableBindingSummaryInt(binding.PrimaryProfileID),
+		"last_validated_at":     nullableBindingSummaryTime(binding.LastValidatedAt),
+		"last_refreshed_at":     nullableBindingSummaryTime(binding.LastSyncedAt),
+		"last_synced_at":        nullableBindingSummaryTime(binding.LastSyncedAt),
+		"profiles":              profiles,
 	}, true, nil
 }
 
@@ -315,6 +388,20 @@ func nullableBindingSummaryTime(value sql.NullTime) any {
 		return nil
 	}
 	return value.Time
+}
+
+func nullableBindingSummaryString(value sql.NullString) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.String
+}
+
+func nullableBindingExternalAccountKey(value sql.NullString) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.String
 }
 
 func parseStringListJSON(raw string) ([]string, error) {

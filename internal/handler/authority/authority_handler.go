@@ -34,7 +34,6 @@ func NewAuthorityHandler(service *authority.AuthorityService) *AuthorityHandler 
 // @Failure   403   {object}  response.Response
 // @Failure   409   {object}  response.Response
 // @Failure   500   {object}  response.Response
-// @Router    /api/v1/authorities [post]
 // @Router    /api/v1/admin/roles [post]
 func (h *AuthorityHandler) CreateAuthority(c *gin.Context) {
 	var req CreateAuthorityRequest
@@ -73,7 +72,6 @@ func (h *AuthorityHandler) CreateAuthority(c *gin.Context) {
 // @Failure   403  {object}  response.Response
 // @Failure   404  {object}  response.Response
 // @Failure   500  {object}  response.Response
-// @Router    /api/v1/authorities/{id} [get]
 // @Router    /api/v1/admin/roles/{id} [get]
 func (h *AuthorityHandler) GetAuthority(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -108,7 +106,6 @@ func (h *AuthorityHandler) GetAuthority(c *gin.Context) {
 // @Failure   401       {object}  response.Response
 // @Failure   403       {object}  response.Response
 // @Failure   500       {object}  response.Response
-// @Router    /api/v1/authorities [get]
 // @Router    /api/v1/admin/roles [get]
 func (h *AuthorityHandler) ListAuthorities(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -151,8 +148,6 @@ func (h *AuthorityHandler) ListAuthorities(c *gin.Context) {
 // @Failure   404   {object}  response.Response
 // @Failure   409   {object}  response.Response
 // @Failure   500   {object}  response.Response
-// @Router    /api/v1/authorities/{id} [put]
-// @Router    /api/v1/authorities/{id} [patch]
 // @Router    /api/v1/admin/roles/{id} [put]
 // @Router    /api/v1/admin/roles/{id} [patch]
 func (h *AuthorityHandler) UpdateAuthority(c *gin.Context) {
@@ -210,7 +205,6 @@ func (h *AuthorityHandler) UpdateAuthority(c *gin.Context) {
 // @Failure   404  {object}  response.Response
 // @Failure   409  {object}  response.Response
 // @Failure   500  {object}  response.Response
-// @Router    /api/v1/authorities/{id} [delete]
 // @Router    /api/v1/admin/roles/{id} [delete]
 func (h *AuthorityHandler) DeleteAuthority(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -255,8 +249,7 @@ func (h *AuthorityHandler) DeleteAuthority(c *gin.Context) {
 // @Failure   403   {object}  response.Response
 // @Failure   404   {object}  response.Response
 // @Failure   500   {object}  response.Response
-// @Router    /api/v1/authorities/{id}/permissions [post]
-// @Router    /api/v1/admin/roles/{id}/permissions [post]
+// @Router    /api/v1/admin/roles/{id}/permissions [put]
 func (h *AuthorityHandler) AssignPermissions(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -295,7 +288,6 @@ func (h *AuthorityHandler) AssignPermissions(c *gin.Context) {
 // @Failure   403  {object}  response.Response
 // @Failure   404  {object}  response.Response
 // @Failure   500  {object}  response.Response
-// @Router    /api/v1/authorities/{id}/permissions [get]
 // @Router    /api/v1/admin/roles/{id}/permissions [get]
 func (h *AuthorityHandler) GetRolePermissions(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -329,7 +321,6 @@ func (h *AuthorityHandler) GetRolePermissions(c *gin.Context) {
 // @Failure   403  {object}  response.Response
 // @Failure   404  {object}  response.Response
 // @Failure   500  {object}  response.Response
-// @Router    /api/v1/authorities/{id}/users [get]
 // @Router    /api/v1/admin/roles/{id}/users [get]
 func (h *AuthorityHandler) GetAuthorityUsers(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -376,7 +367,6 @@ func (h *AuthorityHandler) GetAuthorityUsers(c *gin.Context) {
 // @Failure   403   {object}  response.Response
 // @Failure   404   {object}  response.Response
 // @Failure   500   {object}  response.Response
-// @Router    /api/v1/authorities/{id}/users [put]
 // @Router    /api/v1/admin/roles/{id}/users [put]
 func (h *AuthorityHandler) ReplaceAuthorityUsers(c *gin.Context) {
 	roleID, err := strconv.ParseUint(c.Param("id"), 10, 32)

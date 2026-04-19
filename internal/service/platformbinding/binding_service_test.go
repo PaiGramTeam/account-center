@@ -28,6 +28,7 @@ func setupPlatformBindingTestDB(t *testing.T) *gorm.DB {
 		"000035_create_platform_account_bindings_table.up.sql",
 		"000036_create_platform_account_profiles_table.up.sql",
 		"000037_create_consumer_grants_table.up.sql",
+		"000038_alter_platform_account_bindings_for_phase_two.up.sql",
 	} {
 		require.NoError(t, db.Exec(readPlatformBindingMigration(t, fileName)).Error)
 	}
@@ -46,7 +47,7 @@ func TestCreateBindingRejectsDuplicateExternalAccount(t *testing.T) {
 	first, err := service.CreateBinding(CreateBindingInput{
 		OwnerUserID:        ownerA.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:123",
+		ExternalAccountKey: ns("cn:123"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "CN Main",
 	})
@@ -56,12 +57,85 @@ func TestCreateBindingRejectsDuplicateExternalAccount(t *testing.T) {
 	second, err := service.CreateBinding(CreateBindingInput{
 		OwnerUserID:        ownerB.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:123",
+		ExternalAccountKey: ns("cn:123"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "Conflict",
 	})
 	require.ErrorIs(t, err, ErrBindingAlreadyOwned)
 	assert.Nil(t, second)
+}
+
+func TestCreateBindingDraftAllowsNilExternalAccountKey(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewBindingService(db)
+	ownerA := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	ownerB := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&ownerA).Error)
+	require.NoError(t, db.Create(&ownerB).Error)
+
+	first, err := service.CreateBinding(CreateBindingInput{
+		OwnerUserID:        ownerA.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Draft Mihomo Account",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	assert.Equal(t, model.PlatformAccountBindingStatusPendingBind, first.Status)
+	assert.False(t, first.ExternalAccountKey.Valid)
+	assert.Equal(t, "Draft Mihomo Account", first.DisplayName)
+
+	second, err := service.CreateBinding(CreateBindingInput{
+		OwnerUserID:        ownerB.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Second Draft Mihomo Account",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	assert.NotEqual(t, first.ID, second.ID)
+	assert.False(t, second.ExternalAccountKey.Valid)
+
+	var persisted model.PlatformAccountBinding
+	require.NoError(t, db.First(&persisted, first.ID).Error)
+	assert.False(t, persisted.ExternalAccountKey.Valid)
+}
+
+func TestPersistRuntimeSummaryRejectsResolvedDuplicateExternalAccount(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewBindingService(db)
+	ownerA := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	ownerB := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&ownerA).Error)
+	require.NoError(t, db.Create(&ownerB).Error)
+
+	first, err := service.CreateBinding(CreateBindingInput{
+		OwnerUserID:        ownerA.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Owner A draft",
+	})
+	require.NoError(t, err)
+	_, err = service.PersistRuntimeSummary(first.ID, RuntimeSummary{PlatformAccountID: "cn:10001", Status: "active"})
+	require.NoError(t, err)
+
+	second, err := service.CreateBinding(CreateBindingInput{
+		OwnerUserID:        ownerB.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Owner B draft",
+	})
+	require.NoError(t, err)
+
+	persisted, err := service.PersistRuntimeSummary(second.ID, RuntimeSummary{PlatformAccountID: "cn:10001", Status: "active"})
+	require.ErrorIs(t, err, ErrBindingAlreadyOwned)
+	assert.Nil(t, persisted)
 }
 
 func TestBindingServiceUpdatesStatusAndDeletesBinding(t *testing.T) {
@@ -73,7 +147,7 @@ func TestBindingServiceUpdatesStatusAndDeletesBinding(t *testing.T) {
 	binding, err := service.CreateBinding(CreateBindingInput{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:456",
+		ExternalAccountKey: ns("cn:456"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "CN Alt",
 	})
@@ -106,7 +180,7 @@ func TestCreateBindingReturnsExistingBindingForDuplicateOwnedBySameUser(t *testi
 	first, err := service.CreateBinding(CreateBindingInput{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:same-owner",
+		ExternalAccountKey: ns("cn:same-owner"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "CN Main",
 	})
@@ -115,7 +189,7 @@ func TestCreateBindingReturnsExistingBindingForDuplicateOwnedBySameUser(t *testi
 	second, err := service.CreateBinding(CreateBindingInput{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:same-owner",
+		ExternalAccountKey: ns("cn:same-owner"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "CN Main",
 	})
@@ -133,7 +207,7 @@ func TestBindingServiceUpdatesOwnerEditableFields(t *testing.T) {
 	binding, err := service.CreateBinding(CreateBindingInput{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:editable",
+		ExternalAccountKey: ns("cn:editable"),
 		PlatformServiceKey: "mihomo-old",
 		DisplayName:        "Old Name",
 	})
@@ -148,6 +222,76 @@ func TestBindingServiceUpdatesOwnerEditableFields(t *testing.T) {
 	assert.Equal(t, "mihomo-new", updated.PlatformServiceKey)
 }
 
+func TestPersistRuntimeSummaryUpdatesResolvedIdentityAndStatus(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewBindingService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+
+	binding, err := service.CreateBinding(CreateBindingInput{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Draft Mihomo Account",
+	})
+	require.NoError(t, err)
+
+	updated, err := service.PersistRuntimeSummary(binding.ID, RuntimeSummary{
+		PlatformAccountID: "cn:resolved-account",
+		Status:            "challenge_required",
+		LastValidatedAt:   "2026-04-19T12:34:56Z",
+		LastRefreshedAt:   "2026-04-19T13:34:56Z",
+	})
+	require.NoError(t, err)
+	require.True(t, updated.ExternalAccountKey.Valid)
+	assert.Equal(t, "cn:resolved-account", updated.ExternalAccountKey.String)
+	assert.Equal(t, model.PlatformAccountBindingStatusCredentialInvalid, updated.Status)
+	assert.Equal(t, "challenge_required", updated.StatusReasonCode)
+	assert.True(t, updated.LastValidatedAt.Valid)
+	assert.True(t, updated.LastSyncedAt.Valid)
+}
+
+func TestPhaseTwoDownMigrationBackfillsNullExternalAccountKeys(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+
+	first := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Draft A",
+		Status:             model.PlatformAccountBindingStatusPendingBind,
+	}
+	second := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Draft B",
+		Status:             model.PlatformAccountBindingStatusPendingBind,
+	}
+	require.NoError(t, db.Create(&first).Error)
+	require.NoError(t, db.Create(&second).Error)
+
+	require.NoError(t, db.Exec(readPlatformBindingMigration(t, "000038_alter_platform_account_bindings_for_phase_two.down.sql")).Error)
+
+	type bindingRow struct {
+		ID                 uint64
+		ExternalAccountKey string
+	}
+	var rows []bindingRow
+	require.NoError(t, db.Raw("SELECT id, external_account_key FROM platform_account_bindings WHERE id IN (?, ?) ORDER BY id ASC", first.ID, second.ID).Scan(&rows).Error)
+	require.Len(t, rows, 2)
+	assert.NotEmpty(t, rows[0].ExternalAccountKey)
+	assert.NotEmpty(t, rows[1].ExternalAccountKey)
+	assert.NotEqual(t, rows[0].ExternalAccountKey, rows[1].ExternalAccountKey)
+	assert.Contains(t, rows[0].ExternalAccountKey, "__draft_rollback__:")
+	assert.Contains(t, rows[1].ExternalAccountKey, "__draft_rollback__:")
+}
+
 func TestUpsertGrantIsIdempotentAndRevokeMarksGrantRevoked(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	grantService := NewGrantService(db)
@@ -160,7 +304,7 @@ func TestUpsertGrantIsIdempotentAndRevokeMarksGrantRevoked(t *testing.T) {
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:123",
+		ExternalAccountKey: ns("cn:123"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "CN Main",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -217,7 +361,7 @@ func TestGrantServiceRejectsUnsupportedConsumer(t *testing.T) {
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:unsupported",
+		ExternalAccountKey: ns("cn:unsupported"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "Unsupported",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -245,7 +389,7 @@ func TestProfileProjectionServiceSetsPrimaryProfileForOwner(t *testing.T) {
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:primary-profile",
+		ExternalAccountKey: ns("cn:primary-profile"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "Primary Profile",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -280,7 +424,7 @@ func TestProfileProjectionServiceRejectsPrimaryProfileOutsideBinding(t *testing.
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:binding-a",
+		ExternalAccountKey: ns("cn:binding-a"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "Binding A",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -288,7 +432,7 @@ func TestProfileProjectionServiceRejectsPrimaryProfileOutsideBinding(t *testing.
 	otherBinding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:binding-b",
+		ExternalAccountKey: ns("cn:binding-b"),
 		PlatformServiceKey: "mihomo",
 		DisplayName:        "Binding B",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -304,6 +448,10 @@ func TestProfileProjectionServiceRejectsPrimaryProfileOutsideBinding(t *testing.
 
 func ptrString(value string) *string {
 	return &value
+}
+
+func ns(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: true}
 }
 
 func readPlatformBindingMigration(t *testing.T, fileName string) string {

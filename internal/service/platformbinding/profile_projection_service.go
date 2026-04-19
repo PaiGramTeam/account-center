@@ -30,7 +30,7 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 	profiles := make([]model.PlatformAccountProfile, 0, len(input.Profiles))
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		var binding model.PlatformAccountBinding
-		if err := tx.First(&binding, input.BindingID).Error; err != nil {
+		if err := tx.Select("id").First(&binding, input.BindingID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrBindingNotFound
 			}
@@ -82,9 +82,9 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 			profiles = append(profiles, profile)
 		}
 
-		binding.PrimaryProfileID = primaryProfileID
-		binding.LastSyncedAt = sql.NullTime{Time: syncedAt, Valid: true}
-		return tx.Save(&binding).Error
+		return tx.Model(&model.PlatformAccountBinding{}).
+			Where("id = ?", input.BindingID).
+			Update("primary_profile_id", nullablePrimaryProfileUpdate(primaryProfileID)).Error
 	})
 	if err != nil {
 		return nil, err

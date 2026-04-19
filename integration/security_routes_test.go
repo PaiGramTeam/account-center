@@ -49,15 +49,15 @@ func TestProtectedSecurityRoutesReachableForAuthenticatedSelf(t *testing.T) {
 	userID, accessToken, _, email, password := registerVerifyAndLogin(t, stack, "security-self")
 	headers := authHeaders(accessToken)
 
-	addEmailRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/emails", userID), map[string]any{
+	addEmailRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/emails", map[string]any{
 		"email": fmt.Sprintf("alias-%d@example.com", userID),
 	}, headers)
 	require.Equal(t, http.StatusCreated, addEmailRes.Code, addEmailRes.Body.String())
 
-	devicesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d/devices", userID), nil, headers)
-	require.Equal(t, http.StatusOK, devicesRes.Code, devicesRes.Body.String())
+	sessionsRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me/sessions", nil, headers)
+	require.Equal(t, http.StatusOK, sessionsRes.Code, sessionsRes.Body.String())
 
-	changePasswordRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/password/change", userID), map[string]any{
+	changePasswordRes := performJSONRequest(t, stack.Router, http.MethodPut, "/api/v1/me/security/password", map[string]any{
 		"old_password": password,
 		"new_password": password + "-updated",
 	}, headers)
@@ -73,11 +73,11 @@ func TestProtectedSecurityRoutesReachableForAuthenticatedSelf(t *testing.T) {
 func TestSensitiveSecurityRoutesRequireFreshSession(t *testing.T) {
 	stack := newIntegrationStack(t)
 
-	userID, accessToken, refreshToken, _, password := registerVerifyAndLogin(t, stack, "freshness")
+	_, accessToken, refreshToken, _, password := registerVerifyAndLogin(t, stack, "freshness")
 	session := requireSessionForRefreshToken(t, stack.DB, refreshToken)
 	require.NoError(t, stack.DB.Model(&model.UserSession{}).Where("id = ?", session.ID).Update("created_at", time.Now().UTC().Add(-10*time.Minute)).Error)
 
-	staleRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/password/change", userID), map[string]any{
+	staleRes := performJSONRequest(t, stack.Router, http.MethodPut, "/api/v1/me/security/password", map[string]any{
 		"old_password": password,
 		"new_password": password + "-stale",
 	}, authHeaders(accessToken))
@@ -96,11 +96,11 @@ func TestCrossUserRoutesRequirePermissions(t *testing.T) {
 	t.Logf("[TEST] viewerID=%d, targetID=%d", viewerID, targetID)
 
 	for _, path := range []string{
-		fmt.Sprintf("/api/v1/users/%d", targetID),
-		fmt.Sprintf("/api/v1/users/%d/roles", targetID),
-		fmt.Sprintf("/api/v1/users/%d/permissions", targetID),
-		fmt.Sprintf("/api/v1/users/%d/audit-logs", targetID),
-		fmt.Sprintf("/api/v1/users/%d/login-logs", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/roles", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/permissions", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/audit-logs", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/login-logs", targetID),
 	} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
 		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
@@ -116,11 +116,11 @@ func TestCrossUserRoutesRequirePermissions(t *testing.T) {
 	)
 
 	for _, path := range []string{
-		fmt.Sprintf("/api/v1/users/%d", targetID),
-		fmt.Sprintf("/api/v1/users/%d/roles", targetID),
-		fmt.Sprintf("/api/v1/users/%d/permissions", targetID),
-		fmt.Sprintf("/api/v1/users/%d/audit-logs", targetID),
-		fmt.Sprintf("/api/v1/users/%d/login-logs", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/roles", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/permissions", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/audit-logs", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/login-logs", targetID),
 	} {
 		t.Logf("[TEST] Testing access to %s after granting permissions", path)
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
@@ -137,7 +137,7 @@ func TestAdminRoutesRequireAdminRole(t *testing.T) {
 	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "admin-actor")
 	targetID, _, _, targetEmail, _ := registerVerifyAndLogin(t, stack, "admin-target")
 
-	resetPath := fmt.Sprintf("/api/v1/users/%d/reset-password", targetID)
+	resetPath := fmt.Sprintf("/api/v1/admin/users/%d/reset-password", targetID)
 	body := map[string]any{
 		"new_password":        "ResetByAdmin123!",
 		"invalidate_sessions": true,
@@ -157,13 +157,13 @@ func TestAdminRoutesRequireAdminRole(t *testing.T) {
 	require.Equal(t, http.StatusOK, loginRes.Code, loginRes.Body.String())
 }
 
-func TestAuthorityRoutesAndAdminRoleCatalogRoutesRequireExpectedPrivileges(t *testing.T) {
+func TestRoleCatalogRoutesRequireExpectedPrivileges(t *testing.T) {
 	stack := newIntegrationStack(t)
 
 	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "catalog-actor")
 	headers := authHeaders(actorAccessToken)
 
-	for _, path := range []string{"/api/v1/authorities", "/api/v1/admin/roles", "/api/v1/roles", "/api/v1/permissions"} {
+	for _, path := range []string{"/api/v1/admin/roles", "/api/v1/roles", "/api/v1/permissions"} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
 		expected := http.StatusForbidden
 		if path == "/api/v1/roles" || path == "/api/v1/permissions" {
@@ -174,40 +174,32 @@ func TestAuthorityRoutesAndAdminRoleCatalogRoutesRequireExpectedPrivileges(t *te
 
 	grantPermissionsToUser(t, stack, actorID, model.PermRoleRead)
 
-	listAuthoritiesAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/authorities", nil, headers)
-	require.Equal(t, http.StatusOK, listAuthoritiesAllowed.Code, listAuthoritiesAllowed.Body.String())
+	listRolesAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
+	require.Equal(t, http.StatusOK, listRolesAllowed.Code, listRolesAllowed.Body.String())
 
-	listAdminRolesDenied := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
-	require.Equal(t, http.StatusForbidden, listAdminRolesDenied.Code, listAdminRolesDenied.Body.String())
-
-	createAuthorityDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/authorities", map[string]any{
+	createRoleDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/roles", map[string]any{
 		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
 		"display_name": "Operations",
 		"description":  "ops role",
 	}, headers)
-	require.Equal(t, http.StatusForbidden, createAuthorityDenied.Code, createAuthorityDenied.Body.String())
+	require.Equal(t, http.StatusForbidden, createRoleDenied.Code, createRoleDenied.Body.String())
 
 	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
 		res := performJSONRequest(t, stack.Router, http.MethodPost, path, map[string]any{"name": "legacy"}, headers)
 		require.Equal(t, http.StatusNotFound, res.Code, "%s => %s", path, res.Body.String())
 	}
 
-	grantPermissionsToUser(t, stack, actorID, model.PermRoleWrite)
+	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceRole, model.ActionCreate))
 
-	createAuthorityAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/authorities", map[string]any{
+	createRoleAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/roles", map[string]any{
 		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
 		"display_name": "Operations",
 		"description":  "ops role",
 	}, headers)
-	require.Equal(t, http.StatusOK, createAuthorityAllowed.Code, createAuthorityAllowed.Body.String())
-
-	grantAdminRoleToUser(t, stack, actorID)
-
-	listAdminRolesAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
-	require.Equal(t, http.StatusOK, listAdminRolesAllowed.Code, listAdminRolesAllowed.Body.String())
+	require.Equal(t, http.StatusOK, createRoleAllowed.Code, createRoleAllowed.Body.String())
 }
 
-func TestAuthorityMutationRoutesRequireAdminRoleEvenForRoleManagers(t *testing.T) {
+func TestRoleManagementRoutesRequireRoleManagePermission(t *testing.T) {
 	stack := newIntegrationStack(t)
 
 	actorID, actorAccessToken, _, _, _ := registerVerifyAndLogin(t, stack, "authority-manager")
@@ -221,14 +213,6 @@ func TestAuthorityMutationRoutesRequireAdminRoleEvenForRoleManagers(t *testing.T
 	require.NoError(t, stack.DB.Create(&customRole).Error)
 	require.NoError(t, stack.DB.Create(&model.UserRole{UserID: actorID, RoleID: customRole.ID, GrantedBy: actorID}).Error)
 
-	roleIDStr := fmt.Sprintf("%d", customRole.ID)
-	_, err := casbin.GetEnforcer().AddPolicies([][]string{
-		{roleIDStr, "/api/v1/authorities/:id/permissions", "POST"},
-		{roleIDStr, "/api/v1/authorities/:id/users", "PUT"},
-	})
-	require.NoError(t, err)
-	require.NoError(t, casbin.GetEnforcer().LoadPolicy())
-
 	permission := model.Permission{
 		Name:        fmt.Sprintf("custom:grant:%d", time.Now().UnixNano()),
 		Resource:    model.ResourceUser,
@@ -237,8 +221,8 @@ func TestAuthorityMutationRoutesRequireAdminRoleEvenForRoleManagers(t *testing.T
 	}
 	require.NoError(t, stack.DB.Create(&permission).Error)
 
-	assignPermissionRes := performJSONRequest(t, stack.Router, http.MethodPost,
-		fmt.Sprintf("/api/v1/authorities/%d/permissions", customRole.ID), map[string]any{
+	assignPermissionRes := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/admin/roles/%d/permissions", customRole.ID), map[string]any{
 			"permission_ids": []uint64{permission.ID},
 		}, headers)
 	require.Equal(t, http.StatusForbidden, assignPermissionRes.Code, assignPermissionRes.Body.String())
@@ -254,15 +238,26 @@ func TestAuthorityMutationRoutesRequireAdminRoleEvenForRoleManagers(t *testing.T
 	}
 	require.NoError(t, stack.DB.Create(&privilegedRole).Error)
 
+	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceRole, model.ActionManage))
+
+	assignPermissionAllowed := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/admin/roles/%d/permissions", customRole.ID), map[string]any{
+			"permission_ids": []uint64{permission.ID},
+		}, headers)
+	require.Equal(t, http.StatusOK, assignPermissionAllowed.Code, assignPermissionAllowed.Body.String())
+
+	require.NoError(t, stack.DB.Model(&model.RolePermission{}).Where("role_id = ? AND permission_id = ?", customRole.ID, permission.ID).Count(&rolePermissionCount).Error)
+	assert.Equal(t, int64(1), rolePermissionCount)
+
 	addSelfRes := performJSONRequest(t, stack.Router, http.MethodPut,
-		fmt.Sprintf("/api/v1/authorities/%d/users", privilegedRole.ID), map[string]any{
+		fmt.Sprintf("/api/v1/admin/roles/%d/users", privilegedRole.ID), map[string]any{
 			"user_ids": []uint64{actorID},
 		}, headers)
-	require.Equal(t, http.StatusForbidden, addSelfRes.Code, addSelfRes.Body.String())
+	require.Equal(t, http.StatusOK, addSelfRes.Code, addSelfRes.Body.String())
 
 	var privilegedAssignmentCount int64
 	require.NoError(t, stack.DB.Model(&model.UserRole{}).Where("role_id = ? AND user_id = ?", privilegedRole.ID, actorID).Count(&privilegedAssignmentCount).Error)
-	assert.Equal(t, int64(0), privilegedAssignmentCount)
+	assert.Equal(t, int64(1), privilegedAssignmentCount)
 }
 
 func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
@@ -277,19 +272,19 @@ func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
 	headers := authHeaders(viewerAccessToken)
 
 	for _, path := range []string{
-		fmt.Sprintf("/api/v1/users/%d/sessions", targetID),
-		fmt.Sprintf("/api/v1/users/%d/security-summary", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/sessions", targetID),
+		fmt.Sprintf("/api/v1/admin/users/%d/security-summary", targetID),
 	} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
 		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
 	}
 
-	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", targetID, targetSession.ID), nil, headers)
+	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d/sessions/%d", targetID, targetSession.ID), nil, headers)
 	require.Equal(t, http.StatusForbidden, deleteDenied.Code, deleteDenied.Body.String())
 
-	grantPermissionsToUser(t, stack, viewerID, model.PermUserRead, model.PermUserManage)
+	grantPermissionsToUser(t, stack, viewerID, model.PermUserRead, model.BuildPermissionName(model.ResourceSession, model.ActionRead), model.BuildPermissionName(model.ResourceSession, model.ActionDelete))
 
-	sessionsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/sessions", targetID), nil, headers)
+	sessionsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/sessions", targetID), nil, headers)
 	require.Equal(t, http.StatusOK, sessionsRes.Code, sessionsRes.Body.String())
 
 	var sessionsPayload response.Response
@@ -300,7 +295,7 @@ func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
 	require.True(t, ok, "expected sessions data slice, got %T", sessionsData["data"])
 	require.NotEmpty(t, items)
 
-	summaryRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/security-summary", targetID), nil, headers)
+	summaryRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/security-summary", targetID), nil, headers)
 	require.Equal(t, http.StatusOK, summaryRes.Code, summaryRes.Body.String())
 	summaryData := decodeResponseData(t, summaryRes)
 	assert.Equal(t, float64(targetID), summaryData["user_id"])
@@ -308,7 +303,7 @@ func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
 	assert.Contains(t, summaryData, "device_count")
 	assert.Contains(t, summaryData, "failed_logins_last_30_days")
 
-	revokeRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", targetID, targetSession.ID), nil, headers)
+	revokeRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d/sessions/%d", targetID, targetSession.ID), nil, headers)
 	require.Equal(t, http.StatusOK, revokeRes.Code, revokeRes.Body.String())
 
 	var revokedSession model.UserSession
@@ -322,8 +317,9 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 
 	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "self-service")
 	headers := authHeaders(accessToken)
+	require.NoError(t, stack.DB.Create(&model.AuditLog{UserID: userID, Action: "session.self_viewed", Details: "self activity", IP: "192.0.2.30"}).Error)
 
-	loginLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/login-logs", userID), nil, headers)
+	loginLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me/activity-logs", nil, headers)
 	require.Equal(t, http.StatusOK, loginLogsRes.Code, loginLogsRes.Body.String())
 
 	loginLogsData := decodeResponseData(t, loginLogsRes)
@@ -333,29 +329,28 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 
 	firstLog, ok := logItems[0].(map[string]any)
 	require.True(t, ok, "expected first login log entry map, got %T", logItems[0])
-	assert.Equal(t, float64(userID), firstLog["user_id"])
-	assert.Equal(t, "success", firstLog["status"])
-	assert.NotEmpty(t, firstLog["device"])
+	assert.Equal(t, "session.self_viewed", firstLog["action"])
+	assert.NotEmpty(t, firstLog["action"])
 
 	otherUserID, _, _, _, _ := registerVerifyAndLogin(t, stack, "self-service-target")
-	forbiddenLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/login-logs", otherUserID), nil, headers)
+	forbiddenLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/login-logs", otherUserID), nil, headers)
 	require.Equal(t, http.StatusForbidden, forbiddenLogsRes.Code, forbiddenLogsRes.Body.String())
 	assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, forbiddenLogsRes))
 
 	grantPermissionsToUser(t, stack, userID, model.PermAuditRead)
-	authorizedCrossUserLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/login-logs", otherUserID), nil, headers)
+	authorizedCrossUserLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/login-logs", otherUserID), nil, headers)
 	require.Equal(t, http.StatusOK, authorizedCrossUserLogsRes.Code, authorizedCrossUserLogsRes.Body.String())
 
 	currentSession := requireSessionForRefreshToken(t, stack.DB, refreshToken)
-	revokeSelfRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d/sessions/%d", userID, currentSession.ID), nil, headers)
-	require.Equal(t, http.StatusOK, revokeSelfRes.Code, revokeSelfRes.Body.String())
+	revokeSelfRes := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/sessions/%d", currentSession.ID), nil, headers)
+	require.Equal(t, http.StatusNoContent, revokeSelfRes.Code, revokeSelfRes.Body.String())
 
 	var revokedSession model.UserSession
 	require.NoError(t, stack.DB.First(&revokedSession, currentSession.ID).Error)
 	assert.True(t, revokedSession.RevokedAt.Valid)
 	assert.Equal(t, "revoked by user", revokedSession.RevokedReason)
 
-	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/profiles/%d", userID), nil, headers)
+	reuseRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me", nil, headers)
 	require.Equal(t, http.StatusUnauthorized, reuseRes.Code, reuseRes.Body.String())
 	assert.Equal(t, "SESSION_REVOKED", decodeErrorCode(t, reuseRes))
 }
@@ -389,12 +384,12 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 		"roles":              []string{memberRole.Name},
 	}
 
-	createDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBody, headers)
+	createDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", createBody, headers)
 	require.Equal(t, http.StatusForbidden, createDenied.Code, createDenied.Body.String())
 
-	grantPermissionsToUser(t, stack, actorID, model.PermUserWrite, model.PermRoleRead, model.PermPermissionRead, model.PermUserRead)
+	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceUser, model.ActionCreate), model.BuildPermissionName(model.ResourceUser, model.ActionUpdate), model.PermRoleRead, model.PermPermissionRead, model.PermUserRead)
 
-	createAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBody, headers)
+	createAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", createBody, headers)
 	require.Equal(t, http.StatusBadRequest, createAllowed.Code, createAllowed.Body.String())
 
 	createBodyWithoutRoles := map[string]any{
@@ -406,13 +401,13 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 		"locale":             "zh_CN",
 	}
 
-	createWithoutRolesAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/users", createBodyWithoutRoles, headers)
+	createWithoutRolesAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", createBodyWithoutRoles, headers)
 	require.Equal(t, http.StatusCreated, createWithoutRolesAllowed.Code, createWithoutRolesAllowed.Body.String())
 	createdUserData := decodeResponseData(t, createWithoutRolesAllowed)
 	createdUserID := uint64(createdUserData["id"].(float64))
 	assert.Equal(t, "zh_CN", createdUserData["locale"])
 
-	getRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/roles", createdUserID), nil, headers)
+	getRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/roles", createdUserID), nil, headers)
 	require.Equal(t, http.StatusOK, getRolesRes.Code, getRolesRes.Body.String())
 	getRolesData := decodeResponseData(t, getRolesRes)
 	roleItems, ok := getRolesData["data"].([]any)
@@ -420,25 +415,25 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 	require.Empty(t, roleItems)
 
 	updateDeniedHeaders := authHeaders(actorAccessToken)
-	updateDenied := performJSONRequest(t, stack.Router, http.MethodPatch, fmt.Sprintf("/api/v1/users/%d", createdUserID), map[string]any{
+	updateDenied := performJSONRequest(t, stack.Router, http.MethodPatch, fmt.Sprintf("/api/v1/admin/users/%d", createdUserID), map[string]any{
 		"display_name": "Managed User Updated",
 		"locale":       "en_US",
 		"roles":        []string{adminRole.Name},
 	}, updateDeniedHeaders)
 	require.Equal(t, http.StatusBadRequest, updateDenied.Code, updateDenied.Body.String())
 
-	unchangedRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/users/%d/roles", createdUserID), nil, headers)
+	unchangedRolesRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/roles", createdUserID), nil, headers)
 	require.Equal(t, http.StatusOK, unchangedRolesRes.Code, unchangedRolesRes.Body.String())
 	unchangedRolesData := decodeResponseData(t, unchangedRolesRes)
 	unchangedRoleItems, ok := unchangedRolesData["data"].([]any)
 	require.True(t, ok, "expected paginated role payload, got %T", unchangedRolesData["data"])
 	require.Empty(t, unchangedRoleItems)
 
-	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d", createdUserID), nil, headers)
+	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d", createdUserID), nil, headers)
 	require.Equal(t, http.StatusForbidden, deleteDenied.Code, deleteDenied.Body.String())
 
-	grantPermissionsToUser(t, stack, actorID, model.PermUserDelete)
-	deleteAllowed := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/users/%d", createdUserID), nil, headers)
+	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceUser, model.ActionDelete))
+	deleteAllowed := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d", createdUserID), nil, headers)
 	require.Equal(t, http.StatusNoContent, deleteAllowed.Code, deleteAllowed.Body.String())
 
 	var deletedUser model.User
@@ -452,7 +447,7 @@ func TestTwoFactorLifecycle(t *testing.T) {
 	userID, accessToken, _, _, password := registerVerifyAndLogin(t, stack, "twofa")
 	headers := authHeaders(accessToken)
 
-	enableRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/2fa/enable", userID), map[string]any{
+	enableRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/security/2fa/setup", map[string]any{
 		"password": password,
 	}, headers)
 	require.Equal(t, http.StatusOK, enableRes.Code, enableRes.Body.String())
@@ -470,12 +465,12 @@ func TestTwoFactorLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	confirmRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/2fa/confirm", userID), map[string]any{
+	confirmRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/security/2fa/confirm", map[string]any{
 		"code": code,
 	}, headers)
 	require.Equal(t, http.StatusOK, confirmRes.Code, confirmRes.Body.String())
 
-	regenRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/2fa/regenerate-backup-codes", userID), map[string]any{
+	regenRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/security/2fa/backup-codes/regenerate", map[string]any{
 		"password": password,
 	}, headers)
 	require.Equal(t, http.StatusOK, regenRes.Code, regenRes.Body.String())
@@ -492,7 +487,7 @@ func TestTwoFactorLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	disableRes := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/2fa/disable", userID), map[string]any{
+	disableRes := performJSONRequest(t, stack.Router, http.MethodDelete, "/api/v1/me/security/2fa", map[string]any{
 		"password": password,
 		"code":     disableCode,
 	}, headers)
@@ -510,11 +505,11 @@ func TestTwoFactorLifecycle(t *testing.T) {
 func TestTwoFactorRoutesRequireFreshSession(t *testing.T) {
 	stack := newIntegrationStack(t)
 
-	userID, accessToken, refreshToken, _, password := registerVerifyAndLogin(t, stack, "twofa-stale")
+	_, accessToken, refreshToken, _, password := registerVerifyAndLogin(t, stack, "twofa-stale")
 	session := requireSessionForRefreshToken(t, stack.DB, refreshToken)
 	require.NoError(t, stack.DB.Model(&model.UserSession{}).Where("id = ?", session.ID).Update("created_at", time.Now().UTC().Add(-10*time.Minute)).Error)
 
-	res := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/profiles/%d/2fa/enable", userID), map[string]any{
+	res := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/security/2fa/setup", map[string]any{
 		"password": password,
 	}, authHeaders(accessToken))
 	require.Equal(t, http.StatusForbidden, res.Code, res.Body.String())
@@ -638,53 +633,81 @@ func mapPermissionToPolicies(permName string) []PolicyRule {
 	switch permName {
 	case model.PermUserRead:
 		return []PolicyRule{
-			{"/api/v1/users/*", "GET"},
+			{"/api/v1/admin/users/*", "GET"},
 		}
 	case model.PermUserWrite:
 		return []PolicyRule{
-			{"/api/v1/users", "POST"},
-			{"/api/v1/users/*", "PATCH"},
-			{"/api/v1/users/*", "PUT"},
+			{"/api/v1/admin/users", "POST"},
+			{"/api/v1/admin/users/*", "PATCH"},
+			{"/api/v1/admin/users/*", "PUT"},
 		}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionCreate):
+		return []PolicyRule{{"/api/v1/admin/users", "POST"}}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionUpdate):
+		return []PolicyRule{{"/api/v1/admin/users/*", "PATCH"}, {"/api/v1/admin/users/*", "PUT"}}
 	case model.PermUserDelete:
 		return []PolicyRule{
-			{"/api/v1/users/*", "DELETE"},
+			{"/api/v1/admin/users/*", "DELETE"},
 		}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionDelete):
+		return []PolicyRule{{"/api/v1/admin/users/*", "DELETE"}}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionList):
+		return []PolicyRule{{"/api/v1/admin/users", "GET"}}
 	case model.PermUserManage:
 		return []PolicyRule{
-			{"/api/v1/users/*", "GET"},
-			{"/api/v1/users/*", "POST"},
-			{"/api/v1/users/*", "PATCH"},
-			{"/api/v1/users/*", "DELETE"},
+			{"/api/v1/admin/users/*", "GET"},
+			{"/api/v1/admin/users/*", "POST"},
+			{"/api/v1/admin/users/*", "PATCH"},
+			{"/api/v1/admin/users/*", "DELETE"},
 		}
 	case model.PermRoleRead:
 		return []PolicyRule{
-			{"/api/v1/authorities", "GET"},
-			{"/api/v1/authorities/*", "GET"},
-			{"/api/v1/users/*/roles", "GET"},
+			{"/api/v1/admin/roles", "GET"},
+			{"/api/v1/admin/roles/*", "GET"},
+			{"/api/v1/admin/users/*/roles", "GET"},
 		}
 	case model.PermRoleWrite:
 		return []PolicyRule{
-			{"/api/v1/authorities", "POST"},
-			{"/api/v1/authorities/*", "PATCH"},
-			{"/api/v1/authorities/*", "PUT"},
+			{"/api/v1/admin/roles", "POST"},
+			{"/api/v1/admin/roles/*", "PATCH"},
+			{"/api/v1/admin/roles/*", "PUT"},
 		}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionCreate):
+		return []PolicyRule{{"/api/v1/admin/roles", "POST"}}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionUpdate):
+		return []PolicyRule{{"/api/v1/admin/roles/*", "PATCH"}, {"/api/v1/admin/roles/*", "PUT"}}
 	case model.PermRoleDelete:
 		return []PolicyRule{
-			{"/api/v1/authorities/*", "DELETE"},
+			{"/api/v1/admin/roles/*", "DELETE"},
+		}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionDelete):
+		return []PolicyRule{{"/api/v1/admin/roles/*", "DELETE"}}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionList):
+		return []PolicyRule{{"/api/v1/admin/roles", "GET"}}
+	case model.PermRoleManage:
+		return []PolicyRule{
+			{"/api/v1/admin/roles/*/users", "PUT"},
+			{"/api/v1/admin/roles/*/permissions", "PUT"},
 		}
 	case model.PermPermissionRead:
 		return []PolicyRule{
-			{"/api/v1/users/*/permissions", "GET"},
+			{"/api/v1/admin/users/*/permissions", "GET"},
+			{"/api/v1/admin/roles/*/permissions", "GET"},
 		}
+	case model.BuildPermissionName(model.ResourceSession, model.ActionRead):
+		return []PolicyRule{{"/api/v1/admin/users/*/sessions", "GET"}}
+	case model.BuildPermissionName(model.ResourceSession, model.ActionDelete):
+		return []PolicyRule{{"/api/v1/admin/users/*/sessions/*", "DELETE"}}
 	case model.PermPermissionWrite:
 		return nil
 	case model.PermPermissionDelete:
 		return nil
 	case model.PermAuditRead:
 		return []PolicyRule{
-			{"/api/v1/users/*/audit-logs", "GET"},
-			{"/api/v1/users/*/login-logs", "GET"},
+			{"/api/v1/admin/users/*/audit-logs", "GET"},
+			{"/api/v1/admin/users/*/login-logs", "GET"},
+			{"/api/v1/admin/audit-logs", "GET"},
+			{"/api/v1/admin/audit-logs/*", "GET"},
 		}
 	default:
 		// Fallback: derive from permission name

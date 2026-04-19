@@ -13,9 +13,6 @@ import (
 	"paigram/internal/geolocation"
 	"paigram/internal/handler"
 	authhandler "paigram/internal/handler/auth"
-	profilehandler "paigram/internal/handler/profile"
-	securityhandler "paigram/internal/handler/security"
-	sessionhandler "paigram/internal/handler/session"
 	"paigram/internal/middleware"
 	"paigram/internal/observability"
 	"paigram/internal/response"
@@ -197,57 +194,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	}
 
 	// User, authority, and casbin policy routes - delegated to router groups
-	InitializeRouterGroups(protected, db)
-
-	// Profile management routes
-	profileHandler := profilehandler.NewHandler(db, authCfg)
-	profiles := protected.Group("/profiles")
-	{
-		// Get profile - self or requires user:read permission
-		profiles.GET("/:id", middleware.SelfOrCasbinPermission(), profileHandler.GetProfile)
-
-		// Update profile - self or requires user:write permission
-		profiles.PATCH("/:id", middleware.SelfOrCasbinPermission(), profileHandler.UpdateProfile)
-
-		// Account binding - only self can manage
-		profiles.GET("/:id/accounts", middleware.RequireSelf(), profileHandler.GetBoundAccounts)
-		profiles.POST("/:id/accounts/bind", middleware.RequireSelf(), profileHandler.BindAccount)
-		profiles.DELETE("/:id/accounts/:provider", middleware.RequireSelf(), profileHandler.UnbindAccount)
-	}
-
-	// Email management routes - only self can manage their own emails
-	// We need to create a separate group to apply RequireSelf middleware
-	emailGroup := protected.Group("/profiles")
-	emailGroup.Use(middleware.RequireSelf())
-	profileHandler.RegisterEmailRoutes(emailGroup)
-
-	// Security routes (password change, 2FA) - only self + fresh session for sensitive ops
-	securityHandler := securityhandler.NewHandler(db, cache, cfg.Security)
-	security := protected.Group("/profiles")
-	security.Use(middleware.RequireSelf())
-	{
-		// Routes that DON'T require fresh session
-		security.GET("/:id/devices", securityHandler.GetDevices)
-
-		// Routes that REQUIRE fresh session (sensitive operations)
-		freshSecurity := security.Group("")
-		freshSecurity.Use(middleware.RequireFreshSession(authCfg))
-		{
-			freshSecurity.POST("/:id/password/change", securityHandler.ChangePassword)
-			freshSecurity.POST("/:id/2fa/enable", securityHandler.Enable2FA)
-			freshSecurity.POST("/:id/2fa/confirm", securityHandler.Confirm2FA)
-			freshSecurity.POST("/:id/2fa/disable", securityHandler.Disable2FA)
-			freshSecurity.POST("/:id/2fa/regenerate-backup-codes", securityHandler.RegenerateBackupCodes)
-			freshSecurity.DELETE("/:id/devices/:device_id", securityHandler.RemoveDevice)
-		}
-	}
-
-	// Session management routes
-	sessionHandler := sessionhandler.NewHandler(db, cache)
-	sessions := protected.Group("/sessions")
-	{
-		sessionHandler.RegisterRoutes(sessions)
-	}
+	InitializeRouterGroups(protected, db, authCfg)
 
 	// swagger:route GET / general getRoot
 	//

@@ -47,9 +47,17 @@ func TestAdminRouterRegistersManagementRoutes(t *testing.T) {
 		"GET /api/v1/admin/roles/:id/users",
 		"PUT /api/v1/admin/roles/:id/users",
 		"GET /api/v1/admin/roles/:id/permissions",
-		"POST /api/v1/admin/roles/:id/permissions",
+		"PUT /api/v1/admin/roles/:id/permissions",
 	} {
 		_, ok := registered[route]
 		assert.True(t, ok, "expected admin route %s to be registered", route)
 	}
+
+	_, hasLegacyPost := registered["POST /api/v1/admin/roles/:id/permissions"]
+	assert.False(t, hasLegacyPost, "did not expect legacy POST admin permission route")
+
+	_, hasLegacyUserRolePost := registered["POST /api/v1/admin/users/:id/roles"]
+	assert.False(t, hasLegacyUserRolePost, "did not expect legacy POST admin user-role route")
+	_, hasLegacyUserRoleDelete := registered["DELETE /api/v1/admin/users/:id/roles/:roleId"]
+	assert.False(t, hasLegacyUserRoleDelete, "did not expect legacy DELETE admin user-role route")
 }

@@ -1,17 +1,26 @@
 package platformbinding
 
-import "gorm.io/gorm"
+import (
+	serviceplatform "paigram/internal/service/platform"
+
+	"gorm.io/gorm"
+)
 
 type ServiceGroup struct {
 	BindingService           BindingService
 	GrantService             GrantService
 	ProfileProjectionService ProfileProjectionService
+	OrchestrationService     OrchestrationService
+	RuntimeSummaryService    RuntimeSummaryService
 }
 
-func NewServiceGroup(db *gorm.DB) *ServiceGroup {
+func NewServiceGroup(db *gorm.DB, platformService *serviceplatform.PlatformService) *ServiceGroup {
+	bindingService := NewBindingService(db)
 	return &ServiceGroup{
-		BindingService:           *NewBindingService(db),
+		BindingService:           *bindingService,
 		GrantService:             *NewGrantService(db),
 		ProfileProjectionService: *NewProfileProjectionService(db),
+		OrchestrationService:     *NewOrchestrationService(bindingService, platformService, serviceplatform.NewGRPCGenericCredentialGateway(nil)),
+		RuntimeSummaryService:    *NewRuntimeSummaryService(platformService, bindingService),
 	}
 }

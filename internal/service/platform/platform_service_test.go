@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -319,7 +320,7 @@ func TestPlatformServiceGetPlatformAccountSummaryReturnsBindingProjectionWithout
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:summary-binding",
+		ExternalAccountKey: sql.NullString{String: "cn:summary-binding", Valid: true},
 		PlatformServiceKey: "platform-mihomo-service",
 		DisplayName:        "Traveler",
 		Status:             model.PlatformAccountBindingStatusActive,

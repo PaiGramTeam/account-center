@@ -78,25 +78,6 @@ type changePasswordRequest struct {
 }
 
 // ChangePassword allows users to change their password
-// swagger:route POST /api/v1/profiles/{id}/password/change security changePassword
-//
-// Change user password.
-//
-// Allows users to change their password. Requires old password verification.
-//
-// Consumes:
-//   - application/json
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: changePasswordResponse
-//	400: securityErrorResponse
-//	401: securityErrorResponse
-//	404: securityErrorResponse
-//	500: securityErrorResponse
 func (h *Handler) ChangePassword(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -210,22 +191,6 @@ func hashSessionToken(token string) string {
 }
 
 // Enable2FA initiates 2FA setup
-// swagger:route POST /api/v1/profiles/{id}/2fa/enable security enable2FA
-//
-// Enable two-factor authentication.
-//
-// Generates TOTP secret and QR code for 2FA setup.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: enable2FAResponse
-//	400: securityErrorResponse
-//	403: securityErrorResponse
-//	409: securityErrorResponse
-//	500: securityErrorResponse
 func (h *Handler) Enable2FA(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -348,25 +313,6 @@ type confirm2FARequest struct {
 }
 
 // Confirm2FA confirms and activates 2FA
-// swagger:route POST /api/v1/profiles/{id}/2fa/confirm security confirm2FA
-//
-// Confirm two-factor authentication setup.
-//
-// Verifies TOTP code and activates 2FA for the account.
-//
-// Consumes:
-//   - application/json
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: confirm2FAResponse
-//	400: securityErrorResponse
-//	401: securityErrorResponse
-//	403: securityErrorResponse
-//	500: securityErrorResponse
 func (h *Handler) Confirm2FA(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -496,26 +442,6 @@ type disable2FARequest struct {
 }
 
 // Disable2FA disables two-factor authentication
-// swagger:route POST /api/v1/profiles/{id}/2fa/disable security disable2FA
-//
-// Disable two-factor authentication.
-//
-// Disables 2FA for the account. Requires password and current TOTP code.
-//
-// Consumes:
-//   - application/json
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: disable2FAResponse
-//	400: securityErrorResponse
-//	401: securityErrorResponse
-//	403: securityErrorResponse
-//	404: securityErrorResponse
-//	500: securityErrorResponse
 func (h *Handler) Disable2FA(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -656,7 +582,6 @@ type regenerateBackupCodesRequest struct {
 // @Failure 403 {object} gin.H "Forbidden - can only regenerate own backup codes"
 // @Failure 404 {object} gin.H "2FA not enabled"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/profiles/{id}/2fa/regenerate-backup-codes [post]
 func (h *Handler) RegenerateBackupCodes(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -776,7 +701,6 @@ func (h *Handler) RegenerateBackupCodes(c *gin.Context) {
 // @Failure 401 {object} gin.H "Unauthorized - authentication required"
 // @Failure 403 {object} gin.H "Forbidden - can only view own devices"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/profiles/{id}/devices [get]
 func (h *Handler) GetDevices(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -871,7 +795,6 @@ func (h *Handler) GetDevices(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - can only remove own devices or cannot remove current device"
 // @Failure 404 {object} gin.H "Device not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/profiles/{id}/devices/{device_id} [delete]
 func (h *Handler) RemoveDevice(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {

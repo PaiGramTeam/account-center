@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -29,4 +32,15 @@ func TestReplaceAuthorityUsersRequiresAuthenticatedActor(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), "authentication required")
+}
+
+func TestSwaggerSourcesDoNotAdvertiseLegacyAuthorityOrCasbinRoutes(t *testing.T) {
+	authoritySource, err := os.ReadFile("authority_handler.go")
+	require.NoError(t, err)
+	assert.NotContains(t, string(authoritySource), "/api/v1/authorities/")
+	assert.NotContains(t, string(authoritySource), "/api/v1/authorities ")
+
+	casbinSource, err := os.ReadFile(filepath.Join("..", "casbin", "swagger_routes.go"))
+	require.NoError(t, err)
+	assert.False(t, strings.Contains(string(casbinSource), "/api/v1/casbin/"), "legacy casbin swagger routes should be removed")
 }

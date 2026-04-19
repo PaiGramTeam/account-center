@@ -31,15 +31,18 @@ const (
 
 // PlatformAccountBinding is the control-plane owner record for one external account.
 type PlatformAccountBinding struct {
-	ID                 uint64                       `gorm:"primaryKey"`
-	OwnerUserID        uint64                       `gorm:"not null;index:idx_platform_account_bindings_owner"`
-	Platform           string                       `gorm:"size:64;not null"`
-	ExternalAccountKey string                       `gorm:"size:191;not null"`
-	PlatformServiceKey string                       `gorm:"size:128;not null"`
-	DisplayName        string                       `gorm:"size:255;not null"`
-	Status             PlatformAccountBindingStatus `gorm:"size:32;not null;default:'pending_bind';index:idx_platform_account_bindings_status"`
+	ID                  uint64                       `gorm:"primaryKey"`
+	OwnerUserID         uint64                       `gorm:"not null;index:idx_platform_account_bindings_owner"`
+	Platform            string                       `gorm:"size:64;not null"`
+	ExternalAccountKey  sql.NullString               `gorm:"size:191"`
+	PlatformServiceKey  string                       `gorm:"size:128;not null"`
+	DisplayName         string                       `gorm:"size:255;not null"`
+	Status              PlatformAccountBindingStatus `gorm:"size:32;not null;default:'pending_bind';index:idx_platform_account_bindings_status"`
+	StatusReasonCode    string                       `gorm:"size:64"`
+	StatusReasonMessage string                       `gorm:"size:255"`
 	// PrimaryProfileID is validated in SQL against the composite (binding_id, id) key on platform_account_profiles.
 	PrimaryProfileID sql.NullInt64  `gorm:"type:bigint unsigned;index:idx_platform_account_bindings_primary_profile_id"`
+	LastValidatedAt  sql.NullTime   `gorm:"type:datetime(3)"`
 	LastSyncedAt     sql.NullTime   `gorm:"type:datetime(3)"`
 	CreatedAt        time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
 	UpdatedAt        time.Time      `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`

@@ -30,6 +30,14 @@ const (
 	LoginTypeOAuth    LoginType = "oauth" // Legacy migration-only value.
 )
 
+// OAuthPurpose identifies why an OAuth state was created.
+type OAuthPurpose string
+
+const (
+	OAuthPurposeLogin           OAuthPurpose = "login"
+	OAuthPurposeBindLoginMethod OAuthPurpose = "bind_login_method"
+)
+
 // User models the core user entity.
 type User struct {
 	ID               uint64         `gorm:"primaryKey"`
@@ -93,13 +101,15 @@ type UserEmail struct {
 
 // UserOAuthState stores temporary OAuth states for CSRF protection.
 type UserOAuthState struct {
-	ID           uint64    `gorm:"primaryKey"`
-	Provider     string    `gorm:"size:64;index"`
-	State        string    `gorm:"size:255;uniqueIndex"`
-	RedirectTo   string    `gorm:"size:512"`
-	Nonce        string    `gorm:"size:255"`
-	CodeVerifier string    `gorm:"size:255;index"` // PKCE code verifier
-	ExpiresAt    time.Time `gorm:"index"`
+	ID           uint64        `gorm:"primaryKey"`
+	Provider     string        `gorm:"size:64;index"`
+	State        string        `gorm:"size:255;uniqueIndex"`
+	Purpose      string        `gorm:"size:64;not null;default:'login';index"`
+	UserID       sql.NullInt64 `gorm:"type:bigint unsigned;index"`
+	RedirectTo   string        `gorm:"size:512"`
+	Nonce        string        `gorm:"size:255"`
+	CodeVerifier string        `gorm:"size:255;index"` // PKCE code verifier
+	ExpiresAt    time.Time     `gorm:"index"`
 	CreatedAt    time.Time
 }
 

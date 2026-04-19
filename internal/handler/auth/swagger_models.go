@@ -228,18 +228,18 @@ type InitiateOAuthRequest struct {
 // swagger:model initiateOAuthResponse
 type InitiateOAuthResponse struct {
 	Data struct {
-		// OAuth state token
-		// example: random-state-token-123
-		State string `json:"state"`
-		// OAuth nonce token
-		// example: random-nonce-token-456
-		Nonce string `json:"nonce"`
-		// State expiration time
-		// example: 2024-01-23T12:05:00Z
-		ExpiresAt string `json:"expires_at"`
 		// OAuth provider authorization URL
 		// example: https://accounts.google.com/o/oauth2/v2/auth?...
 		AuthURL string `json:"auth_url"`
+		// OAuth state token
+		// example: random-state-token-123
+		State string `json:"state"`
+		// State expiration time
+		// example: 2024-01-23T12:05:00Z
+		ExpiresAt string `json:"expires_at"`
+		// OAuth flow purpose
+		// example: login
+		Purpose string `json:"purpose"`
 	} `json:"data"`
 }
 

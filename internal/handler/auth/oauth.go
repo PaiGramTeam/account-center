@@ -22,13 +22,16 @@ import (
 
 	"paigram/internal/config"
 	"paigram/internal/handler/shared"
+	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
 )
 
 var (
-	telegramOIDCIssuer  = "https://oauth.telegram.org"
-	telegramOIDCJWKSURL = "https://oauth.telegram.org/.well-known/jwks.json"
+	telegramOIDCIssuer      = "https://oauth.telegram.org"
+	telegramOIDCJWKSURL     = "https://oauth.telegram.org/.well-known/jwks.json"
+	errProviderAlreadyBound = errors.New("provider already bound to another user")
+	errMissingBindUser      = errors.New("missing oauth bind user")
 )
 
 type initiateOAuthRequest struct {
@@ -56,6 +59,39 @@ type initiateOAuthRequest struct {
 //
 // InitiateOAuth prepares an OAuth login by issuing a state token.
 func (h *Handler) InitiateOAuth(c *gin.Context) {
+	h.initiateOAuth(c, model.OAuthPurposeLogin, nil)
+}
+
+// swagger:route PUT /api/v1/me/login-methods/{provider} me startBindLoginMethod
+//
+// Initiate OAuth login-method binding for the authenticated user.
+//
+// Requires an authenticated fresh session. Generates OAuth state bound to the
+// current user and returns the provider authorization URL.
+//
+// Consumes:
+//   - application/json
+//
+// Produces:
+//   - application/json
+//
+// Responses:
+//
+//	200: initiateOAuthResponse
+//	401: authErrorResponse
+//	403: authErrorResponse
+//	400: authErrorResponse
+//	500: authErrorResponse
+func (h *Handler) StartBindLoginMethod(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == 0 {
+		response.UnauthorizedWithCode(c, "UNAUTHORIZED", "user not authenticated", nil)
+		return
+	}
+	h.initiateOAuth(c, model.OAuthPurposeBindLoginMethod, &userID)
+}
+
+func (h *Handler) initiateOAuth(c *gin.Context, purpose model.OAuthPurpose, userID *uint64) {
 	provider := strings.ToLower(c.Param("provider"))
 	providerCfg, ok := h.resolveProvider(provider)
 	if !ok {
@@ -106,10 +142,14 @@ func (h *Handler) InitiateOAuth(c *gin.Context) {
 	stateRecord := model.UserOAuthState{
 		Provider:     provider,
 		State:        state,
+		Purpose:      string(purpose),
 		RedirectTo:   redirectURL,
 		Nonce:        nonce,
 		CodeVerifier: codeVerifier, // Store for later verification
 		ExpiresAt:    expiry,
+	}
+	if userID != nil {
+		stateRecord.UserID = sql.NullInt64{Int64: int64(*userID), Valid: true}
 	}
 	if err := h.db.Create(&stateRecord).Error; err != nil {
 		response.InternalServerError(c, "failed to persist oauth state")
@@ -126,6 +166,7 @@ func (h *Handler) InitiateOAuth(c *gin.Context) {
 		"auth_url":   authURL,
 		"state":      state,
 		"expires_at": expiry.Format(time.RFC3339),
+		"purpose":    string(purpose),
 	}
 	response.Success(c, responseData)
 }
@@ -236,197 +277,33 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	// Step 4: Create or update user account
-	var user model.User
-	var emailRecord *model.UserEmail
-	var sessionWithTokens *SessionWithTokens
-
-	err = h.db.Transaction(func(tx *gorm.DB) error {
-		var credential model.UserCredential
-		credErr := tx.Where("provider = ? AND provider_account_id = ?", provider, userInfo.ID).First(&credential).Error
-		if credErr != nil && !errors.Is(credErr, gorm.ErrRecordNotFound) {
-			return credErr
-		}
-
-		tokenExpiry := shared.ClearNullTime()
-		if tokenResp.ExpiresIn > 0 {
-			tokenExpiry = shared.MakeNullTime(now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second))
-		}
-
-		// New user
-		if errors.Is(credErr, gorm.ErrRecordNotFound) {
-			user = model.User{
-				PrimaryLoginType: loginTypeForOAuthProvider(provider),
-				Status:           model.UserStatusActive,
-			}
-			if err := tx.Create(&user).Error; err != nil {
-				return err
-			}
-
-			displayName := strings.TrimSpace(userInfo.Name)
-			if displayName == "" {
-				displayName = fmt.Sprintf("%s_user_%s", provider, userInfo.ID)
-			}
-
-			profile := model.UserProfile{
-				UserID:      user.ID,
-				DisplayName: displayName,
-				AvatarURL:   userInfo.Picture,
-				Locale:      "en_US",
-			}
-			if err := tx.Create(&profile).Error; err != nil {
-				return err
-			}
-
-			if email := strings.TrimSpace(strings.ToLower(userInfo.Email)); email != "" {
-				// Check if email already exists for another user
-				var existingEmail model.UserEmail
-				emailExists := tx.Where("email = ?", email).First(&existingEmail).Error == nil
-
-				if emailExists {
-					// Email belongs to another account
-					log.Printf("[OAuth] Email conflict: %s from %s provider already exists for user_id=%d",
-						email, provider, existingEmail.UserID)
-
-					// For now, skip email creation (user created without email)
-					// TODO: Implement account linking confirmation flow
-					// Option 1: Send email to user asking to confirm account merge
-					// Option 2: Create account without email, user must link manually
-					// Option 3: Fail authentication and show linking UI
-				} else {
-					// Email is available, create it
-					emailModel := model.UserEmail{
-						UserID:    user.ID,
-						Email:     email,
-						IsPrimary: true,
-					}
-					if userInfo.EmailVerified {
-						emailModel.VerifiedAt = shared.MakeNullTime(now)
-					}
-					if err := tx.Create(&emailModel).Error; err != nil {
-						return err
-					}
-					emailRecord = &emailModel
-				}
-			}
-
-			// Create credential with ENCRYPTED tokens
-			credential = model.UserCredential{
-				UserID:            user.ID,
-				Provider:          provider,
-				ProviderAccountID: userInfo.ID,
-				TokenExpiry:       tokenExpiry,
-				Scopes:            strings.TrimSpace(tokenResp.Scope),
-				LastSyncAt:        shared.MakeNullTime(now),
-			}
-
-			// Encrypt and store OAuth tokens
-			if err := credential.SetAccessToken(tokenResp.AccessToken); err != nil {
-				return fmt.Errorf("encrypt access token: %w", err)
-			}
-			if err := credential.SetRefreshToken(tokenResp.RefreshToken); err != nil {
-				return fmt.Errorf("encrypt refresh token: %w", err)
-			}
-
-			if err := tx.Create(&credential).Error; err != nil {
-				return err
-			}
-		} else {
-			// Existing user
-			if err := tx.First(&user, credential.UserID).Error; err != nil {
-				return err
-			}
-
-			// Update credential with ENCRYPTED tokens
-			credential.TokenExpiry = tokenExpiry
-			credential.Scopes = strings.TrimSpace(tokenResp.Scope)
-			credential.LastSyncAt = shared.MakeNullTime(now)
-
-			if err := credential.SetAccessToken(tokenResp.AccessToken); err != nil {
-				return fmt.Errorf("encrypt access token: %w", err)
-			}
-			if err := credential.SetRefreshToken(tokenResp.RefreshToken); err != nil {
-				return fmt.Errorf("encrypt refresh token: %w", err)
-			}
-
-			if err := tx.Save(&credential).Error; err != nil {
-				return err
-			}
-
-			// Update or create email record
-			if email := strings.TrimSpace(strings.ToLower(userInfo.Email)); email != "" {
-				var userEmail model.UserEmail
-				err := tx.Where("user_id = ? AND email = ?", user.ID, email).First(&userEmail).Error
-				if err != nil {
-					if errors.Is(err, gorm.ErrRecordNotFound) {
-						// Check if email exists for another user
-						var conflictEmail model.UserEmail
-						conflict := tx.Where("email = ?", email).First(&conflictEmail).Error == nil
-
-						if conflict {
-							// Email belongs to different user - skip adding
-							log.Printf("[OAuth] Email conflict on update: %s from %s provider already exists for user_id=%d (current user_id=%d)",
-								email, provider, conflictEmail.UserID, user.ID)
-							// Don't create email record for this user
-						} else {
-							// Email is available
-							userEmail = model.UserEmail{
-								UserID:    user.ID,
-								Email:     email,
-								IsPrimary: false,
-							}
-							if userInfo.EmailVerified {
-								userEmail.VerifiedAt = shared.MakeNullTime(now)
-							}
-							if err := tx.Create(&userEmail).Error; err != nil {
-								return err
-							}
-							emailRecord = &userEmail
-						}
-					} else {
-						return err
-					}
-				} else if userInfo.EmailVerified && !userEmail.VerifiedAt.Valid {
-					// Update verification status
-					userEmail.VerifiedAt = shared.MakeNullTime(now)
-					if err := tx.Save(&userEmail).Error; err != nil {
-						return err
-					}
-					emailRecord = &userEmail
-				} else {
-					emailRecord = &userEmail
-				}
-			}
-		}
-
-		// Update user last login
-		updates := map[string]interface{}{
-			"last_login_at": shared.MakeNullTime(now),
-		}
-		if user.Status == model.UserStatusPending {
-			updates["status"] = model.UserStatusActive
-		}
-		if err := tx.Model(&model.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
-			return err
-		}
-
-		// Issue local session
-		var err error
-		sessionWithTokens, err = h.issueSession(tx, user.ID, clientIP, userAgent)
+	purpose := oauthPurposeFromState(stateRecord)
+	if purpose == model.OAuthPurposeBindLoginMethod {
+		err = h.bindOAuthLoginMethod(provider, stateRecord, userInfo, tokenResp, now)
 		if err != nil {
-			return err
+			if errors.Is(err, errProviderAlreadyBound) {
+				response.ConflictWithCode(c, "PROVIDER_ALREADY_BOUND", "provider account is already bound to another user", nil)
+				return
+			}
+			if errors.Is(err, errMissingBindUser) {
+				response.BadRequest(c, "invalid oauth state")
+				return
+			}
+			response.BadRequest(c, err.Error())
+			return
 		}
 
-		// Record successful login
-		return h.recordLoginAudit(tx, model.LoginAudit{
-			UserID:    sql.NullInt64{Int64: int64(user.ID), Valid: true},
-			Provider:  provider,
-			Success:   true,
-			ClientIP:  clientIP,
-			UserAgent: userAgent,
-			Message:   "oauth login success",
+		response.Success(c, map[string]interface{}{
+			"provider":            provider,
+			"provider_account_id": userInfo.ID,
+			"purpose":             string(purpose),
+			"user_id":             uint64(stateRecord.UserID.Int64),
+			"bound":               true,
 		})
-	})
+		return
+	}
+
+	result, err := h.completeOAuthLogin(provider, userInfo, tokenResp, now, clientIP, userAgent)
 
 	if err != nil {
 		response.BadRequest(c, err.Error())
@@ -434,12 +311,12 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	}
 
 	responseData := map[string]interface{}{
-		"user_id":        user.ID,
-		"access_token":   sessionWithTokens.AccessToken,
-		"refresh_token":  sessionWithTokens.RefreshToken,
-		"access_expiry":  sessionWithTokens.Session.AccessExpiry.Format(time.RFC3339),
-		"refresh_expiry": sessionWithTokens.Session.RefreshExpiry.Format(time.RFC3339),
-		"email":          emailValue(emailRecord),
+		"user_id":        result.user.ID,
+		"access_token":   result.sessionWithTokens.AccessToken,
+		"refresh_token":  result.sessionWithTokens.RefreshToken,
+		"access_expiry":  result.sessionWithTokens.Session.AccessExpiry.Format(time.RFC3339),
+		"refresh_expiry": result.sessionWithTokens.Session.RefreshExpiry.Format(time.RFC3339),
+		"email":          emailValue(result.emailRecord),
 	}
 	response.Success(c, responseData)
 }
@@ -519,6 +396,234 @@ func emailValue(email *model.UserEmail) string {
 		return ""
 	}
 	return email.Email
+}
+
+type oauthLoginResult struct {
+	user              model.User
+	emailRecord       *model.UserEmail
+	sessionWithTokens *SessionWithTokens
+}
+
+func oauthPurposeFromState(state model.UserOAuthState) model.OAuthPurpose {
+	if strings.EqualFold(state.Purpose, string(model.OAuthPurposeBindLoginMethod)) {
+		return model.OAuthPurposeBindLoginMethod
+	}
+	return model.OAuthPurposeLogin
+}
+
+func (h *Handler) bindOAuthLoginMethod(provider string, stateRecord model.UserOAuthState, userInfo *oauthUserInfo, tokenResp *oauthTokenResponse, now time.Time) error {
+	if !stateRecord.UserID.Valid || stateRecord.UserID.Int64 <= 0 {
+		return errMissingBindUser
+	}
+
+	return h.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&model.User{}, stateRecord.UserID.Int64).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errMissingBindUser
+			}
+			return err
+		}
+
+		credential, err := buildOAuthCredential(uint64(stateRecord.UserID.Int64), provider, userInfo.ID, tokenResp, now)
+		if err != nil {
+			return err
+		}
+
+		var existing model.UserCredential
+		err = tx.Where("provider = ? AND provider_account_id = ?", provider, userInfo.ID).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return tx.Create(credential).Error
+		}
+		if err != nil {
+			return err
+		}
+		if existing.UserID != uint64(stateRecord.UserID.Int64) {
+			return errProviderAlreadyBound
+		}
+
+		existing.TokenExpiry = credential.TokenExpiry
+		existing.Scopes = credential.Scopes
+		existing.LastSyncAt = credential.LastSyncAt
+		existing.AccessToken = credential.AccessToken
+		existing.RefreshToken = credential.RefreshToken
+		return tx.Save(&existing).Error
+	})
+}
+
+func (h *Handler) completeOAuthLogin(provider string, userInfo *oauthUserInfo, tokenResp *oauthTokenResponse, now time.Time, clientIP, userAgent string) (*oauthLoginResult, error) {
+	result := &oauthLoginResult{}
+
+	err := h.db.Transaction(func(tx *gorm.DB) error {
+		var credential model.UserCredential
+		credErr := tx.Where("provider = ? AND provider_account_id = ?", provider, userInfo.ID).First(&credential).Error
+		if credErr != nil && !errors.Is(credErr, gorm.ErrRecordNotFound) {
+			return credErr
+		}
+
+		// New user
+		if errors.Is(credErr, gorm.ErrRecordNotFound) {
+			result.user = model.User{
+				PrimaryLoginType: loginTypeForOAuthProvider(provider),
+				Status:           model.UserStatusActive,
+			}
+			if err := tx.Create(&result.user).Error; err != nil {
+				return err
+			}
+
+			displayName := strings.TrimSpace(userInfo.Name)
+			if displayName == "" {
+				displayName = fmt.Sprintf("%s_user_%s", provider, userInfo.ID)
+			}
+
+			profile := model.UserProfile{
+				UserID:      result.user.ID,
+				DisplayName: displayName,
+				AvatarURL:   userInfo.Picture,
+				Locale:      "en_US",
+			}
+			if err := tx.Create(&profile).Error; err != nil {
+				return err
+			}
+
+			if email := strings.TrimSpace(strings.ToLower(userInfo.Email)); email != "" {
+				var existingEmail model.UserEmail
+				emailExists := tx.Where("email = ?", email).First(&existingEmail).Error == nil
+
+				if emailExists {
+					log.Printf("[OAuth] Email conflict: %s from %s provider already exists for user_id=%d", email, provider, existingEmail.UserID)
+				} else {
+					emailModel := model.UserEmail{
+						UserID:    result.user.ID,
+						Email:     email,
+						IsPrimary: true,
+					}
+					if userInfo.EmailVerified {
+						emailModel.VerifiedAt = shared.MakeNullTime(now)
+					}
+					if err := tx.Create(&emailModel).Error; err != nil {
+						return err
+					}
+					result.emailRecord = &emailModel
+				}
+			}
+
+			newCredential, err := buildOAuthCredential(result.user.ID, provider, userInfo.ID, tokenResp, now)
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(newCredential).Error; err != nil {
+				return err
+			}
+		} else {
+			if err := tx.First(&result.user, credential.UserID).Error; err != nil {
+				return err
+			}
+
+			updatedCredential, err := buildOAuthCredential(result.user.ID, provider, userInfo.ID, tokenResp, now)
+			if err != nil {
+				return err
+			}
+			credential.TokenExpiry = updatedCredential.TokenExpiry
+			credential.Scopes = updatedCredential.Scopes
+			credential.LastSyncAt = updatedCredential.LastSyncAt
+			credential.AccessToken = updatedCredential.AccessToken
+			credential.RefreshToken = updatedCredential.RefreshToken
+
+			if err := tx.Save(&credential).Error; err != nil {
+				return err
+			}
+
+			if email := strings.TrimSpace(strings.ToLower(userInfo.Email)); email != "" {
+				var userEmail model.UserEmail
+				err := tx.Where("user_id = ? AND email = ?", result.user.ID, email).First(&userEmail).Error
+				if err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						var conflictEmail model.UserEmail
+						conflict := tx.Where("email = ?", email).First(&conflictEmail).Error == nil
+
+						if conflict {
+							log.Printf("[OAuth] Email conflict on update: %s from %s provider already exists for user_id=%d (current user_id=%d)", email, provider, conflictEmail.UserID, result.user.ID)
+						} else {
+							userEmail = model.UserEmail{
+								UserID:    result.user.ID,
+								Email:     email,
+								IsPrimary: false,
+							}
+							if userInfo.EmailVerified {
+								userEmail.VerifiedAt = shared.MakeNullTime(now)
+							}
+							if err := tx.Create(&userEmail).Error; err != nil {
+								return err
+							}
+							result.emailRecord = &userEmail
+						}
+					} else {
+						return err
+					}
+				} else if userInfo.EmailVerified && !userEmail.VerifiedAt.Valid {
+					userEmail.VerifiedAt = shared.MakeNullTime(now)
+					if err := tx.Save(&userEmail).Error; err != nil {
+						return err
+					}
+					result.emailRecord = &userEmail
+				} else {
+					result.emailRecord = &userEmail
+				}
+			}
+		}
+
+		updates := map[string]interface{}{
+			"last_login_at": shared.MakeNullTime(now),
+		}
+		if result.user.Status == model.UserStatusPending {
+			updates["status"] = model.UserStatusActive
+		}
+		if err := tx.Model(&model.User{}).Where("id = ?", result.user.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+
+		var err error
+		result.sessionWithTokens, err = h.issueSession(tx, result.user.ID, clientIP, userAgent)
+		if err != nil {
+			return err
+		}
+
+		return h.recordLoginAudit(tx, model.LoginAudit{
+			UserID:    sql.NullInt64{Int64: int64(result.user.ID), Valid: true},
+			Provider:  provider,
+			Success:   true,
+			ClientIP:  clientIP,
+			UserAgent: userAgent,
+			Message:   "oauth login success",
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func buildOAuthCredential(userID uint64, provider, providerAccountID string, tokenResp *oauthTokenResponse, now time.Time) (*model.UserCredential, error) {
+	tokenExpiry := shared.ClearNullTime()
+	if tokenResp.ExpiresIn > 0 {
+		tokenExpiry = shared.MakeNullTime(now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second))
+	}
+
+	credential := &model.UserCredential{
+		UserID:            userID,
+		Provider:          provider,
+		ProviderAccountID: providerAccountID,
+		TokenExpiry:       tokenExpiry,
+		Scopes:            strings.TrimSpace(tokenResp.Scope),
+		LastSyncAt:        shared.MakeNullTime(now),
+	}
+	if err := credential.SetAccessToken(tokenResp.AccessToken); err != nil {
+		return nil, fmt.Errorf("encrypt access token: %w", err)
+	}
+	if err := credential.SetRefreshToken(tokenResp.RefreshToken); err != nil {
+		return nil, fmt.Errorf("encrypt refresh token: %w", err)
+	}
+	return credential, nil
 }
 
 func loginTypeForOAuthProvider(provider string) model.LoginType {

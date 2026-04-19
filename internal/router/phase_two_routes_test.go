@@ -43,7 +43,7 @@ func TestPhaseTwoRouteGroupsExposeOnlyCurrentNamespaces(t *testing.T) {
 	require.Contains(t, routes, "PATCH /api/v1/me/emails/:emailId/primary")
 	require.Contains(t, routes, "POST /api/v1/me/emails/:emailId/verify")
 	require.Contains(t, routes, "GET /api/v1/me/login-methods")
-	require.NotContains(t, routes, "PUT /api/v1/me/login-methods/:provider")
+	require.Contains(t, routes, "PUT /api/v1/me/login-methods/:provider")
 	require.Contains(t, routes, "DELETE /api/v1/me/login-methods/:provider")
 	require.Contains(t, routes, "GET /api/v1/me/security/overview")
 	require.Contains(t, routes, "PUT /api/v1/me/security/password")

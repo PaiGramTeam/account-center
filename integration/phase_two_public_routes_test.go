@@ -23,7 +23,7 @@ func TestPhaseTwoPublicRouteShape(t *testing.T) {
 		{method: http.MethodGet, path: "/api/v1/admin/audit-logs", code: http.StatusUnauthorized},
 		{method: http.MethodGet, path: "/api/v1/admin/system/settings/site", code: http.StatusUnauthorized},
 		{method: http.MethodGet, path: "/api/v1/admin/system/auth-controls", code: http.StatusUnauthorized},
-		{method: http.MethodPut, path: "/api/v1/me/login-methods/github", code: http.StatusNotFound},
+		{method: http.MethodPut, path: "/api/v1/me/login-methods/github", code: http.StatusUnauthorized},
 		{method: http.MethodGet, path: "/api/v1/bot-authorizations", code: http.StatusNotFound},
 		{method: http.MethodPost, path: "/api/v1/bot-authorizations", code: http.StatusNotFound},
 		{method: http.MethodGet, path: "/api/v1/bot-authorizations/1", code: http.StatusNotFound},

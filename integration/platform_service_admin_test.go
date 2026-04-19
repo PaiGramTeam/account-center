@@ -15,8 +15,6 @@ import (
 	"google.golang.org/grpc/health"
 	grpc_health_v1 "google.golang.org/grpc/health/grpc_health_v1"
 
-	internalcasbin "paigram/internal/casbin"
-	"paigram/internal/model"
 	"paigram/internal/service/platform"
 )
 
@@ -42,12 +40,9 @@ func TestPlatformServiceAdminRoutes(t *testing.T) {
 	})
 
 	userID, accessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("platform-admin-%d@example.com", time.Now().UnixNano()), "AdminPass123!")
-	grantPlatformRegistryPolicies(t, stack, userID,
-		model.BuildPermissionName(model.ResourcePlatform, model.ActionCreate),
-		model.BuildPermissionName(model.ResourcePlatform, model.ActionRead),
-	)
+	grantAdminRoleToUser(t, stack, userID)
 
-	createResp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/platform-services", map[string]any{
+	createResp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/system/platform-services", map[string]any{
 		"platform_key":      "mihomo",
 		"display_name":      "Mihomo",
 		"service_key":       "platform-mihomo-service",
@@ -72,7 +67,7 @@ func TestPlatformServiceAdminRoutes(t *testing.T) {
 	createdID, ok := createBody.Data["id"].(float64)
 	require.True(t, ok, "expected numeric platform service id, got %T", createBody.Data["id"])
 
-	checkResp := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/platform-services/%d/check", uint64(createdID)), nil, authHeaders(accessToken))
+	checkResp := performJSONRequest(t, stack.Router, http.MethodPost, fmt.Sprintf("/api/v1/admin/system/platform-services/%d/check", uint64(createdID)), nil, authHeaders(accessToken))
 	require.Equal(t, http.StatusOK, checkResp.Code, checkResp.Body.String())
 
 	var checkBody struct {
@@ -80,27 +75,4 @@ func TestPlatformServiceAdminRoutes(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(checkResp.Body.Bytes(), &checkBody))
 	require.Equal(t, string(platform.RuntimeStateHealthy), checkBody.Data["runtime_state"])
-}
-
-func grantPlatformRegistryPolicies(t *testing.T, stack *integrationStack, userID uint64, permissionNames ...string) {
-	t.Helper()
-
-	role := model.Role{
-		Name:        fmt.Sprintf("platform-admin-%d", time.Now().UnixNano()),
-		DisplayName: "Platform Admin",
-		Description: "integration test platform admin role",
-	}
-	require.NoError(t, stack.DB.Create(&role).Error)
-
-	enforcer := internalcasbin.GetEnforcer()
-	require.NotNil(t, enforcer)
-
-	for _, permissionName := range permissionNames {
-		for _, policy := range internalcasbin.PoliciesForPermission(permissionName) {
-			_, err := enforcer.AddPolicy(fmt.Sprint(role.ID), policy.Path, policy.Method)
-			require.NoError(t, err)
-		}
-	}
-
-	require.NoError(t, stack.DB.Create(&model.UserRole{UserID: userID, RoleID: role.ID, GrantedBy: userID}).Error)
 }

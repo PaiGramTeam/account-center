@@ -51,23 +51,6 @@ func (h *Handler) RegisterEmailRoutes(rg *gin.RouterGroup) {
 	h.emailHandler.RegisterEmailRoutes(rg)
 }
 
-// swagger:route GET /api/v1/profiles/{id} profile getProfile
-//
-// Get user profile.
-//
-// Retrieves detailed profile information for a specific user including
-// display name, avatar, bio, emails, and account status.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: profileResponse
-//	400: profileErrorResponse
-//	404: profileErrorResponse
-//	500: profileErrorResponse
-//
 // GetProfile returns profile + email overview for a user.
 func (h *Handler) GetProfile(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
@@ -121,25 +104,6 @@ type updateProfileRequest struct {
 	Locale      *string `json:"locale"`
 }
 
-// swagger:route PATCH /api/v1/profiles/{id} profile updateProfile
-//
-// Update user profile.
-//
-// Updates profile fields for a specific user. Only provided fields will be updated.
-//
-// Consumes:
-//   - application/json
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: updateProfileResponse
-//	400: profileErrorResponse
-//	404: profileErrorResponse
-//	500: profileErrorResponse
-//
 // UpdateProfile modifies profile fields.
 func (h *Handler) UpdateProfile(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
@@ -207,21 +171,6 @@ func parseUintID(raw string) (uint64, error) {
 }
 
 // GetBoundAccounts returns list of bound third-party accounts
-// swagger:route GET /api/v1/profiles/{id}/accounts profile getBoundAccounts
-//
-// Get bound third-party accounts with pagination.
-//
-// Retrieves a paginated list of all third-party accounts bound to a user profile.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: paginatedResponse
-//	400: profileErrorResponse
-//	404: profileErrorResponse
-//	500: profileErrorResponse
 func (h *Handler) GetBoundAccounts(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -323,25 +272,6 @@ type bindAccountRequest struct {
 }
 
 // BindAccount binds a new third-party account
-// swagger:route POST /api/v1/profiles/{id}/accounts/bind profile bindAccount
-//
-// Bind third-party account.
-//
-// Binds a new third-party account to user profile.
-//
-// Consumes:
-//   - application/json
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: bindAccountResponse
-//	400: profileErrorResponse
-//	404: profileErrorResponse
-//	409: profileErrorResponse
-//	500: profileErrorResponse
 func (h *Handler) BindAccount(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -513,22 +443,6 @@ func (h *Handler) BindAccount(c *gin.Context) {
 }
 
 // UnbindAccount removes a third-party account binding
-// swagger:route DELETE /api/v1/profiles/{id}/accounts/{provider} profile unbindAccount
-//
-// Unbind third-party account.
-//
-// Removes a third-party account binding from user profile.
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	200: unbindAccountResponse
-//	400: profileErrorResponse
-//	404: profileErrorResponse
-//	403: profileErrorResponse
-//	500: profileErrorResponse
 func (h *Handler) UnbindAccount(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {

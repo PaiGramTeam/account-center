@@ -81,6 +81,7 @@ const (
 	ResourceUser            = "user"
 	ResourceRole            = "role"
 	ResourcePermission      = "permission"
+	ResourceSystem          = "system"
 	ResourcePlatform        = "platform"
 	ResourcePlatformAccount = "platform_account"
 	ResourceBot             = "bot"
@@ -116,6 +117,10 @@ const (
 	PermRoleWrite  = "role:write"
 	PermRoleDelete = "role:delete"
 	PermRoleManage = "role:manage"
+
+	// System permissions
+	PermSystemRead   = "system:read"
+	PermSystemUpdate = "system:update"
 
 	// Permission management
 	PermPermissionRead   = "permission:read"

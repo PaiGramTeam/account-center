@@ -1,0 +1,386 @@
+package platformbinding
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+
+	"paigram/internal/model"
+	serviceplatform "paigram/internal/service/platform"
+)
+
+type fakeRuntimeSummaryBindingReader struct {
+	binding          *model.PlatformAccountBinding
+	err              error
+	ownerID          uint64
+	id               uint64
+	updated          bool
+	persistedSummary *RuntimeSummary
+}
+
+func (f *fakeRuntimeSummaryBindingReader) GetBindingByID(bindingID uint64) (*model.PlatformAccountBinding, error) {
+	f.id = bindingID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.binding, nil
+}
+
+func (f *fakeRuntimeSummaryBindingReader) GetBindingForOwner(ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error) {
+	f.ownerID = ownerUserID
+	f.id = bindingID
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.binding, nil
+}
+
+func (f *fakeRuntimeSummaryBindingReader) UpdateBindingStatus(bindingID uint64, status model.PlatformAccountBindingStatus) (*model.PlatformAccountBinding, error) {
+	f.updated = true
+	if f.binding != nil {
+		f.binding.Status = status
+	}
+	return f.binding, nil
+}
+
+func (f *fakeRuntimeSummaryBindingReader) PersistRuntimeSummary(bindingID uint64, summary RuntimeSummary) (*model.PlatformAccountBinding, error) {
+	f.id = bindingID
+	f.persistedSummary = &summary
+	if f.binding != nil {
+		if summary.PlatformAccountID != "" {
+			f.binding.ExternalAccountKey = sql.NullString{String: summary.PlatformAccountID, Valid: true}
+		}
+		f.binding.Status = model.PlatformAccountBindingStatusActive
+	}
+	return f.binding, nil
+}
+
+type fakeOrchestrationPlatformService struct {
+	platform  *model.PlatformService
+	err       error
+	ticket    string
+	ticketErr error
+	lastScope []string
+}
+
+func (f *fakeOrchestrationPlatformService) GetEnabledPlatform(string) (*model.PlatformService, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.platform, nil
+}
+
+func (f *fakeOrchestrationPlatformService) IssueBindingScopedTicket(actorType, actorID string, binding *model.PlatformAccountBinding, scopes []string) (string, time.Time, error) {
+	f.lastScope = append([]string(nil), scopes...)
+	if f.ticketErr != nil {
+		return "", time.Time{}, f.ticketErr
+	}
+	return f.ticket, time.Time{}, nil
+}
+
+type fakeRefreshGateway struct {
+	err      error
+	called   bool
+	endpoint string
+	ticket   string
+	binding  *model.PlatformAccountBinding
+}
+
+func (f *fakeRefreshGateway) PutCredential(context.Context, string, string, *model.PlatformAccountBinding, json.RawMessage) (map[string]any, error) {
+	panic("unexpected call")
+}
+
+func (f *fakeRefreshGateway) RefreshCredential(ctx context.Context, endpoint, ticket string, binding *model.PlatformAccountBinding) error {
+	f.called = true
+	f.endpoint = endpoint
+	f.ticket = ticket
+	f.binding = binding
+	return f.err
+}
+
+func (f *fakeRefreshGateway) DeleteCredential(context.Context, string, string, *model.PlatformAccountBinding) error {
+	panic("unexpected call")
+}
+
+type fakeRuntimeSummaryPlatformService struct {
+	summary       map[string]any
+	err           error
+	lastBinding   *model.PlatformAccountBinding
+	lastActorType string
+	lastActorID   string
+	lastScopes    []string
+	callCount     int
+}
+
+type fakeCredentialGateway struct {
+	summary            map[string]any
+	err                error
+	called             bool
+	deleteCalled       bool
+	deleteErr          error
+	deleteEndpoint     string
+	deleteTicket       string
+	deleteBindingID    uint64
+	deleteAccountKey   sql.NullString
+}
+
+func (f *fakeCredentialGateway) PutCredential(context.Context, string, string, *model.PlatformAccountBinding, json.RawMessage) (map[string]any, error) {
+	f.called = true
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.summary, nil
+}
+
+func (f *fakeCredentialGateway) RefreshCredential(context.Context, string, string, *model.PlatformAccountBinding) error {
+	panic("unexpected call")
+}
+
+func (f *fakeCredentialGateway) DeleteCredential(_ context.Context, endpoint, ticket string, binding *model.PlatformAccountBinding) error {
+	f.deleteCalled = true
+	f.deleteEndpoint = endpoint
+	f.deleteTicket = ticket
+	if binding != nil {
+		f.deleteBindingID = binding.ID
+		f.deleteAccountKey = binding.ExternalAccountKey
+	}
+	return f.deleteErr
+}
+
+func (f *fakeRuntimeSummaryPlatformService) GetBindingRuntimeSummary(_ context.Context, actorType, actorID string, binding *model.PlatformAccountBinding, scopes []string) (map[string]any, error) {
+	f.callCount++
+	f.lastBinding = binding
+	f.lastActorType = actorType
+	f.lastActorID = actorID
+	f.lastScopes = append([]string(nil), scopes...)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.summary, nil
+}
+
+func TestRuntimeSummaryDelegatesToPlatformService(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	fake := &fakeRuntimeSummaryPlatformService{summary: map[string]any{
+		"status":   "active",
+		"profiles": []map[string]any{{"player_id": "10001"}},
+	}}
+	svc := NewRuntimeSummaryService(fake, reader)
+
+	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
+	require.NoError(t, err)
+	assert.Equal(t, "active", summary.Status)
+	assert.Len(t, summary.Profiles, 1)
+	assert.Equal(t, 1, fake.callCount)
+	assert.Equal(t, uint64(7), reader.ownerID)
+	assert.Equal(t, uint64(101), reader.id)
+	assert.Equal(t, binding, fake.lastBinding)
+	assert.Equal(t, "user", fake.lastActorType)
+	assert.Equal(t, "binding-runtime-summary", fake.lastActorID)
+	assert.Equal(t, []string{"mihomo.credential.read_meta"}, fake.lastScopes)
+}
+
+func TestRuntimeSummaryNormalizesGRPCProxyOutage(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	fake := &fakeRuntimeSummaryPlatformService{err: grpcstatus.Error(codes.Unavailable, "downstream unavailable")}
+	svc := NewRuntimeSummaryService(fake, reader)
+
+	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
+	require.ErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	assert.Nil(t, summary)
+}
+
+func TestRuntimeSummaryNormalizesDialFailure(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	fake := &fakeRuntimeSummaryPlatformService{err: errors.New("dial tcp 127.0.0.1:9000: connectex: connection refused")}
+	svc := NewRuntimeSummaryService(fake, reader)
+
+	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
+	require.ErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	assert.Nil(t, summary)
+}
+
+func TestRuntimeSummaryPreservesWrappedPlatformServiceUnavailable(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	fake := &fakeRuntimeSummaryPlatformService{err: fmt.Errorf("wrapped: %w", serviceplatform.ErrPlatformServiceUnavailable)}
+	svc := NewRuntimeSummaryService(fake, reader)
+
+	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
+	require.ErrorIs(t, err, serviceplatform.ErrPlatformServiceUnavailable)
+	assert.Nil(t, summary)
+	require.NotErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+}
+
+func TestRuntimeSummaryReturnsBindingNotReadyWhenExternalAccountKeyUnresolved(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	fake := &fakeRuntimeSummaryPlatformService{}
+	svc := NewRuntimeSummaryService(fake, reader)
+
+	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
+	require.ErrorIs(t, err, ErrBindingRuntimeSummaryNotReady)
+	assert.Nil(t, summary)
+	assert.Equal(t, 0, fake.callCount)
+}
+
+func TestRuntimeSummaryAsAdminReturnsBindingNotReadyWhenExternalAccountKeyUnresolved(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:       101,
+		Platform: "mihomo",
+		Status:   model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	fake := &fakeRuntimeSummaryPlatformService{}
+	svc := NewRuntimeSummaryService(fake, reader)
+
+	summary, err := svc.GetRuntimeSummaryAsAdmin(context.Background(), 101)
+	require.ErrorIs(t, err, ErrBindingRuntimeSummaryNotReady)
+	assert.Nil(t, summary)
+	assert.Equal(t, 0, fake.callCount)
+}
+
+func TestRefreshBindingForOwnerDelegatesToRefreshGateway(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeRefreshGateway{err: errors.New("downstream unavailable")}
+	svc := NewOrchestrationService(reader, platformSvc, gateway)
+
+	updated, err := svc.RefreshBindingForOwner(context.Background(), 7, 101)
+	require.Error(t, err)
+	assert.Nil(t, updated)
+	assert.True(t, gateway.called)
+	assert.Equal(t, "127.0.0.1:9000", gateway.endpoint)
+	assert.Equal(t, "service-ticket", gateway.ticket)
+	assert.Equal(t, binding, gateway.binding)
+	assert.Equal(t, []string{"mihomo.credential.refresh"}, platformSvc.lastScope)
+	assert.False(t, reader.updated)
+}
+
+func TestPutCredentialForOwnerPersistsResolvedRuntimeState(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{summary: map[string]any{
+		"platform_account_id": "cn:resolved-account",
+		"status":              "active",
+		"last_validated_at":   "2026-04-19T12:34:56Z",
+	}}
+	svc := NewOrchestrationService(reader, platformSvc, gateway)
+
+	summary, err := svc.PutCredentialForOwner(context.Background(), PutCredentialInput{
+		OwnerUserID:       7,
+		BindingID:         101,
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"abc"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.True(t, gateway.called)
+	require.NotNil(t, reader.persistedSummary)
+	assert.Equal(t, "cn:resolved-account", reader.persistedSummary.PlatformAccountID)
+	assert.Equal(t, "active", reader.persistedSummary.Status)
+	assert.Equal(t, []string{"mihomo.credential.bind"}, platformSvc.lastScope)
+}
+
+func TestPutCredentialForOwnerCompensatesOnResolvedBindingConflict(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	reader.err = nil
+	gateway := &fakeCredentialGateway{summary: map[string]any{
+		"platform_account_id": "cn:resolved-account",
+		"status":              "active",
+	}}
+	svc := NewOrchestrationService(failingPersistBindingReader{fakeRuntimeSummaryBindingReader: reader, err: ErrBindingAlreadyOwned}, platformSvc, gateway)
+
+	summary, err := svc.PutCredentialForOwner(context.Background(), PutCredentialInput{
+		OwnerUserID:       7,
+		BindingID:         101,
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"abc"}`),
+	})
+	require.ErrorIs(t, err, ErrBindingAlreadyOwned)
+	assert.Nil(t, summary)
+	assert.True(t, gateway.called)
+	assert.True(t, gateway.deleteCalled)
+	assert.Equal(t, uint64(101), gateway.deleteBindingID)
+	assert.Equal(t, sql.NullString{String: "cn:resolved-account", Valid: true}, gateway.deleteAccountKey)
+	assert.Equal(t, "127.0.0.1:9000", gateway.deleteEndpoint)
+	assert.Equal(t, []string{"mihomo.credential.delete"}, platformSvc.lastScope)
+}
+
+type failingPersistBindingReader struct {
+	*fakeRuntimeSummaryBindingReader
+	err error
+}
+
+func (f failingPersistBindingReader) PersistRuntimeSummary(bindingID uint64, summary RuntimeSummary) (*model.PlatformAccountBinding, error) {
+	f.fakeRuntimeSummaryBindingReader.id = bindingID
+	f.fakeRuntimeSummaryBindingReader.persistedSummary = &summary
+	return nil, f.err
+}

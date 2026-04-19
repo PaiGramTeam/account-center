@@ -82,7 +82,6 @@ type SessionResponse struct {
 // @Success 200 {object} response.Response
 // @Failure 401 {object} response.Response
 // @Failure 500 {object} response.Response
-// @Router /api/v1/sessions [get]
 func (h *Handler) ListSessions(c *gin.Context) {
 	userID, exists := middleware.GetUserID(c)
 	if !exists {
@@ -164,7 +163,6 @@ func (h *Handler) ListSessions(c *gin.Context) {
 // @Failure 401 {object} response.Response
 // @Failure 404 {object} response.Response
 // @Failure 500 {object} response.Response
-// @Router /api/v1/sessions/{id} [delete]
 func (h *Handler) RevokeSession(c *gin.Context) {
 	userID, exists := middleware.GetUserID(c)
 	if !exists {
@@ -236,7 +234,6 @@ func (h *Handler) RevokeSession(c *gin.Context) {
 // @Success 200 {object} response.Response
 // @Failure 401 {object} response.Response
 // @Failure 500 {object} response.Response
-// @Router /api/v1/sessions [delete]
 func (h *Handler) RevokeAllSessions(c *gin.Context) {
 	userID, exists := middleware.GetUserID(c)
 	if !exists {

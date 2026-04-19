@@ -44,26 +44,6 @@ type addEmailRequest struct {
 	Email string `json:"email" binding:"required"`
 }
 
-// swagger:route POST /api/v1/profiles/{id}/emails profile addEmail
-//
-// Add new email address.
-//
-// Adds a new email address to user profile and sends verification email.
-//
-// Consumes:
-//   - application/json
-//
-// Produces:
-//   - application/json
-//
-// Responses:
-//
-//	201: addEmailResponse
-//	400: profileErrorResponse
-//	404: profileErrorResponse
-//	409: profileErrorResponse
-//	500: profileErrorResponse
-//
 // AddEmail adds a new email address to user profile.
 func (h *EmailHandler) AddEmail(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
@@ -167,7 +147,6 @@ func (h *EmailHandler) AddEmail(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - cannot delete the only email"
 // @Failure 404 {object} gin.H "User or email not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/profiles/{id}/emails/{email} [delete]
 func (h *EmailHandler) DeleteEmail(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -255,7 +234,6 @@ func (h *EmailHandler) DeleteEmail(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - email must be verified before setting as primary"
 // @Failure 404 {object} gin.H "User or email not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/profiles/{id}/emails/{email}/primary [patch]
 func (h *EmailHandler) SetPrimaryEmail(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {
@@ -338,7 +316,6 @@ func (h *EmailHandler) SetPrimaryEmail(c *gin.Context) {
 // @Failure 404 {object} gin.H "User or email not found"
 // @Failure 429 {object} gin.H "Too many requests - rate limit exceeded"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/profiles/{id}/emails/{email}/verify [post]
 func (h *EmailHandler) ResendVerificationEmail(c *gin.Context) {
 	userID, err := parseUintID(c.Param("id"))
 	if err != nil {

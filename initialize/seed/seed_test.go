@@ -218,11 +218,11 @@ func TestSeedCasbinPoliciesAddsMissingRulesWhenPoliciesAlreadyExist(t *testing.T
 	err = SeedCasbinPolicies(db)
 	require.NoError(t, err)
 
-	hasPolicy, err := enforcer.Enforce(adminID, "/api/v1/casbin/authorities/1/policies", "GET")
+	hasPolicy, err := enforcer.Enforce(adminID, "/api/v1/admin/roles/1/permissions", "PUT")
 	require.NoError(t, err)
 	assert.True(t, hasPolicy)
 
-	hasPolicy, err = enforcer.Enforce(adminID, "/api/v1/authorities/1/permissions", "POST")
+	hasPolicy, err = enforcer.Enforce(adminID, "/api/v1/admin/roles/1/users", "GET")
 	require.NoError(t, err)
 	assert.True(t, hasPolicy)
 }
@@ -247,7 +247,7 @@ func TestSeedCasbinPoliciesInitializesEnforcerWhenNeeded(t *testing.T) {
 	err := db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error
 	require.NoError(t, err)
 
-	hasPolicy, err := enforcer.Enforce(strconv.FormatUint(adminRole.ID, 10), "/api/v1/casbin/authorities/1/policies", "GET")
+	hasPolicy, err := enforcer.Enforce(strconv.FormatUint(adminRole.ID, 10), "/api/v1/admin/roles/1/permissions", "PUT")
 	require.NoError(t, err)
 	assert.True(t, hasPolicy)
 }
@@ -324,7 +324,7 @@ func TestVerifySeedCasbinPoliciesDetectsMissingManagedPolicy(t *testing.T) {
 	require.NoError(t, db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error)
 
 	enforcer := casbin.GetEnforcer()
-	removed, err := enforcer.RemovePolicy(strconv.FormatUint(adminRole.ID, 10), "/api/v1/casbin/authorities/:id/policies", "GET")
+	removed, err := enforcer.RemovePolicy(strconv.FormatUint(adminRole.ID, 10), "/api/v1/admin/roles/:id/permissions", "PUT")
 	require.NoError(t, err)
 	require.True(t, removed)
 	require.NoError(t, enforcer.LoadPolicy())
@@ -333,7 +333,7 @@ func TestVerifySeedCasbinPoliciesDetectsMissingManagedPolicy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, drift, 1)
 	assert.Equal(t, model.RoleAdmin, drift[0].RoleName)
-	assert.Contains(t, normalizePolicySet(drift[0].Missing), strings.Join([]string{strconv.FormatUint(adminRole.ID, 10), "/api/v1/casbin/authorities/:id/policies", "GET"}, "|"))
+	assert.Contains(t, normalizePolicySet(drift[0].Missing), strings.Join([]string{strconv.FormatUint(adminRole.ID, 10), "/api/v1/admin/roles/:id/permissions", "PUT"}, "|"))
 	assert.Empty(t, drift[0].Unexpected)
 }
 

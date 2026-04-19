@@ -25,7 +25,7 @@ func TestMePlatformAccountRoutesEnforceOwnership(t *testing.T) {
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        ownerID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:123",
+		ExternalAccountKey: sql.NullString{String: "cn:123", Valid: true},
 		PlatformServiceKey: "platform-mihomo-service",
 		DisplayName:        "CN Main",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -102,7 +102,7 @@ func TestPlatformBindingRoutes(t *testing.T) {
 	binding := model.PlatformAccountBinding{
 		OwnerUserID:        ownerID,
 		Platform:           "mihomo",
-		ExternalAccountKey: "cn:owner-main",
+		ExternalAccountKey: sql.NullString{String: "cn:owner-main", Valid: true},
 		PlatformServiceKey: "platform-mihomo-service",
 		DisplayName:        "Owner Main",
 		Status:             model.PlatformAccountBindingStatusActive,
@@ -266,7 +266,7 @@ func TestPlatformBindingRoutes(t *testing.T) {
 		deletable := model.PlatformAccountBinding{
 			OwnerUserID:        ownerID,
 			Platform:           "mihomo",
-			ExternalAccountKey: fmt.Sprintf("cn:delete-%d", time.Now().UnixNano()),
+			ExternalAccountKey: sql.NullString{String: fmt.Sprintf("cn:delete-%d", time.Now().UnixNano()), Valid: true},
 			PlatformServiceKey: "platform-mihomo-service",
 			DisplayName:        "Delete Me",
 			Status:             model.PlatformAccountBindingStatusActive,

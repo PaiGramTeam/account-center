@@ -2,6 +2,7 @@ package platformbinding
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
 
@@ -12,7 +13,7 @@ var SupportedConsumers = []string{ConsumerPaiGramBot}
 type CreateBindingInput struct {
 	OwnerUserID        uint64
 	Platform           string
-	ExternalAccountKey string
+	ExternalAccountKey sql.NullString
 	PlatformServiceKey string
 	DisplayName        string
 }
@@ -45,4 +46,22 @@ type SyncProfilesInput struct {
 	BindingID uint64
 	Profiles  []ProfileProjectionInput
 	SyncedAt  time.Time
+}
+
+type PutCredentialInput struct {
+	OwnerUserID        uint64
+	BindingID          uint64
+	ActorType          string
+	ActorID            string
+	RequestedByAdminID uint64
+	CredentialPayload  json.RawMessage
+}
+
+type RuntimeSummary struct {
+	PlatformAccountID string           `json:"platform_account_id"`
+	Status            string           `json:"status"`
+	LastValidatedAt   any              `json:"last_validated_at"`
+	LastRefreshedAt   any              `json:"last_refreshed_at"`
+	Devices           []map[string]any `json:"devices"`
+	Profiles          []map[string]any `json:"profiles"`
 }

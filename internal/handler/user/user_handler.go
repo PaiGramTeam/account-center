@@ -105,7 +105,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Failure 400 {object} gin.H "Invalid request parameters"
 // @Failure 401 {object} gin.H "Unauthorized - authentication required"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users [get]
+// @Router /api/v1/admin/users [get]
 func (h *Handler) ListUsers(c *gin.Context) {
 	// Parse pagination parameters
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -173,7 +173,7 @@ func (h *Handler) ListUsers(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
 // @Failure 404 {object} gin.H "User not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users/{id} [get]
+// @Router /api/v1/admin/users/{id} [get]
 func (h *Handler) GetUser(c *gin.Context) {
 	id := c.Param("id")
 	userID, err := strconv.ParseUint(id, 10, 64)
@@ -391,7 +391,7 @@ func buildDeviceID(userAgent, clientIP string) string {
 // @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
 // @Failure 404 {object} gin.H "User not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users/{id}/sessions [get]
+// @Router /api/v1/admin/users/{id}/sessions [get]
 func (h *Handler) GetUserSessions(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -479,7 +479,7 @@ func (h *Handler) GetUserSessions(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
 // @Failure 404 {object} gin.H "Session not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users/{id}/sessions/{sessionId} [delete]
+// @Router /api/v1/admin/users/{id}/sessions/{sessionId} [delete]
 func (h *Handler) RevokeUserSession(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -541,7 +541,7 @@ func (h *Handler) RevokeUserSession(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - insufficient permissions"
 // @Failure 404 {object} gin.H "User not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users/{id}/security-summary [get]
+// @Router /api/v1/admin/users/{id}/security-summary [get]
 func (h *Handler) GetSecuritySummary(c *gin.Context) {
 	userID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -605,7 +605,7 @@ func (h *Handler) GetSecuritySummary(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - requires user:write permission"
 // @Failure 409 {object} gin.H "Email already registered"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users [post]
+// @Router /api/v1/admin/users [post]
 func (h *Handler) CreateUser(c *gin.Context) {
 	var req struct {
 		Email            string    `json:"email" binding:"required,email"`
@@ -748,7 +748,7 @@ func (h *Handler) CreateUser(c *gin.Context) {
 // @Failure 404 {object} gin.H "User not found"
 // @Failure 409 {object} gin.H "Conflict - data validation failed"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users/{id} [patch]
+// @Router /api/v1/admin/users/{id} [patch]
 func (h *Handler) UpdateUser(c *gin.Context) {
 	id := c.Param("id")
 	userID, err := strconv.ParseUint(id, 10, 64)
@@ -854,7 +854,7 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 // @Failure 403 {object} gin.H "Forbidden - requires user:delete permission"
 // @Failure 404 {object} gin.H "User not found"
 // @Failure 500 {object} gin.H "Internal server error"
-// @Router /api/v1/users/{id} [delete]
+// @Router /api/v1/admin/users/{id} [delete]
 func (h *Handler) DeleteUser(c *gin.Context) {
 	id := c.Param("id")
 	userID, err := strconv.ParseUint(id, 10, 64)
@@ -892,7 +892,7 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 	c.Status(204)
 }
 
-// swagger:route PATCH /api/v1/users/{id}/status users updateUserStatus
+// swagger:route PATCH /api/v1/admin/users/{id}/status users updateUserStatus
 //
 // 更新用户状态（管理员功能）。
 //
@@ -956,7 +956,7 @@ func (h *Handler) UpdateUserStatus(c *gin.Context) {
 	})
 }
 
-// swagger:route POST /api/v1/users/{id}/reset-password users resetUserPassword
+// swagger:route POST /api/v1/admin/users/{id}/reset-password users resetUserPassword
 //
 // 重置用户密码（管理员功能）。
 //
@@ -1036,7 +1036,7 @@ func (h *Handler) ResetUserPassword(c *gin.Context) {
 	})
 }
 
-// swagger:route GET /api/v1/users/{id}/audit-logs users getAuditLogs
+// swagger:route GET /api/v1/admin/users/{id}/audit-logs users getAuditLogs
 //
 // 获取用户操作日志。
 //
@@ -1116,7 +1116,7 @@ func (h *Handler) GetAuditLogs(c *gin.Context) {
 	response.SuccessWithPagination(c, logList, total, page, pageSize)
 }
 
-// swagger:route GET /api/v1/users/{id}/roles users getUserRoles
+// swagger:route GET /api/v1/admin/users/{id}/roles users getUserRoles
 //
 // 获取用户角色列表。
 //
@@ -1194,6 +1194,22 @@ func (h *Handler) GetUserRoles(c *gin.Context) {
 }
 
 // PutUserRoles replaces a user's role assignments.
+// @Summary Replace user roles
+// @Description Replace the full role assignment set for a user and optionally update the primary role.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param body body ReplaceUserRolesRequest true "Role replacement payload"
+// @Success 200 {object} gin.H
+// @Failure 400 {object} gin.H
+// @Failure 401 {object} gin.H
+// @Failure 403 {object} gin.H
+// @Failure 404 {object} gin.H
+// @Failure 422 {object} gin.H
+// @Failure 500 {object} gin.H
+// @Router /api/v1/admin/users/{id}/roles [put]
 func (h *Handler) PutUserRoles(c *gin.Context) {
 	targetUserID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -1223,6 +1239,22 @@ func (h *Handler) PutUserRoles(c *gin.Context) {
 }
 
 // PatchPrimaryRole updates a user's primary role.
+// @Summary Patch primary role
+// @Description Update or clear the primary role for a user.
+// @Tags users
+// @Accept json
+// @Produce json
+// @Security BearerAuth
+// @Param id path int true "User ID"
+// @Param body body PatchPrimaryRoleRequest true "Primary role patch payload"
+// @Success 200 {object} gin.H
+// @Failure 400 {object} gin.H
+// @Failure 401 {object} gin.H
+// @Failure 403 {object} gin.H
+// @Failure 404 {object} gin.H
+// @Failure 422 {object} gin.H
+// @Failure 500 {object} gin.H
+// @Router /api/v1/admin/users/{id}/primary-role [patch]
 func (h *Handler) PatchPrimaryRole(c *gin.Context) {
 	targetUserID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil {
@@ -1260,7 +1292,7 @@ func (h *Handler) PatchPrimaryRole(c *gin.Context) {
 	response.Success(c, gin.H{"primary_role_id": nullableUserRoleID(updatedUser.PrimaryRoleID)})
 }
 
-// swagger:route GET /api/v1/users/{id}/permissions users getUserPermissions
+// swagger:route GET /api/v1/admin/users/{id}/permissions users getUserPermissions
 //
 // 获取用户权限列表。
 //

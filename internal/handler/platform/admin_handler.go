@@ -58,7 +58,6 @@ func NewAdminHandler(platformService platformAdminService) *AdminHandler {
 	return &AdminHandler{platformService: platformService}
 }
 
-// swagger:route GET /api/v1/platform-services platform-admin listPlatformServices
 // List platform services.
 func (h *AdminHandler) ListPlatformServices(c *gin.Context) {
 	items, err := h.platformService.ListPlatformServices(c.Request.Context())
@@ -70,7 +69,6 @@ func (h *AdminHandler) ListPlatformServices(c *gin.Context) {
 	response.Success(c, items)
 }
 
-// swagger:route GET /api/v1/platform-services/{id} platform-admin getPlatformService
 // Get a platform service.
 func (h *AdminHandler) GetPlatformService(c *gin.Context) {
 	id, ok := parsePlatformServiceID(c)
@@ -87,7 +85,6 @@ func (h *AdminHandler) GetPlatformService(c *gin.Context) {
 	response.Success(c, item)
 }
 
-// swagger:route POST /api/v1/platform-services platform-admin createPlatformService
 // Create a platform service.
 func (h *AdminHandler) CreatePlatformService(c *gin.Context) {
 	var req CreatePlatformServiceRequest
@@ -119,7 +116,6 @@ func (h *AdminHandler) CreatePlatformService(c *gin.Context) {
 	})
 }
 
-// swagger:route PATCH /api/v1/platform-services/{id} platform-admin updatePlatformService
 // Update a platform service.
 func (h *AdminHandler) UpdatePlatformService(c *gin.Context) {
 	id, ok := parsePlatformServiceID(c)
@@ -153,7 +149,6 @@ func (h *AdminHandler) UpdatePlatformService(c *gin.Context) {
 	response.Success(c, item)
 }
 
-// swagger:route DELETE /api/v1/platform-services/{id} platform-admin deletePlatformService
 // Delete a platform service.
 func (h *AdminHandler) DeletePlatformService(c *gin.Context) {
 	id, ok := parsePlatformServiceID(c)
@@ -169,7 +164,6 @@ func (h *AdminHandler) DeletePlatformService(c *gin.Context) {
 	response.NoContent(c)
 }
 
-// swagger:route POST /api/v1/platform-services/{id}/check platform-admin checkPlatformService
 // Check a platform service.
 func (h *AdminHandler) CheckPlatformService(c *gin.Context) {
 	id, ok := parsePlatformServiceID(c)

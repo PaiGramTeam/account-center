@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -42,6 +44,22 @@ func setupTestDB(t *testing.T) *gorm.DB {
 func setupTestHandler(db *gorm.DB) *Handler {
 	serviceGroup := serviceUser.NewServiceGroup(db)
 	return NewHandlerWithDB(&serviceGroup.UserService, db)
+}
+
+func TestManagementSwaggerAnnotationsUseAdminUserNamespace(t *testing.T) {
+	userHandlerSource, err := os.ReadFile("user_handler.go")
+	require.NoError(t, err)
+	userSource := string(userHandlerSource)
+	assert.NotContains(t, userSource, "@Router /api/v1/users ")
+	assert.NotContains(t, userSource, "@Router /api/v1/users/")
+	assert.NotContains(t, userSource, "swagger:route PATCH /api/v1/users/")
+	assert.NotContains(t, userSource, "swagger:route POST /api/v1/users/")
+	assert.NotContains(t, userSource, "swagger:route GET /api/v1/users/")
+
+	loginLogSourceBytes, err := os.ReadFile(filepath.Join("login_logs.go"))
+	require.NoError(t, err)
+	loginLogSource := string(loginLogSourceBytes)
+	assert.NotContains(t, loginLogSource, "@Router /api/v1/users/")
 }
 
 func TestHandler_CreateUser(t *testing.T) {

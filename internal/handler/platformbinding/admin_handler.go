@@ -1,24 +1,31 @@
 package platformbinding
 
 import (
+	"strconv"
+
 	"github.com/gin-gonic/gin"
 
 	"paigram/internal/response"
+	serviceplatformbinding "paigram/internal/service/platformbinding"
 )
 
 // AdminHandler manages admin platform binding routes.
 type AdminHandler struct {
-	bindingService bindingService
-	profileService profileService
-	grantService   grantService
+	bindingService        bindingService
+	profileService        profileService
+	grantService          grantService
+	orchestrationService  orchestrationService
+	runtimeSummaryService runtimeSummaryService
 }
 
 // NewAdminHandler constructs an admin platform binding handler.
-func NewAdminHandler(bindingService bindingService, profileService profileService, grantService grantService) *AdminHandler {
+func NewAdminHandler(bindingService bindingService, profileService profileService, grantService grantService, orchestrationService orchestrationService, runtimeSummaryService runtimeSummaryService) *AdminHandler {
 	return &AdminHandler{
-		bindingService: bindingService,
-		profileService: profileService,
-		grantService:   grantService,
+		bindingService:        bindingService,
+		profileService:        profileService,
+		grantService:          grantService,
+		orchestrationService:  orchestrationService,
+		runtimeSummaryService: runtimeSummaryService,
 	}
 }
 
@@ -129,13 +136,63 @@ func (h *AdminHandler) RefreshBinding(c *gin.Context) {
 		return
 	}
 
-	binding, err := h.bindingService.RefreshBinding(bindingID)
+	binding, err := h.orchestrationService.RefreshBindingAsAdmin(c.Request.Context(), bindingID)
 	if err != nil {
 		writeBindingError(c, err, "failed to refresh platform binding")
 		return
 	}
 
 	response.Success(c, buildAdminBindingView(binding))
+}
+
+// swagger:route PUT /api/v1/admin/platform-accounts/{bindingId}/credential platformbinding-admin putPlatformBindingCredential
+// Update one platform binding credential across all users via orchestration.
+func (h *AdminHandler) PutCredential(c *gin.Context) {
+	bindingID, ok := parseBindingID(c)
+	if !ok {
+		return
+	}
+
+	adminUserID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	payload, ok := readCredentialPayload(c)
+	if !ok {
+		return
+	}
+
+	summary, err := h.orchestrationService.PutCredentialAsAdmin(c.Request.Context(), serviceplatformbinding.PutCredentialInput{
+		BindingID:          bindingID,
+		ActorType:          "admin",
+		ActorID:            "admin:" + strconv.FormatUint(adminUserID, 10),
+		RequestedByAdminID: adminUserID,
+		CredentialPayload:  payload,
+	})
+	if err != nil {
+		writeBindingError(c, err, "failed to update platform credential")
+		return
+	}
+
+	response.Success(c, summary)
+}
+
+// swagger:route GET /api/v1/admin/platform-accounts/{bindingId}/runtime-summary platformbinding-admin getPlatformBindingRuntimeSummary
+// Get one platform binding runtime summary across all users.
+func (h *AdminHandler) GetRuntimeSummary(c *gin.Context) {
+	bindingID, ok := parseBindingID(c)
+	if !ok {
+		return
+	}
+
+	summary, err := h.runtimeSummaryService.GetRuntimeSummaryAsAdmin(c.Request.Context(), bindingID)
+	if err != nil {
+		writeBindingError(c, err, "failed to get runtime summary")
+		return
+	}
+
+	response.Success(c, summary)
 }
 
 // swagger:route DELETE /api/v1/admin/platform-accounts/{bindingId} platformbinding-admin deletePlatformBinding

@@ -478,15 +478,20 @@ func validateDeleteLoginMethod(primary model.LoginType, credentials []model.User
 }
 
 func primaryLoginProvider(primary model.LoginType, credentials []model.UserCredential) string {
-	switch primary {
-	case model.LoginTypeEmail, model.LoginTypeGoogle, model.LoginTypeGithub, model.LoginTypeTelegram:
-		return string(primary)
-	case model.LoginTypeOAuth:
+	primaryProvider := strings.ToLower(strings.TrimSpace(string(primary)))
+	switch primaryProvider {
+	case "":
+		return ""
+	case string(model.LoginTypeEmail):
+		return string(model.LoginTypeEmail)
+	case string(model.LoginTypeOAuth):
 		for _, credential := range orderLoginMethodCredentials(credentials) {
 			if credential.Provider != string(model.LoginTypeEmail) {
 				return credential.Provider
 			}
 		}
+	default:
+		return primaryProvider
 	}
 	return ""
 }

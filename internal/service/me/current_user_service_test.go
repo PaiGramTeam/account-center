@@ -91,6 +91,23 @@ func TestBuildLoginMethodViewsUsesProviderSpecificPrimaryLoginType(t *testing.T)
 	assert.False(t, views[2].IsPrimary)
 }
 
+func TestBuildLoginMethodViewsUsesCustomProviderPrimaryLoginType(t *testing.T) {
+	base := time.Now().UTC()
+	views := buildLoginMethodViews(model.LoginType("discord"), []model.UserCredential{
+		{Provider: "google", ProviderAccountID: "google-1", CreatedAt: base},
+		{Provider: "discord", ProviderAccountID: "discord-1", CreatedAt: base.Add(time.Minute)},
+		{Provider: "email", ProviderAccountID: "user@example.com", CreatedAt: base.Add(2 * time.Minute)},
+	})
+
+	require.Len(t, views, 3)
+	assert.Equal(t, "google", views[0].Provider)
+	assert.False(t, views[0].IsPrimary)
+	assert.Equal(t, "discord", views[1].Provider)
+	assert.True(t, views[1].IsPrimary)
+	assert.Equal(t, "email", views[2].Provider)
+	assert.False(t, views[2].IsPrimary)
+}
+
 func TestBuildLoginMethodViewsOrdersSameCreatedAtDeterministically(t *testing.T) {
 	createdAt := time.Now().UTC()
 	views := buildLoginMethodViews(model.LoginTypeOAuth, []model.UserCredential{
@@ -126,6 +143,17 @@ func TestValidateDeleteLoginMethodProtectsExplicitPrimaryProvider(t *testing.T) 
 
 	require.NoError(t, validateDeleteLoginMethod(model.LoginTypeGoogle, credentials, "github"))
 	require.ErrorIs(t, validateDeleteLoginMethod(model.LoginTypeGoogle, credentials, "google"), ErrCannotUnbindPrimaryLogin)
+}
+
+func TestValidateDeleteLoginMethodProtectsCustomPrimaryProvider(t *testing.T) {
+	credentials := []model.UserCredential{
+		{Provider: "discord", ProviderAccountID: "discord-1", CreatedAt: time.Now().UTC()},
+		{Provider: "github", ProviderAccountID: "github-1", CreatedAt: time.Now().UTC().Add(time.Minute)},
+		{Provider: "email", ProviderAccountID: "user@example.com", CreatedAt: time.Now().UTC().Add(2 * time.Minute)},
+	}
+
+	require.NoError(t, validateDeleteLoginMethod(model.LoginType("discord"), credentials, "github"))
+	require.ErrorIs(t, validateDeleteLoginMethod(model.LoginType("discord"), credentials, "discord"), ErrCannotUnbindPrimaryLogin)
 }
 
 func TestCurrentUserServiceDeleteLoginMethodAllowsSecondaryOAuthButProtectsPrimary(t *testing.T) {

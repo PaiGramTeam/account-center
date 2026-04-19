@@ -47,7 +47,7 @@ type UserListItem struct {
 	Status           model.UserStatus `json:"status"`
 	PrimaryLoginType model.LoginType  `json:"primary_login_type"`
 	DisplayName      string           `json:"display_name"`
-	PrimaryEmail     string           `json:"primary_email"`
+	AvatarURL        string           `json:"avatar_url,omitempty"`
 	Roles            []string         `json:"roles,omitempty"`
 	LastLoginAt      *time.Time       `json:"last_login_at,omitempty"`
 	CreatedAt        time.Time        `json:"created_at"`
@@ -101,8 +101,12 @@ type Pagination struct {
 
 // swagger:model userListResponse
 type UserListResponse struct {
-	Data       []UserListItem `json:"data"`
-	Pagination Pagination     `json:"pagination"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Items      []UserListItem `json:"items"`
+		Pagination Pagination     `json:"pagination"`
+	} `json:"data"`
 }
 
 // swagger:response userListResponse
@@ -133,7 +137,9 @@ type UserDetail struct {
 
 // swagger:model userDetailResponse
 type UserDetailResponse struct {
-	Data UserDetail `json:"data"`
+	Code    int        `json:"code"`
+	Message string     `json:"message"`
+	Data    UserDetail `json:"data"`
 }
 
 // swagger:response userDetailResponse
@@ -185,7 +191,9 @@ type CreateUserRequest struct {
 
 // swagger:model createUserResponse
 type CreateUserResponse struct {
-	Data UserDetail `json:"data"`
+	Code    int        `json:"code"`
+	Message string     `json:"message"`
+	Data    UserDetail `json:"data"`
 }
 
 // swagger:response createUserResponse
@@ -224,7 +232,9 @@ type UpdateUserRequest struct {
 
 // swagger:model updateUserResponse
 type UpdateUserResponse struct {
-	Data UserDetail `json:"data"`
+	Code    int        `json:"code"`
+	Message string     `json:"message"`
+	Data    UserDetail `json:"data"`
 }
 
 // swagger:response updateUserResponse
@@ -379,8 +389,12 @@ type AuditLogItem struct {
 
 // swagger:model auditLogsResponse
 type AuditLogsResponse struct {
-	Data       []AuditLogItem `json:"data"`
-	Pagination Pagination     `json:"pagination"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Items      []AuditLogItem `json:"items"`
+		Pagination Pagination     `json:"pagination"`
+	} `json:"data"`
 }
 
 // swagger:response auditLogsResponse
@@ -432,8 +446,12 @@ type UserRoleItem struct {
 
 // swagger:model userRolesResponse
 type UserRolesResponse struct {
-	Data       []UserRoleItem `json:"data"`
-	Pagination Pagination     `json:"pagination"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Items      []UserRoleItem `json:"items"`
+		Pagination Pagination     `json:"pagination"`
+	} `json:"data"`
 }
 
 // swagger:response userRolesResponse
@@ -480,15 +498,25 @@ type UserPermissionItem struct {
 	InheritedFrom []string `json:"inherited_from"`
 }
 
+// swagger:model userPermissionsMeta
+type UserPermissionsMeta struct {
+	// User's assigned roles
+	// example: ["admin", "moderator"]
+	Roles []string `json:"roles"`
+}
+
+// swagger:model userPermissionsData
+type UserPermissionsData struct {
+	Items      []UserPermissionItem `json:"items"`
+	Pagination Pagination           `json:"pagination"`
+	Meta       UserPermissionsMeta  `json:"meta"`
+}
+
 // swagger:model userPermissionsResponse
 type UserPermissionsResponse struct {
-	Data       []UserPermissionItem `json:"data"`
-	Pagination Pagination           `json:"pagination"`
-	Meta       struct {
-		// User's assigned roles
-		// example: ["admin", "moderator"]
-		Roles []string `json:"roles"`
-	} `json:"meta"`
+	Code    int                 `json:"code"`
+	Message string              `json:"message"`
+	Data    UserPermissionsData `json:"data"`
 }
 
 // swagger:response userPermissionsResponse

@@ -47,19 +47,30 @@ type swaggerPlatformBindingConsumerGrantItem struct {
 	UpdatedAt string  `json:"updated_at"`
 }
 
+// swagger:model platformBindingPagination
+type swaggerPlatformBindingPagination struct {
+	Total      int64 `json:"total"`
+	Page       int   `json:"page"`
+	PageSize   int   `json:"page_size"`
+	TotalPages int   `json:"total_pages"`
+}
+
 // swagger:model platformBindingListData
 type swaggerPlatformBindingListData struct {
-	Items []swaggerPlatformBindingItem `json:"items"`
+	Items      []swaggerPlatformBindingItem     `json:"items"`
+	Pagination swaggerPlatformBindingPagination `json:"pagination"`
 }
 
 // swagger:model platformBindingProfileListData
 type swaggerPlatformBindingProfileListData struct {
-	Items []swaggerPlatformBindingProfileItem `json:"items"`
+	Items      []swaggerPlatformBindingProfileItem `json:"items"`
+	Pagination swaggerPlatformBindingPagination    `json:"pagination"`
 }
 
 // swagger:model platformBindingConsumerGrantListData
 type swaggerPlatformBindingConsumerGrantListData struct {
-	Items []swaggerPlatformBindingConsumerGrantItem `json:"items"`
+	Items      []swaggerPlatformBindingConsumerGrantItem `json:"items"`
+	Pagination swaggerPlatformBindingPagination          `json:"pagination"`
 }
 
 // swagger:model platformBindingEnvelope
@@ -137,6 +148,22 @@ type swaggerCreatePlatformBindingParams struct {
 	// in: body
 	// required: true
 	Body CreateBindingRequest
+}
+
+// swagger:parameters listMyPlatformBindings listMyPlatformBindingProfiles listMyPlatformBindingConsumerGrants listPlatformBindings listPlatformBindingProfiles listPlatformBindingConsumerGrants
+type swaggerPlatformBindingPaginationParams struct {
+	// Page number.
+	// in: query
+	// default: 1
+	// minimum: 1
+	Page int `json:"page"`
+
+	// Number of items per page.
+	// in: query
+	// default: 20
+	// minimum: 1
+	// maximum: 100
+	PageSize int `json:"page_size"`
 }
 
 // swagger:parameters getMyPlatformBinding deleteMyPlatformBinding listMyPlatformBindingProfiles listMyPlatformBindingConsumerGrants putMyPlatformBindingConsumerGrant getPlatformBinding listPlatformBindingProfiles listPlatformBindingConsumerGrants putPlatformBindingConsumerGrant refreshPlatformBinding deletePlatformBinding

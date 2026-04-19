@@ -210,7 +210,7 @@ func (s *AuthorityService) ListAuthorities(params ListAuthoritiesParams) (*ListA
 
 	// 分页查询
 	offset := (params.Page - 1) * params.PageSize
-	if err := query.Offset(offset).Limit(params.PageSize).Find(&roles).Error; err != nil {
+	if err := query.Order("created_at DESC, id DESC").Offset(offset).Limit(params.PageSize).Find(&roles).Error; err != nil {
 		return nil, err
 	}
 
@@ -229,9 +229,10 @@ func (s *AuthorityService) ListAuthorities(params ListAuthoritiesParams) (*ListA
 	}
 
 	return &ListAuthoritiesResult{
-		Total: int(total),
-		Page:  params.Page,
-		Data:  data,
+		Total:    int(total),
+		Page:     params.Page,
+		PageSize: params.PageSize,
+		Data:     data,
 	}, nil
 }
 

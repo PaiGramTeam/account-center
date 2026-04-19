@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -101,7 +102,7 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 // @Param order query string false "Sort order (asc, desc)" default(desc) Enums(asc, desc)
 // @Param status query string false "Filter by user status (active, pending, suspended, deleted)"
 // @Param search query string false "Search by email or display name"
-// @Success 200 {object} response.PaginatedResponse "Successfully retrieved user list"
+// @Success 200 {object} UserListResponse "Successfully retrieved user list"
 // @Failure 400 {object} gin.H "Invalid request parameters"
 // @Failure 401 {object} gin.H "Unauthorized - authentication required"
 // @Failure 500 {object} gin.H "Internal server error"
@@ -110,6 +111,15 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	// Parse pagination parameters
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
 	sortBy := c.DefaultQuery("sort_by", "created_at")
 	order := c.DefaultQuery("order", "desc")
 	status := c.Query("status")
@@ -1326,6 +1336,16 @@ func (h *Handler) GetUserPermissions(c *gin.Context) {
 		pageSize = 50
 	}
 
+	var existingUser model.User
+	if err := h.db.Select("id").First(&existingUser, userID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			response.NotFound(c, "user not found")
+			return
+		}
+		response.InternalServerErrorWithCode(c, response.ErrCodeDatabaseError, "failed to load user", nil)
+		return
+	}
+
 	// Get user's roles
 	var userRoles []model.UserRole
 	if err := h.db.Where("user_id = ?", userID).Preload("Role.Permissions").Find(&userRoles).Error; err != nil {
@@ -1350,6 +1370,21 @@ func (h *Handler) GetUserPermissions(c *gin.Context) {
 	var permissions []model.Permission
 	for _, perm := range permissionMap {
 		permissions = append(permissions, perm)
+	}
+	sort.Slice(permissions, func(i, j int) bool {
+		if permissions[i].Resource != permissions[j].Resource {
+			return permissions[i].Resource < permissions[j].Resource
+		}
+		if permissions[i].Action != permissions[j].Action {
+			return permissions[i].Action < permissions[j].Action
+		}
+		if permissions[i].Name != permissions[j].Name {
+			return permissions[i].Name < permissions[j].Name
+		}
+		return permissions[i].ID < permissions[j].ID
+	})
+	for permissionID := range inheritedFrom {
+		sort.Strings(inheritedFrom[permissionID])
 	}
 
 	// Calculate total before pagination
@@ -1387,22 +1422,11 @@ func (h *Handler) GetUserPermissions(c *gin.Context) {
 	for _, ur := range userRoles {
 		roleNames = append(roleNames, ur.Role.Name)
 	}
+	sort.Strings(roleNames)
 
-	// Create response with additional metadata
-	responseData := gin.H{
-		"data": permList,
-		"pagination": gin.H{
-			"total":       total,
-			"page":        page,
-			"page_size":   pageSize,
-			"total_pages": int(total)/pageSize + 1,
-		},
-		"meta": gin.H{
-			"roles": roleNames,
-		},
-	}
-
-	response.Success(c, responseData)
+	response.SuccessWithPaginationMeta(c, permList, total, page, pageSize, gin.H{
+		"roles": roleNames,
+	})
 }
 
 func writeUserRoleMutationError(c *gin.Context, err error) {

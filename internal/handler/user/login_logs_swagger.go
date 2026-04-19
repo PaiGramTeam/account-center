@@ -84,15 +84,19 @@ type PaginationInfo struct {
 	TotalPages int `json:"total_pages"`
 }
 
+// swagger:model loginLogsResponse
+type LoginLogsResponse struct {
+	// in: body
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		Items      []LoginLogEntry `json:"items"`
+		Pagination PaginationInfo  `json:"pagination"`
+	} `json:"data"`
+}
+
 // swagger:response loginLogsResponse
 type loginLogsResponseWrapper struct {
 	// in: body
-	Body struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			Data       []LoginLogEntry `json:"data"`
-			Pagination PaginationInfo  `json:"pagination"`
-		} `json:"data"`
-	}
+	Body LoginLogsResponse
 }

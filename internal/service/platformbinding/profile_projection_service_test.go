@@ -2,6 +2,7 @@ package platformbinding
 
 import (
 	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -128,6 +129,44 @@ func TestProfileProjectionServiceRejectsMultiplePrimaryProfiles(t *testing.T) {
 		},
 	})
 	require.ErrorIs(t, err, ErrMultiplePrimaryProfiles)
+}
+
+func TestListProfilesPaginatesResults(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewProfileProjectionService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: ns("cn:profiles"),
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Profile List",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, db.Create(&model.PlatformAccountProfile{
+			BindingID:          binding.ID,
+			PlatformProfileKey: fmt.Sprintf("gs:%d", i),
+			GameBiz:            "hk4e_cn",
+			Region:             "cn_gf01",
+			PlayerUID:          fmt.Sprintf("1000%d", i),
+			Nickname:           fmt.Sprintf("Traveler %d", i),
+			IsPrimary:          i == 0,
+		}).Error)
+	}
+
+	items, total, err := service.ListProfiles(binding.ID, ListParams{Page: 2, PageSize: 1})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), total)
+	require.Len(t, items, 1)
+
+	ownerItems, ownerTotal, err := service.ListProfilesForOwner(owner.ID, binding.ID, ListParams{Page: 1, PageSize: 2})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), ownerTotal)
+	require.Len(t, ownerItems, 2)
 }
 
 func TestProfileProjectionServiceSyncProfilesDoesNotClobberRuntimeSummaryFields(t *testing.T) {

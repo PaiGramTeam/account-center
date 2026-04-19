@@ -213,14 +213,6 @@ func TestRoleManagementRoutesRequireRoleManagePermission(t *testing.T) {
 	require.NoError(t, stack.DB.Create(&customRole).Error)
 	require.NoError(t, stack.DB.Create(&model.UserRole{UserID: actorID, RoleID: customRole.ID, GrantedBy: actorID}).Error)
 
-	roleIDStr := fmt.Sprintf("%d", customRole.ID)
-	_, err := casbin.GetEnforcer().AddPolicies([][]string{
-		{roleIDStr, "/api/v1/admin/roles/:id/permissions", "PUT"},
-		{roleIDStr, "/api/v1/admin/roles/:id/users", "PUT"},
-	})
-	require.NoError(t, err)
-	require.NoError(t, casbin.GetEnforcer().LoadPolicy())
-
 	permission := model.Permission{
 		Name:        fmt.Sprintf("custom:grant:%d", time.Now().UnixNano()),
 		Resource:    model.ResourceUser,
@@ -247,6 +239,15 @@ func TestRoleManagementRoutesRequireRoleManagePermission(t *testing.T) {
 	require.NoError(t, stack.DB.Create(&privilegedRole).Error)
 
 	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceRole, model.ActionManage))
+
+	assignPermissionAllowed := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/admin/roles/%d/permissions", customRole.ID), map[string]any{
+			"permission_ids": []uint64{permission.ID},
+		}, headers)
+	require.Equal(t, http.StatusOK, assignPermissionAllowed.Code, assignPermissionAllowed.Body.String())
+
+	require.NoError(t, stack.DB.Model(&model.RolePermission{}).Where("role_id = ? AND permission_id = ?", customRole.ID, permission.ID).Count(&rolePermissionCount).Error)
+	assert.Equal(t, int64(1), rolePermissionCount)
 
 	addSelfRes := performJSONRequest(t, stack.Router, http.MethodPut,
 		fmt.Sprintf("/api/v1/admin/roles/%d/users", privilegedRole.ID), map[string]any{
@@ -316,6 +317,7 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 
 	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "self-service")
 	headers := authHeaders(accessToken)
+	require.NoError(t, stack.DB.Create(&model.AuditLog{UserID: userID, Action: "session.self_viewed", Details: "self activity", IP: "192.0.2.30"}).Error)
 
 	loginLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me/activity-logs", nil, headers)
 	require.Equal(t, http.StatusOK, loginLogsRes.Code, loginLogsRes.Body.String())
@@ -639,10 +641,18 @@ func mapPermissionToPolicies(permName string) []PolicyRule {
 			{"/api/v1/admin/users/*", "PATCH"},
 			{"/api/v1/admin/users/*", "PUT"},
 		}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionCreate):
+		return []PolicyRule{{"/api/v1/admin/users", "POST"}}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionUpdate):
+		return []PolicyRule{{"/api/v1/admin/users/*", "PATCH"}, {"/api/v1/admin/users/*", "PUT"}}
 	case model.PermUserDelete:
 		return []PolicyRule{
 			{"/api/v1/admin/users/*", "DELETE"},
 		}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionDelete):
+		return []PolicyRule{{"/api/v1/admin/users/*", "DELETE"}}
+	case model.BuildPermissionName(model.ResourceUser, model.ActionList):
+		return []PolicyRule{{"/api/v1/admin/users", "GET"}}
 	case model.PermUserManage:
 		return []PolicyRule{
 			{"/api/v1/admin/users/*", "GET"},
@@ -662,10 +672,18 @@ func mapPermissionToPolicies(permName string) []PolicyRule {
 			{"/api/v1/admin/roles/*", "PATCH"},
 			{"/api/v1/admin/roles/*", "PUT"},
 		}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionCreate):
+		return []PolicyRule{{"/api/v1/admin/roles", "POST"}}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionUpdate):
+		return []PolicyRule{{"/api/v1/admin/roles/*", "PATCH"}, {"/api/v1/admin/roles/*", "PUT"}}
 	case model.PermRoleDelete:
 		return []PolicyRule{
 			{"/api/v1/admin/roles/*", "DELETE"},
 		}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionDelete):
+		return []PolicyRule{{"/api/v1/admin/roles/*", "DELETE"}}
+	case model.BuildPermissionName(model.ResourceRole, model.ActionList):
+		return []PolicyRule{{"/api/v1/admin/roles", "GET"}}
 	case model.PermRoleManage:
 		return []PolicyRule{
 			{"/api/v1/admin/roles/*/users", "PUT"},

@@ -79,6 +79,12 @@ func TestManagementSwaggerAnnotationsUseAdminUserNamespace(t *testing.T) {
 	require.NoError(t, err)
 	loginLogSource := string(loginLogSourceBytes)
 	assert.NotContains(t, loginLogSource, "@Router /api/v1/users/")
+
+	loginMethodSourceBytes, err := os.ReadFile(filepath.Join("login_method_handler.go"))
+	require.NoError(t, err)
+	loginMethodSource := string(loginMethodSourceBytes)
+	assert.NotContains(t, loginMethodSource, "@Router /api/v1/users/")
+	assert.Contains(t, loginMethodSource, "/api/v1/admin/users/{id}/login-methods")
 }
 
 func TestHandler_CreateUser(t *testing.T) {

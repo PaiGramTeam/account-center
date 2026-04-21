@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -22,6 +23,7 @@ import (
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	serviceme "paigram/internal/service/me"
 	"paigram/internal/service/user"
 	"paigram/internal/sessioncache"
 )
@@ -29,8 +31,15 @@ import (
 // Handler exposes REST handlers for user resources.
 type Handler struct {
 	userService  UserServiceInterface
+	loginMethods LoginMethodService
 	sessionCache sessioncache.Store
 	db           *gorm.DB // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
+}
+
+// LoginMethodService defines reusable login-method operations shared with /me.
+type LoginMethodService interface {
+	ListLoginMethods(ctx context.Context, userID uint64) ([]serviceme.LoginMethodView, error)
+	SetPrimaryLoginMethod(ctx context.Context, userID uint64, provider string) error
 }
 
 // UserServiceInterface defines the interface for user business logic.
@@ -70,6 +79,7 @@ func NewHandlerWithDBAndCache(userService UserServiceInterface, db *gorm.DB, cac
 	}
 	return &Handler{
 		userService:  userService,
+		loginMethods: serviceme.NewCurrentUserService(db),
 		sessionCache: cache,
 		db:           db,
 	}

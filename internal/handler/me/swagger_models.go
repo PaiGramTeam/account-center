@@ -232,6 +232,15 @@ type deleteMeLoginMethodParams struct {
 	Provider string `json:"provider"`
 }
 
+// swagger:parameters patchMePrimaryLoginMethod
+type patchMePrimaryLoginMethodParams struct {
+	// Provider key.
+	// in: path
+	// required: true
+	// example: github
+	Provider string `json:"provider"`
+}
+
 // swagger:parameters updateMePassword
 type updateMePasswordParams struct {
 	// Password update payload.

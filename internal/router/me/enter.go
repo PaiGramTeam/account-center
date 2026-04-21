@@ -27,6 +27,7 @@ func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
 		me.PATCH("/emails/:emailId/primary", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.PatchPrimaryEmail)
 		me.POST("/emails/:emailId/verify", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.VerifyEmail)
 		me.GET("/login-methods", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.ListLoginMethods)
+		me.PATCH("/login-methods/:provider/primary", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.PatchPrimaryLoginMethod)
 		me.PUT("/login-methods/:provider", fresh, handler.ApiGroupApp.AuthApiGroup.Handler.StartBindLoginMethod)
 		me.DELETE("/login-methods/:provider", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.DeleteLoginMethod)
 		me.GET("/security/overview", handler.ApiGroupApp.MeApiGroup.SecurityHandler.GetOverview)

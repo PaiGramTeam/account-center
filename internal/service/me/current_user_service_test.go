@@ -179,6 +179,22 @@ func TestCurrentUserServiceDeleteLoginMethodAllowsSecondaryOAuthButProtectsPrima
 	assert.EqualValues(t, 1, googleCount)
 }
 
+func TestCurrentUserServiceSetPrimaryLoginMethodPromotesBoundProvider(t *testing.T) {
+	db := setupMeServiceTestDB(t)
+	service := NewCurrentUserService(db)
+	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.UserCredential{UserID: user.ID, Provider: "email", ProviderAccountID: "user@example.com"}).Error)
+	require.NoError(t, db.Create(&model.UserCredential{UserID: user.ID, Provider: "github", ProviderAccountID: "github-1"}).Error)
+
+	err := service.SetPrimaryLoginMethod(context.Background(), user.ID, "github")
+	require.NoError(t, err)
+
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.ID).Error)
+	assert.Equal(t, model.LoginTypeGithub, updated.PrimaryLoginType)
+}
+
 func TestCurrentUserServiceDeleteEmailPromotesRemainingEmailToPrimary(t *testing.T) {
 	db := setupMeServiceTestDB(t)
 	service := NewCurrentUserService(db)

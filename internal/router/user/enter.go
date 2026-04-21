@@ -13,27 +13,31 @@ func (r *RouterGroup) Init(_ *gin.RouterGroup, _ *gorm.DB) {
 }
 
 type userRouteAccess struct {
-	List            gin.HandlerFunc
-	Create          gin.HandlerFunc
-	Read            gin.HandlerFunc
-	Update          gin.HandlerFunc
-	Delete          gin.HandlerFunc
-	UpdateStatus    gin.HandlerFunc
-	ResetPassword   gin.HandlerFunc
-	AuditLogs       gin.HandlerFunc
-	Roles           gin.HandlerFunc
-	Permissions     gin.HandlerFunc
-	Sessions        gin.HandlerFunc
-	RevokeSession   gin.HandlerFunc
-	SecuritySummary gin.HandlerFunc
-	LoginLogs       gin.HandlerFunc
+	List                     gin.HandlerFunc
+	Create                   gin.HandlerFunc
+	Read                     gin.HandlerFunc
+	LoginMethods             gin.HandlerFunc
+	Update                   gin.HandlerFunc
+	UpdatePrimaryLoginMethod gin.HandlerFunc
+	Delete                   gin.HandlerFunc
+	UpdateStatus             gin.HandlerFunc
+	ResetPassword            gin.HandlerFunc
+	AuditLogs                gin.HandlerFunc
+	Roles                    gin.HandlerFunc
+	Permissions              gin.HandlerFunc
+	Sessions                 gin.HandlerFunc
+	RevokeSession            gin.HandlerFunc
+	SecuritySummary          gin.HandlerFunc
+	LoginLogs                gin.HandlerFunc
 }
 
 type userRouteHandler interface {
 	ListUsers(*gin.Context)
 	CreateUser(*gin.Context)
 	GetUser(*gin.Context)
+	ListUserLoginMethods(*gin.Context)
 	UpdateUser(*gin.Context)
+	PatchUserPrimaryLoginMethod(*gin.Context)
 	DeleteUser(*gin.Context)
 	UpdateUserStatus(*gin.Context)
 	ResetUserPassword(*gin.Context)
@@ -50,7 +54,9 @@ func registerUserManagementRoutes(users *gin.RouterGroup, userHandler userRouteH
 	users.GET("", access.List, userHandler.ListUsers)
 	users.POST("", access.Create, userHandler.CreateUser)
 	users.GET("/:id", access.Read, userHandler.GetUser)
+	users.GET("/:id/login-methods", access.LoginMethods, userHandler.ListUserLoginMethods)
 	users.PATCH("/:id", access.Update, userHandler.UpdateUser)
+	users.PATCH("/:id/login-methods/:provider/primary", access.UpdatePrimaryLoginMethod, userHandler.PatchUserPrimaryLoginMethod)
 	users.DELETE("/:id", access.Delete, userHandler.DeleteUser)
 	users.PATCH("/:id/status", access.UpdateStatus, userHandler.UpdateUserStatus)
 	users.POST("/:id/reset-password", access.ResetPassword, userHandler.ResetUserPassword)

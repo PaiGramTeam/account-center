@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"paigram/internal/model"
+	serviceme "paigram/internal/service/me"
 )
 
 // ErrorResponse represents a standard error payload for handlers.
@@ -148,12 +149,58 @@ type swaggerUserDetailResponse struct {
 	Body UserDetailResponse
 }
 
+// swagger:model userMessageOnly
+type UserMessageOnly struct {
+	Message string `json:"message"`
+}
+
+// swagger:response userMessageResponse
+type swaggerUserMessageResponse struct {
+	// in: body
+	Body struct {
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    UserMessageOnly `json:"data"`
+	}
+}
+
+// swagger:response userLoginMethodsResponse
+type swaggerUserLoginMethodsResponse struct {
+	// in: body
+	Body struct {
+		Code    int                         `json:"code"`
+		Message string                      `json:"message"`
+		Data    []serviceme.LoginMethodView `json:"data"`
+	}
+}
+
 // swagger:parameters getUser
 type getUserParams struct {
 	// User ID.
 	// in: path
 	// required: true
 	ID uint64 `json:"id"`
+}
+
+// swagger:parameters listUserLoginMethods
+type listUserLoginMethodsParams struct {
+	// User ID.
+	// in: path
+	// required: true
+	ID uint64 `json:"id"`
+}
+
+// swagger:parameters patchUserPrimaryLoginMethod
+type patchUserPrimaryLoginMethodParams struct {
+	// User ID.
+	// in: path
+	// required: true
+	ID uint64 `json:"id"`
+	// Provider key.
+	// in: path
+	// required: true
+	// example: github
+	Provider string `json:"provider,omitempty"`
 }
 
 // swagger:parameters createUser

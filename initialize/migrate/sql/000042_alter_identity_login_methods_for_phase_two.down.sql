@@ -1,6 +1,7 @@
 UPDATE users
 SET primary_login_type = 'oauth'
-WHERE primary_login_type IN ('google', 'github', 'telegram');
+WHERE primary_login_type IS NOT NULL
+  AND primary_login_type <> 'email';
 
 ALTER TABLE user_credentials
     DROP INDEX uniq_user_provider,

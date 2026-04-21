@@ -70,6 +70,62 @@ func TestOAuthBindFlowRejectsProviderAlreadyBoundToAnotherUser(t *testing.T) {
 	assert.Equal(t, int64(1), binderSessionCount)
 }
 
+func TestOAuthBindFlowRejectsReplacingExistingProviderAccountOnSameUser(t *testing.T) {
+	provider := newIntegrationOAuthProvider(t)
+
+	stack := newIntegrationStackWithConfig(t, func(cfg *config.Config) {
+		cfg.Auth.OAuthStateTTLSeconds = 300
+		cfg.Auth.DefaultOAuthRedirectURL = "https://app.example.com/auth/callback"
+		cfg.Auth.AllowedOAuthProviders = []string{"github"}
+		cfg.Auth.OAuthProviders = map[string]config.OAuthProviderConfig{
+			"github": {
+				ClientID:     provider.clientID,
+				ClientSecret: provider.clientSecret,
+				RedirectURL:  "https://app.example.com/auth/callback",
+				AuthURL:      "https://oauth.github.test/auth",
+				TokenURL:     provider.tokenURL,
+				UserInfoURL:  provider.userInfoURL,
+			},
+		}
+	})
+
+	binderUserID, binderAccessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "oauth-binder-same-user-conflict")
+	binderSession := requireSessionForRefreshToken(t, stack.DB, refreshToken)
+	require.NoError(t, stack.DB.Model(&model.UserSession{}).Where("id = ?", binderSession.ID).Update("created_at", time.Now().UTC()).Error)
+
+	credential := model.UserCredential{
+		UserID:            binderUserID,
+		Provider:          "github",
+		ProviderAccountID: "github-user-old",
+	}
+	require.NoError(t, credential.SetAccessToken("bound-access-token"))
+	require.NoError(t, credential.SetRefreshToken("bound-refresh-token"))
+	require.NoError(t, stack.DB.Create(&credential).Error)
+
+	initRes := performJSONRequest(t, stack.Router, http.MethodPut, "/api/v1/me/login-methods/github", map[string]any{
+		"redirect_to": "https://app.example.com/settings/login-methods",
+	}, authHeaders(binderAccessToken))
+	require.Equal(t, http.StatusOK, initRes.Code, initRes.Body.String())
+
+	initData := decodeResponseData(t, initRes)
+	state, _ := initData["state"].(string)
+	require.NotEmpty(t, state)
+
+	callbackRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/oauth/github/callback", map[string]any{
+		"state": state,
+		"code":  "provider-code",
+	}, authHeaders(binderAccessToken))
+	require.Equal(t, http.StatusConflict, callbackRes.Code, callbackRes.Body.String())
+	assert.Equal(t, "PROVIDER_REBIND_CONFLICT", decodeErrorCode(t, callbackRes))
+	assert.NotContains(t, callbackRes.Body.String(), "unique")
+
+	assertOAuthStateConsumed(t, stack, state)
+
+	var persisted model.UserCredential
+	require.NoError(t, stack.DB.Where("user_id = ? AND provider = ?", binderUserID, "github").First(&persisted).Error)
+	assert.Equal(t, "github-user-old", persisted.ProviderAccountID)
+}
+
 func TestOAuthBindFlowRequiresAuthenticatedSessionForCallback(t *testing.T) {
 	provider := newIntegrationOAuthProvider(t)
 

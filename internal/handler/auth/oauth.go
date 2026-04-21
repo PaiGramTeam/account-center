@@ -29,12 +29,13 @@ import (
 )
 
 var (
-	telegramOIDCIssuer      = "https://oauth.telegram.org"
-	telegramOIDCJWKSURL     = "https://oauth.telegram.org/.well-known/jwks.json"
-	errProviderAlreadyBound = errors.New("provider already bound to another user")
-	errMissingBindUser      = errors.New("missing oauth bind user")
-	errBindAuthRequired     = errors.New("bind callback requires authenticated user")
-	errBindUserMismatch     = errors.New("bind callback authenticated user mismatch")
+	telegramOIDCIssuer        = "https://oauth.telegram.org"
+	telegramOIDCJWKSURL       = "https://oauth.telegram.org/.well-known/jwks.json"
+	errProviderAlreadyBound   = errors.New("provider already bound to another user")
+	errProviderRebindConflict = errors.New("provider already bound to a different account on this user")
+	errMissingBindUser        = errors.New("missing oauth bind user")
+	errBindAuthRequired       = errors.New("bind callback requires authenticated user")
+	errBindUserMismatch       = errors.New("bind callback authenticated user mismatch")
 )
 
 type initiateOAuthRequest struct {
@@ -305,6 +306,10 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 				response.ConflictWithCode(c, "PROVIDER_ALREADY_BOUND", "provider account is already bound to another user", nil)
 				return
 			}
+			if errors.Is(err, errProviderRebindConflict) {
+				response.ConflictWithCode(c, "PROVIDER_REBIND_CONFLICT", "provider is already bound to a different account on this user", nil)
+				return
+			}
 			if errors.Is(err, errMissingBindUser) {
 				response.BadRequest(c, "invalid oauth state")
 				return
@@ -474,6 +479,25 @@ func (h *Handler) bindOAuthLoginMethod(provider string, stateRecord model.UserOA
 		}
 
 		var existing model.UserCredential
+		err = tx.Where("user_id = ? AND provider = ?", stateRecord.UserID.Int64, provider).First(&existing).Error
+		if err == nil {
+			if existing.ProviderAccountID != userInfo.ID {
+				return errProviderRebindConflict
+			}
+
+			existing.TokenExpiry = credential.TokenExpiry
+			existing.Scopes = credential.Scopes
+			existing.LastSyncAt = credential.LastSyncAt
+			existing.AccessToken = credential.AccessToken
+			existing.RefreshToken = credential.RefreshToken
+			return tx.Save(&existing).Error
+		}
+		if err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
 		err = tx.Where("provider = ? AND provider_account_id = ?", provider, userInfo.ID).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return tx.Create(credential).Error

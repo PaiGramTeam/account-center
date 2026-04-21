@@ -132,6 +132,57 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderAlreadyBelongsToAn
 	assert.Zero(t, sessionCount)
 }
 
+func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderWouldReplaceExistingAccountOnSameUser(t *testing.T) {
+	db := setupTestDB(t)
+	ensureUserOAuthStatesTable(t, db)
+	h := setupOAuthTestHandler(db)
+
+	binder := createTestUser(t, db, "binder-rebind@example.com", "Password123!", true)
+
+	existing := model.UserCredential{
+		UserID:            binder.ID,
+		Provider:          "telegram",
+		ProviderAccountID: "telegram-user-old",
+	}
+	require.NoError(t, existing.SetAccessToken("binder-old-access-token"))
+	require.NoError(t, existing.SetRefreshToken("binder-old-refresh-token"))
+	require.NoError(t, db.Create(&existing).Error)
+
+	state := model.UserOAuthState{
+		Provider:     "telegram",
+		State:        "bind-same-user-provider-conflict",
+		RedirectTo:   "https://app.example.com/settings/login-methods",
+		Nonce:        "expected-nonce",
+		CodeVerifier: "expected-verifier",
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
+	}
+	require.NoError(t, db.Create(&state).Error)
+	require.NoError(t, db.Exec("UPDATE user_oauth_states SET purpose = ?, user_id = ? WHERE id = ?", "bind_login_method", binder.ID, state.ID).Error)
+
+	provider := configureTelegramOAuthProviderForTest(t, h, "expected-nonce")
+	_ = provider
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := bytes.NewBufferString(`{"state":"bind-same-user-provider-conflict","code":"provider-code"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/telegram/callback", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "provider", Value: "telegram"}}
+	middleware.SetUserID(c, binder.ID)
+
+	h.HandleOAuthCallback(c)
+
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	assert.Equal(t, "PROVIDER_REBIND_CONFLICT", decodeOAuthErrorCode(t, w))
+	assert.NotContains(t, strings.ToLower(w.Body.String()), "unique")
+	assert.NotContains(t, strings.ToLower(w.Body.String()), "sql")
+	assertOAuthStateDeleted(t, db, state.State)
+
+	var persisted model.UserCredential
+	require.NoError(t, db.Where("user_id = ? AND provider = ?", binder.ID, "telegram").First(&persisted).Error)
+	assert.Equal(t, "telegram-user-old", persisted.ProviderAccountID)
+}
+
 func TestHandleOAuthCallbackRequiresAuthenticatedSessionForBindPurpose(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)

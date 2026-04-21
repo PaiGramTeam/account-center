@@ -545,6 +545,124 @@ func TestPlatformBindingCredentialUpdateRoutesRemainSupported(t *testing.T) {
 	assert.JSONEq(t, `{"cookie_bundle":"admin-update"}`, stub.lastPut.GetCredentialPayloadJson())
 }
 
+func TestMeDeletePlatformBindingRouteDeletesProviderCredentialAndControlPlaneState(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-delete-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:delete-owner", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Delete Owner",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&binding).Error)
+	require.NoError(t, stack.DB.Create(&model.PlatformAccountProfile{
+		BindingID:          binding.ID,
+		PlatformProfileKey: "mihomo:delete-owner",
+		GameBiz:            "hk4e_cn",
+		Region:             "cn_gf01",
+		PlayerUID:          "10001",
+		Nickname:           "Traveler",
+		IsPrimary:          true,
+	}).Error)
+	require.NoError(t, stack.DB.Create(&model.ConsumerGrant{
+		BindingID: binding.ID,
+		Consumer:  serviceplatformbinding.ConsumerPaiGramBot,
+		Status:    model.ConsumerGrantStatusActive,
+		GrantedBy: sql.NullInt64{Int64: int64(ownerID), Valid: true},
+		GrantedAt: time.Now().UTC(),
+	}).Error)
+	stub := &platformBindingRouteStub{}
+	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, stub))
+
+	resp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), nil, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusNoContent, resp.Code, resp.Body.String())
+	require.Len(t, stub.deleteRequests, 1)
+	assert.Equal(t, "cn:delete-owner", stub.deleteRequests[0].GetPlatformAccountId())
+
+	var bindingCount int64
+	require.NoError(t, stack.DB.Model(&model.PlatformAccountBinding{}).Where("id = ?", binding.ID).Count(&bindingCount).Error)
+	assert.Zero(t, bindingCount)
+	var profileCount int64
+	require.NoError(t, stack.DB.Model(&model.PlatformAccountProfile{}).Where("binding_id = ?", binding.ID).Count(&profileCount).Error)
+	assert.Zero(t, profileCount)
+	var grantCount int64
+	require.NoError(t, stack.DB.Model(&model.ConsumerGrant{}).Where("binding_id = ?", binding.ID).Count(&grantCount).Error)
+	assert.Zero(t, grantCount)
+}
+
+func TestAdminDeletePlatformBindingRouteDeletesProviderCredential(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, _, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-delete-admin-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	adminID, adminAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-delete-admin-%d@example.com", time.Now().UnixNano()), "AdminPass123!")
+	grantAdminRoleToUser(t, stack, adminID)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:delete-admin", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Delete Admin",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&binding).Error)
+	stub := &platformBindingRouteStub{}
+	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, stub))
+
+	resp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/platform-accounts/%d", binding.ID), nil, authHeaders(adminAccessToken))
+	require.Equal(t, http.StatusNoContent, resp.Code, resp.Body.String())
+	require.Len(t, stub.deleteRequests, 1)
+	assert.Equal(t, "cn:delete-admin", stub.deleteRequests[0].GetPlatformAccountId())
+}
+
+func TestDeletePlatformBindingRouteMarksDeleteFailedWhenProviderDeleteFails(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-delete-failure-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:delete-failure", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Delete Failure",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&binding).Error)
+	stub := &platformBindingRouteStub{deleteErr: grpcstatus.Error(codes.Unavailable, "delete downstream unavailable")}
+	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, stub))
+
+	resp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), nil, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusServiceUnavailable, resp.Code, resp.Body.String())
+
+	var persisted model.PlatformAccountBinding
+	require.NoError(t, stack.DB.First(&persisted, binding.ID).Error)
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, persisted.Status)
+	assert.Equal(t, "credential_delete_failed", persisted.StatusReasonCode)
+	assert.Contains(t, persisted.StatusReasonMessage, "delete downstream unavailable")
+	require.Len(t, stub.deleteRequests, 1)
+}
+
+func TestDeletePlatformBindingRouteReturnsNotFoundOnRepeatDelete(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-delete-repeat-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:delete-repeat", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Delete Repeat",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&binding).Error)
+	stub := &platformBindingRouteStub{}
+	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, stub))
+
+	firstResp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), nil, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusNoContent, firstResp.Code, firstResp.Body.String())
+	secondResp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), nil, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusNotFound, secondResp.Code, secondResp.Body.String())
+	require.Len(t, stub.deleteRequests, 1)
+}
+
 type platformBindingRouteStub struct {
 	platformv1.UnimplementedPlatformServiceServer
 	putResponse    *platformv1.PutCredentialResponse

@@ -50,6 +50,8 @@ type orchestrationService interface {
 	PutCredentialAsAdmin(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	RefreshBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
 	RefreshBindingAsAdmin(ctx context.Context, bindingID uint64) (*model.PlatformAccountBinding, error)
+	DeleteBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) error
+	DeleteBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) error
 }
 
 type runtimeSummaryService interface {
@@ -235,7 +237,7 @@ func (h *MeHandler) DeleteBinding(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.bindingService.DeleteBindingForOwner(userID, bindingID); err != nil {
+	if err := h.orchestrationService.DeleteBindingForOwner(c.Request.Context(), userID, bindingID); err != nil {
 		writeBindingError(c, err, "failed to delete platform binding")
 		return
 	}

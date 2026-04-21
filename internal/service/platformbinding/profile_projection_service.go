@@ -132,6 +132,25 @@ func (s *ProfileProjectionService) ListProfilesForOwner(ownerUserID, bindingID u
 	return s.ListProfiles(bindingID, params)
 }
 
+func (s *ProfileProjectionService) DeleteProfiles(bindingID uint64) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var binding model.PlatformAccountBinding
+		if err := tx.Select("id").First(&binding, bindingID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrBindingNotFound
+			}
+
+			return err
+		}
+
+		if err := tx.Model(&model.PlatformAccountBinding{}).Where("id = ?", bindingID).Update("primary_profile_id", nil).Error; err != nil {
+			return err
+		}
+
+		return tx.Where("binding_id = ?", bindingID).Delete(&model.PlatformAccountProfile{}).Error
+	})
+}
+
 func (s *ProfileProjectionService) SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error) {
 	var updated model.PlatformAccountBinding
 	err := s.db.Transaction(func(tx *gorm.DB) error {

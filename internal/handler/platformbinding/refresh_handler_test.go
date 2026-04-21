@@ -69,7 +69,13 @@ func (s *refreshOrchestrationStub) RefreshBindingForOwner(_ context.Context, own
 	s.bindingID = bindingID
 	return &model.PlatformAccountBinding{ID: bindingID, OwnerUserID: ownerUserID, Platform: "mihomo", Status: model.PlatformAccountBindingStatusRefreshRequired}, nil
 }
+func (s *refreshOrchestrationStub) DeleteBindingForOwner(_ context.Context, ownerUserID, bindingID uint64) error {
+	panic("unexpected call")
+}
 func (s *refreshOrchestrationStub) RefreshBindingAsAdmin(_ context.Context, _ uint64) (*model.PlatformAccountBinding, error) {
+	panic("unexpected call")
+}
+func (s *refreshOrchestrationStub) DeleteBindingAsAdmin(_ context.Context, _ uint64, _ uint64) error {
 	panic("unexpected call")
 }
 

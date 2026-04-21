@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"gorm.io/gorm"
 
 	"paigram/internal/model"
 	serviceplatform "paigram/internal/service/platform"
@@ -182,6 +183,10 @@ type fakeProfileSyncer struct {
 	called bool
 	input  SyncProfilesInput
 	err    error
+
+	deleteCalled    bool
+	deleteBindingID uint64
+	deleteErr       error
 }
 
 func (f *fakeProfileSyncer) SyncProfiles(input SyncProfilesInput) ([]model.PlatformAccountProfile, error) {
@@ -191,6 +196,24 @@ func (f *fakeProfileSyncer) SyncProfiles(input SyncProfilesInput) ([]model.Platf
 		return nil, f.err
 	}
 	return nil, nil
+}
+
+func (f *fakeProfileSyncer) DeleteProfiles(bindingID uint64) error {
+	f.deleteCalled = true
+	f.deleteBindingID = bindingID
+	return f.deleteErr
+}
+
+type fakeGrantCleaner struct {
+	called    bool
+	bindingID uint64
+	err       error
+}
+
+func (f *fakeGrantCleaner) DeleteGrants(bindingID uint64) error {
+	f.called = true
+	f.bindingID = bindingID
+	return f.err
 }
 
 func (f *fakeCredentialGateway) PutCredential(context.Context, string, string, *model.PlatformAccountBinding, json.RawMessage) (map[string]any, error) {
@@ -361,6 +384,107 @@ func TestRefreshBindingForOwnerDelegatesToRefreshGateway(t *testing.T) {
 	assert.Equal(t, binding, gateway.binding)
 	assert.Equal(t, []string{"mihomo.credential.refresh"}, platformSvc.lastScope)
 	assert.False(t, reader.updated)
+}
+
+func TestDeleteBindingForOwnerDeletesProviderCredentialAndControlPlaneState(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{}
+	profileCleaner := &fakeProfileSyncer{}
+	grantCleaner := &fakeGrantCleaner{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway, profileCleaner, grantCleaner)
+
+	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
+	require.NoError(t, err)
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleting, reader.updatedStatus)
+	assert.True(t, gateway.deleteCalled)
+	assert.Equal(t, "127.0.0.1:9000", gateway.deleteEndpoint)
+	assert.Equal(t, "service-ticket", gateway.deleteTicket)
+	assert.Equal(t, uint64(101), gateway.deleteBindingID)
+	assert.False(t, profileCleaner.deleteCalled)
+	assert.False(t, grantCleaner.called)
+	assert.Equal(t, uint64(101), reader.deletedID)
+	assert.Equal(t, []string{"mihomo.credential.delete"}, platformSvc.lastScope)
+}
+
+func TestDeleteBindingAsAdminMarksBindingDeleteFailedWhenProviderDeleteFails(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{deleteErr: errors.New("downstream unavailable")}
+	profileCleaner := &fakeProfileSyncer{}
+	grantCleaner := &fakeGrantCleaner{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway, profileCleaner, grantCleaner)
+
+	err := svc.DeleteBindingAsAdmin(context.Background(), 101, 88)
+	require.Error(t, err)
+	assert.True(t, gateway.deleteCalled)
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
+	assert.Equal(t, "credential_delete_failed", reader.updatedReason)
+	assert.Equal(t, "downstream unavailable", reader.updatedMessage)
+	assert.False(t, profileCleaner.deleteCalled)
+	assert.False(t, grantCleaner.called)
+	assert.Zero(t, reader.deletedID)
+	assert.Equal(t, []string{"mihomo.credential.delete"}, platformSvc.lastScope)
+}
+
+func TestDeleteBindingForOwnerSkipsProviderDeleteWhenBindingHasNoExternalAccountKey(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{}
+	gateway := &fakeCredentialGateway{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway)
+
+	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
+	require.NoError(t, err)
+	assert.False(t, gateway.deleteCalled)
+	assert.Zero(t, reader.updatedReason)
+	assert.Equal(t, uint64(101), reader.deletedID)
+	assert.Nil(t, platformSvc.lastScope)
+}
+
+func TestDeleteBindingForOwnerNormalizesMissingPlatformServiceAsUnavailable(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{err: gorm.ErrRecordNotFound}
+	gateway := &fakeCredentialGateway{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway)
+
+	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
+	require.ErrorIs(t, err, serviceplatform.ErrPlatformServiceUnavailable)
+	assert.True(t, reader.updated)
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
+	assert.Equal(t, "credential_delete_failed", reader.updatedReason)
+	assert.False(t, gateway.deleteCalled)
 }
 
 func TestPutCredentialForOwnerPersistsResolvedRuntimeState(t *testing.T) {

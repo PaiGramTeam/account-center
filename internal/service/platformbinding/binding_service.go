@@ -148,6 +148,8 @@ func (s *BindingService) UpdateBindingStatus(bindingID uint64, status model.Plat
 	}
 
 	binding.Status = status
+	binding.StatusReasonCode = ""
+	binding.StatusReasonMessage = ""
 	if err := s.db.Save(binding).Error; err != nil {
 		return nil, err
 	}
@@ -241,6 +243,16 @@ func (s *BindingService) DeleteBinding(bindingID uint64) (*model.PlatformAccount
 
 		binding.Status = model.PlatformAccountBindingStatusDeleted
 		if err := tx.Save(&binding).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&model.PlatformAccountBinding{}).Where("id = ?", binding.ID).Update("primary_profile_id", nil).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("binding_id = ?", binding.ID).Delete(&model.PlatformAccountProfile{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("binding_id = ?", binding.ID).Delete(&model.ConsumerGrant{}).Error; err != nil {
 			return err
 		}
 

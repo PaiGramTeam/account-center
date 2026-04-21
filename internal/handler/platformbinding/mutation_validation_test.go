@@ -113,7 +113,13 @@ func (mutationOrchestrationStub) PutCredentialAsAdmin(context.Context, servicepl
 func (mutationOrchestrationStub) RefreshBindingForOwner(context.Context, uint64, uint64) (*model.PlatformAccountBinding, error) {
 	panic("unexpected call")
 }
+func (mutationOrchestrationStub) DeleteBindingForOwner(context.Context, uint64, uint64) error {
+	panic("unexpected call")
+}
 func (mutationOrchestrationStub) RefreshBindingAsAdmin(context.Context, uint64) (*model.PlatformAccountBinding, error) {
+	panic("unexpected call")
+}
+func (mutationOrchestrationStub) DeleteBindingAsAdmin(context.Context, uint64, uint64) error {
 	panic("unexpected call")
 }
 

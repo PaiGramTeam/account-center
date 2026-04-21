@@ -26,6 +26,11 @@ type orchestrationBindingReader interface {
 
 type orchestrationProfileSyncer interface {
 	SyncProfiles(input SyncProfilesInput) ([]model.PlatformAccountProfile, error)
+	DeleteProfiles(bindingID uint64) error
+}
+
+type orchestrationGrantCleaner interface {
+	DeleteGrants(bindingID uint64) error
 }
 
 type orchestrationPlatformService interface {
@@ -44,12 +49,18 @@ type OrchestrationService struct {
 	platformService orchestrationPlatformService
 	gateway         credentialGateway
 	profileSyncer   orchestrationProfileSyncer
+	grantCleaner    orchestrationGrantCleaner
 }
 
-func NewOrchestrationService(bindingReader orchestrationBindingReader, platformService orchestrationPlatformService, gateway credentialGateway, profileSyncer ...orchestrationProfileSyncer) *OrchestrationService {
+func NewOrchestrationService(bindingReader orchestrationBindingReader, platformService orchestrationPlatformService, gateway credentialGateway, dependencies ...any) *OrchestrationService {
 	service := &OrchestrationService{bindingReader: bindingReader, platformService: platformService, gateway: gateway}
-	if len(profileSyncer) > 0 {
-		service.profileSyncer = profileSyncer[0]
+	for _, dependency := range dependencies {
+		switch typed := dependency.(type) {
+		case orchestrationProfileSyncer:
+			service.profileSyncer = typed
+		case orchestrationGrantCleaner:
+			service.grantCleaner = typed
+		}
 	}
 	return service
 }
@@ -141,6 +152,24 @@ func (s *OrchestrationService) RefreshBindingAsAdmin(ctx context.Context, bindin
 	return s.refreshBinding(ctx, binding, "admin", "binding-refresh-admin")
 }
 
+func (s *OrchestrationService) DeleteBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) error {
+	binding, err := s.bindingReader.GetBindingForOwner(ownerUserID, bindingID)
+	if err != nil {
+		return err
+	}
+
+	return s.deleteBinding(ctx, binding, "user", "binding-delete")
+}
+
+func (s *OrchestrationService) DeleteBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) error {
+	binding, err := s.bindingReader.GetBindingByID(bindingID)
+	if err != nil {
+		return err
+	}
+
+	return s.deleteBinding(ctx, binding, "admin", "admin:"+strconv.FormatUint(adminUserID, 10))
+}
+
 func (s *OrchestrationService) refreshBinding(ctx context.Context, binding *model.PlatformAccountBinding, actorType, actorID string) (*model.PlatformAccountBinding, error) {
 	if s.gateway == nil {
 		return nil, ErrCredentialGatewayUnavailable
@@ -164,6 +193,54 @@ func (s *OrchestrationService) refreshBinding(ctx context.Context, binding *mode
 	}
 
 	return s.bindingReader.UpdateBindingStatus(binding.ID, model.PlatformAccountBindingStatusRefreshRequired)
+}
+
+func (s *OrchestrationService) deleteBinding(ctx context.Context, binding *model.PlatformAccountBinding, actorType, actorID string) error {
+	if binding == nil {
+		return ErrBindingNotFound
+	}
+	if _, err := s.bindingReader.UpdateBindingStatus(binding.ID, model.PlatformAccountBindingStatusDeleting); err != nil {
+		return err
+	}
+
+	if !binding.ExternalAccountKey.Valid || binding.ExternalAccountKey.String == "" {
+		_, err := s.bindingReader.DeleteBinding(binding.ID)
+		return err
+	}
+	if s.gateway == nil {
+		return ErrCredentialGatewayUnavailable
+	}
+
+	platformRow, err := s.platformService.GetEnabledPlatform(binding.Platform)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			err = serviceplatform.ErrPlatformServiceUnavailable
+		}
+		return s.markDeleteFailed(binding.ID, err, "credential_delete_failed")
+	}
+
+	ticket, _, err := s.platformService.IssueBindingScopedTicket(actorType, actorID, binding, []string{"mihomo.credential.delete"})
+	if err != nil {
+		return s.markDeleteFailed(binding.ID, err, "credential_delete_failed")
+	}
+
+	if err := s.gateway.DeleteCredential(ctx, platformRow.Endpoint, ticket, binding); err != nil {
+		return s.markDeleteFailed(binding.ID, err, "credential_delete_failed")
+	}
+
+	_, err = s.bindingReader.DeleteBinding(binding.ID)
+	if err != nil {
+		return s.markDeleteFailed(binding.ID, err, "control_plane_cleanup_failed")
+	}
+	return nil
+}
+
+func (s *OrchestrationService) markDeleteFailed(bindingID uint64, err error, reasonCode string) error {
+	if err == nil {
+		return nil
+	}
+	_, _ = s.bindingReader.UpdateBindingFailure(bindingID, model.PlatformAccountBindingStatusDeleteFailed, reasonCode, err.Error())
+	return err
 }
 
 func (s *OrchestrationService) putCredential(ctx context.Context, binding *model.PlatformAccountBinding, input PutCredentialInput) (*RuntimeSummary, *model.PlatformAccountBinding, error) {

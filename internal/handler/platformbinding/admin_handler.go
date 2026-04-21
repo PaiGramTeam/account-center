@@ -206,7 +206,12 @@ func (h *AdminHandler) DeleteBinding(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.bindingService.DeleteBinding(bindingID); err != nil {
+	adminUserID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	if err := h.orchestrationService.DeleteBindingAsAdmin(c.Request.Context(), bindingID, adminUserID); err != nil {
 		writeBindingError(c, err, "failed to delete platform binding")
 		return
 	}

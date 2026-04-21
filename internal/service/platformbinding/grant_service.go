@@ -133,6 +133,14 @@ func (s *GrantService) ListGrantsForOwner(ownerUserID, bindingID uint64, params 
 	return s.ListGrants(bindingID, params)
 }
 
+func (s *GrantService) DeleteGrants(bindingID uint64) error {
+	if err := s.ensureBindingExists(bindingID); err != nil {
+		return err
+	}
+
+	return s.db.Where("binding_id = ?", bindingID).Delete(&model.ConsumerGrant{}).Error
+}
+
 func (s *GrantService) UpsertGrantForOwner(ownerUserID uint64, input UpsertGrantInput) (*model.ConsumerGrant, bool, error) {
 	if err := s.ensureBindingOwnedByUser(ownerUserID, input.BindingID); err != nil {
 		return nil, false, err

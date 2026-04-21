@@ -16,6 +16,7 @@ import (
 
 type orchestrationBindingReader interface {
 	CreateBinding(input CreateBindingInput) (*model.PlatformAccountBinding, error)
+	DeleteBinding(bindingID uint64) (*model.PlatformAccountBinding, error)
 	GetBindingByID(bindingID uint64) (*model.PlatformAccountBinding, error)
 	GetBindingForOwner(ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
 	PersistRuntimeSummary(bindingID uint64, summary RuntimeSummary) (*model.PlatformAccountBinding, error)
@@ -81,11 +82,21 @@ func (s *OrchestrationService) CreateBindingForOwner(ctx context.Context, input 
 	})
 	if err != nil {
 		if updatedBinding != nil {
+			if updatedBinding.ID != binding.ID {
+				if _, deleteErr := s.bindingReader.DeleteBinding(binding.ID); deleteErr != nil {
+					return nil, deleteErr
+				}
+			}
 			return updatedBinding, nil
 		}
 		return nil, err
 	}
 	if updatedBinding != nil {
+		if updatedBinding.ID != binding.ID {
+			if _, deleteErr := s.bindingReader.DeleteBinding(binding.ID); deleteErr != nil {
+				return nil, deleteErr
+			}
+		}
 		return updatedBinding, nil
 	}
 

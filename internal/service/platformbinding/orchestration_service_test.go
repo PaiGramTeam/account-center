@@ -24,6 +24,7 @@ type fakeRuntimeSummaryBindingReader struct {
 	err              error
 	ownerID          uint64
 	id               uint64
+	deletedID        uint64
 	updated          bool
 	updatedStatus    model.PlatformAccountBindingStatus
 	updatedReason    string
@@ -84,6 +85,16 @@ func (f *fakeRuntimeSummaryBindingReader) CreateBinding(input CreateBindingInput
 		Status:             model.PlatformAccountBindingStatusPendingBind,
 	}
 	return f.binding, nil
+}
+
+func (f *fakeRuntimeSummaryBindingReader) DeleteBinding(bindingID uint64) (*model.PlatformAccountBinding, error) {
+	f.deletedID = bindingID
+	if f.binding != nil && f.binding.ID == bindingID {
+		deleted := *f.binding
+		deleted.Status = model.PlatformAccountBindingStatusDeleted
+		return &deleted, nil
+	}
+	return nil, nil
 }
 
 func (f *fakeRuntimeSummaryBindingReader) PersistRuntimeSummary(bindingID uint64, summary RuntimeSummary) (*model.PlatformAccountBinding, error) {
@@ -640,6 +651,7 @@ func TestCreateBindingForOwnerReturnsExistingBindingForSameOwnerDuplicate(t *tes
 	require.NotNil(t, binding)
 	assert.Equal(t, uint64(202), binding.ID)
 	assert.False(t, gateway.deleteCalled)
+	assert.Equal(t, uint64(404), reader.deletedID)
 }
 
 type failingPersistBindingReader struct {

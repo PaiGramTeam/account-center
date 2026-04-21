@@ -499,9 +499,7 @@ func TestCreatePlatformBindingRouteReturnsExistingBindingForSameOwnerRetry(t *te
 
 	var drafts []model.PlatformAccountBinding
 	require.NoError(t, stack.DB.Where("owner_user_id = ? AND display_name = ?", ownerID, "Retry Draft").Find(&drafts).Error)
-	assert.Len(t, drafts, 1)
-	assert.Equal(t, model.PlatformAccountBindingStatusPendingBind, drafts[0].Status)
-	assert.False(t, drafts[0].ExternalAccountKey.Valid)
+	assert.Len(t, drafts, 0)
 }
 
 func TestPlatformBindingCredentialUpdateRoutesRemainSupported(t *testing.T) {

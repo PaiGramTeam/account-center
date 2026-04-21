@@ -104,29 +104,19 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 	if err != nil {
 		return nil, err
 	}
-	if req.GetExternalUserId() == "" || req.GetPlatformAccountRefId() == 0 || req.GetAudience() == "" {
-		return nil, status.Error(codes.InvalidArgument, "external_user_id, platform_account_ref_id (binding id), and audience are required")
+	if req.GetExternalUserId() == "" || req.GetBindingId() == 0 || req.GetAudience() == "" {
+		return nil, status.Error(codes.InvalidArgument, "external_user_id, binding_id, and audience are required")
 	}
 
-	identity, ref, grant, err := s.accountRefService.GetGrantedAccount(bot.Id, req.GetExternalUserId(), req.GetPlatformAccountRefId())
+	_, binding, grant, err := s.accountRefService.GetGrantedBinding(bot.Id, req.GetExternalUserId(), req.GetBindingId(), req.GetProfileId())
 	if err != nil {
-		return nil, mapBotAccessError("get granted account", err)
+		return nil, mapBotAccessError("get granted binding", err)
 	}
-	if req.GetAudience() != ref.PlatformServiceKey {
+	if req.GetAudience() != binding.PlatformServiceKey {
 		return nil, status.Error(codes.InvalidArgument, "audience does not match binding platform service key")
 	}
 
-	grantedScopes, err := botaccess.DecodeGrantScopes(*grant)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "decode grant scopes: %v", err)
-	}
-
-	scopes, err := selectTicketScopes(grantedScopes, req.GetRequestedScopes())
-	if err != nil {
-		return nil, mapBotAccessError("validate requested scopes", err)
-	}
-
-	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, ref, identity.UserID, scopes, req.GetAudience())
+	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, req.GetRequestedScopes(), req.GetAudience())
 	if err != nil {
 		return nil, mapBotAccessError("issue service ticket", err)
 	}
@@ -135,8 +125,7 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 		Ticket:    ticket,
 		Audience:  req.GetAudience(),
 		ExpiresAt: timestamppb.New(expiresAt),
-		// The protobuf still uses PlatformAccountRef naming while ticket issuance evolves toward binding semantics.
-		Account: platformAccountRefToProto(*ref),
+		Account:   platformAccountBindingToProto(*binding),
 	}, nil
 }
 
@@ -171,6 +160,30 @@ func platformAccountRefToProto(ref model.PlatformAccountRef) *pb.PlatformAccount
 		MetaJson:           nullStringValue(ref.MetaJSON),
 		CreatedAt:          timestamppb.New(ref.CreatedAt),
 		UpdatedAt:          timestamppb.New(ref.UpdatedAt),
+	}
+}
+
+func platformAccountBindingToProto(binding model.PlatformAccountBinding) *pb.PlatformAccountRef {
+	status := pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_UNSPECIFIED
+	switch binding.Status {
+	case model.PlatformAccountBindingStatusActive:
+		status = pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_ACTIVE
+	case model.PlatformAccountBindingStatusDeleted, model.PlatformAccountBindingStatusDeleting:
+		status = pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_REVOKED
+	default:
+		status = pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_INACTIVE
+	}
+
+	return &pb.PlatformAccountRef{
+		Id:                 binding.ID,
+		UserId:             binding.OwnerUserID,
+		Platform:           binding.Platform,
+		PlatformServiceKey: binding.PlatformServiceKey,
+		PlatformAccountId:  nullStringValue(binding.ExternalAccountKey),
+		DisplayName:        binding.DisplayName,
+		Status:             status,
+		CreatedAt:          timestamppb.New(binding.CreatedAt),
+		UpdatedAt:          timestamppb.New(binding.UpdatedAt),
 	}
 }
 

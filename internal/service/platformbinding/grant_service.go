@@ -149,6 +149,10 @@ func (s *GrantService) RevokeGrantForOwner(ownerUserID uint64, input RevokeGrant
 	return s.RevokeGrant(input)
 }
 
+func IsGrantActive(grant model.ConsumerGrant) bool {
+	return grant.Status == model.ConsumerGrantStatusActive && !grant.RevokedAt.Valid
+}
+
 func (s *GrantService) ensureBindingExists(bindingID uint64) error {
 	var binding model.PlatformAccountBinding
 	if err := s.db.Select("id").First(&binding, bindingID).Error; err != nil {

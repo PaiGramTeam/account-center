@@ -1,6 +1,7 @@
 package botaccess
 
 import (
+	"database/sql"
 	"testing"
 	"time"
 
@@ -29,17 +30,17 @@ func TestTicketServiceIssueIncludesAudienceAndScopes(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	ref := &model.PlatformAccountRef{
+	binding := &model.PlatformAccountBinding{
 		ID:                 42,
-		UserID:             100,
+		OwnerUserID:        100,
 		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-42", Valid: true},
 		PlatformServiceKey: "tg-main",
-		PlatformAccountID:  "acct-42",
 		DisplayName:        "Primary",
-		Status:             model.PlatformAccountRefStatusActive,
+		Status:             model.PlatformAccountBindingStatusActive,
 	}
 
-	tokenString, expiresAt, err := service.Issue("bot-ticket", ref, ref.UserID, []string{"profile:read", "messages:send"}, "platform-service")
+	tokenString, expiresAt, err := service.Issue("bot-ticket", "paigram-bot", binding, []string{"profile:read", "messages:send"}, "platform-service")
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now().UTC().Add(5*time.Minute), expiresAt, 3*time.Second)
 
@@ -49,16 +50,17 @@ func TestTicketServiceIssueIncludesAudienceAndScopes(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, token.Valid)
-	assert.Equal(t, "bot", parsed.ActorType)
-	assert.Equal(t, "bot-ticket", parsed.ActorID)
-	assert.Equal(t, ref.UserID, parsed.OwnerUserID)
+	assert.Equal(t, "consumer", parsed.ActorType)
+	assert.Equal(t, "paigram-bot", parsed.ActorID)
+	assert.Equal(t, "paigram-bot", parsed.Consumer)
+	assert.Equal(t, binding.OwnerUserID, parsed.OwnerUserID)
 	assert.Equal(t, "bot-ticket", parsed.BotID)
-	assert.Equal(t, ref.UserID, parsed.UserID)
-	assert.Equal(t, ref.Platform, parsed.Platform)
-	assert.Equal(t, ref.PlatformServiceKey, parsed.PlatformServiceKey)
-	assert.Equal(t, ref.ID, parsed.BindingID)
-	assert.Equal(t, ref.ID, parsed.PlatformAccountRefID)
-	assert.Equal(t, ref.PlatformAccountID, parsed.PlatformAccountID)
+	assert.Equal(t, binding.OwnerUserID, parsed.UserID)
+	assert.Equal(t, binding.Platform, parsed.Platform)
+	assert.Equal(t, binding.PlatformServiceKey, parsed.PlatformServiceKey)
+	assert.Equal(t, binding.ID, parsed.BindingID)
+	assert.Zero(t, parsed.PlatformAccountRefID)
+	assert.Equal(t, "acct-42", parsed.PlatformAccountID)
 	assert.ElementsMatch(t, []string{"profile:read", "messages:send"}, parsed.Scopes)
 	assert.Equal(t, "issuer", parsed.Issuer)
 	assert.Equal(t, "user:100", parsed.Subject)

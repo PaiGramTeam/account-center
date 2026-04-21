@@ -40,6 +40,9 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 		&model.BotIdentity{},
 		&model.PlatformAccountRef{},
 		&model.BotAccountGrant{},
+		&model.PlatformAccountBinding{},
+		&model.PlatformAccountProfile{},
+		&model.ConsumerGrant{},
 	)
 
 	bot, identityUser, ref := seedBotAccessGRPCTestData(t, db)
@@ -68,10 +71,10 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 	assert.Equal(t, "platform-hoyoverse-service", accounts.Accounts[0].PlatformServiceKey)
 
 	ticketResp, err := accessClient.IssueServiceTicket(ctx, &pb.IssueServiceTicketRequest{
-		ExternalUserId:       "tg-123",
-		PlatformAccountRefId: ref.ID,
-		RequestedScopes:      []string{"daily.sign"},
-		Audience:             "platform-hoyoverse-service",
+		ExternalUserId:  "tg-123",
+		BindingId:       ref.ID,
+		RequestedScopes: []string{"daily.sign"},
+		Audience:        "platform-hoyoverse-service",
 	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, ticketResp.Ticket)
@@ -84,12 +87,53 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, parsedToken.Valid)
+	assert.Equal(t, "consumer", parsedClaims.ActorType)
+	assert.Equal(t, "paigram-bot", parsedClaims.ActorID)
+	assert.Equal(t, "paigram-bot", parsedClaims.Consumer)
 	assert.Equal(t, bot.ID, parsedClaims.BotID)
 	assert.Equal(t, identityUser.ID, parsedClaims.UserID)
-	assert.Equal(t, ref.ID, parsedClaims.PlatformAccountRefID)
+	assert.Equal(t, ref.ID, parsedClaims.BindingID)
+	assert.Zero(t, parsedClaims.PlatformAccountRefID)
 	assert.Equal(t, []string{"daily.sign"}, parsedClaims.Scopes)
 	assert.ElementsMatch(t, []string{"platform-hoyoverse-service"}, []string(parsedClaims.Audience))
 	assert.WithinDuration(t, ticketResp.ExpiresAt.AsTime(), parsedClaims.ExpiresAt.Time, time.Second)
+}
+
+func TestBotAccessServiceRejectsRevokedConsumerGrantOnTicketIssue(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_revoked",
+		&model.User{},
+		&model.UserEmail{},
+		&model.Bot{},
+		&model.BotToken{},
+		&model.BotIdentity{},
+		&model.PlatformAccountRef{},
+		&model.BotAccountGrant{},
+		&model.PlatformAccountBinding{},
+		&model.PlatformAccountProfile{},
+		&model.ConsumerGrant{},
+	)
+
+	bot, _, ref := seedBotAccessGRPCTestData(t, db)
+	var grant model.ConsumerGrant
+	require.NoError(t, db.Where("binding_id = ? AND consumer = ?", ref.ID, "paigram-bot").First(&grant).Error)
+	grant.Status = model.ConsumerGrantStatusRevoked
+	grant.RevokedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+	require.NoError(t, db.Save(&grant).Error)
+
+	conn := newBotAccessBufconnClient(t, db)
+	defer conn.Close()
+	accessToken := seedBotAccessToken(t, db, bot.ID)
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+accessToken))
+	accessClient := pb.NewBotAccessServiceClient(conn)
+
+	_, err := accessClient.IssueServiceTicket(ctx, &pb.IssueServiceTicketRequest{
+		ExternalUserId:  "tg-123",
+		BindingId:       ref.ID,
+		RequestedScopes: []string{"daily.sign"},
+		Audience:        "platform-hoyoverse-service",
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
 func TestBotAccessServiceRejectsMissingAuthorization(t *testing.T) {
@@ -113,7 +157,7 @@ func TestBotAccessServiceRejectsMissingAuthorization(t *testing.T) {
 	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
-func seedBotAccessGRPCTestData(t *testing.T, db *gorm.DB) (model.Bot, model.User, model.PlatformAccountRef) {
+func seedBotAccessGRPCTestData(t *testing.T, db *gorm.DB) (model.Bot, model.User, model.PlatformAccountBinding) {
 	t.Helper()
 
 	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
@@ -145,22 +189,20 @@ func seedBotAccessGRPCTestData(t *testing.T, db *gorm.DB) (model.Bot, model.User
 		LinkedAt:         time.Now().UTC(),
 	}).Error)
 
-	ref := model.PlatformAccountRef{
-		UserID:             identityUser.ID,
+	ref := model.PlatformAccountBinding{
+		OwnerUserID:        identityUser.ID,
 		Platform:           "hoyoverse",
+		ExternalAccountKey: sql.NullString{String: "hoyo-account-001", Valid: true},
 		PlatformServiceKey: "platform-hoyoverse-service",
-		PlatformAccountID:  "hoyo-account-001",
 		DisplayName:        "Alice Hoyo",
-		Status:             model.PlatformAccountRefStatusActive,
-		MetaJSON:           sql.NullString{String: `{"region":"cn_gf01"}`, Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
 	}
 	require.NoError(t, db.Create(&ref).Error)
-	require.NoError(t, db.Create(&model.BotAccountGrant{
-		UserID:               identityUser.ID,
-		BotID:                bot.ID,
-		PlatformAccountRefID: ref.ID,
-		Scopes:               `["daily.sign","daily.note.read"]`,
-		GrantedAt:            time.Now().UTC(),
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID: ref.ID,
+		Consumer:  "paigram-bot",
+		Status:    model.ConsumerGrantStatusActive,
+		GrantedAt: time.Now().UTC(),
 	}).Error)
 
 	return bot, identityUser, ref

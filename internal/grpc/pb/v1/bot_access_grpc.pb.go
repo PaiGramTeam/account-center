@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v7.34.0
-// source: proto/paigram/v1/bot_access.proto
+// source: bot_access.proto
 
 package pb
 
@@ -231,5 +231,5 @@ var BotAccessService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/paigram/v1/bot_access.proto",
+	Metadata: "bot_access.proto",
 }

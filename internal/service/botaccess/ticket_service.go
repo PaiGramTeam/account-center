@@ -14,6 +14,7 @@ import (
 type ServiceTicketClaims struct {
 	ActorType            string   `json:"actor_type,omitempty"`
 	ActorID              string   `json:"actor_id,omitempty"`
+	Consumer             string   `json:"consumer,omitempty"`
 	OwnerUserID          uint64   `json:"owner_user_id,omitempty"`
 	BotID                string   `json:"bot_id"`
 	UserID               uint64   `json:"user_id"`
@@ -49,35 +50,35 @@ func NewTicketService(authCfg config.AuthConfig) (*TicketService, error) {
 	}, nil
 }
 
-func (s *TicketService) Issue(botID string, ref *model.PlatformAccountRef, userID uint64, scopes []string, audience string) (string, time.Time, error) {
-	if ref == nil || ref.Status != model.PlatformAccountRefStatusActive {
+func (s *TicketService) Issue(botID, consumer string, binding *model.PlatformAccountBinding, scopes []string, audience string) (string, time.Time, error) {
+	if binding == nil || binding.Status != model.PlatformAccountBindingStatusActive {
 		return "", time.Time{}, ErrInactiveAccountRef
 	}
-	if audience == "" {
+	if consumer == "" || audience == "" {
 		return "", time.Time{}, ErrInvalidTicketConfig
 	}
 
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.ttl)
 	claims := ServiceTicketClaims{
-		ActorType:            "bot",
-		ActorID:              botID,
-		OwnerUserID:          userID,
-		BotID:                botID,
-		UserID:               userID,
-		Platform:             ref.Platform,
-		PlatformServiceKey:   ref.PlatformServiceKey,
-		BindingID:            ref.ID,
-		PlatformAccountRefID: ref.ID,
-		PlatformAccountID:    ref.PlatformAccountID,
-		Scopes:               scopes,
+		ActorType:          "consumer",
+		ActorID:            consumer,
+		Consumer:           consumer,
+		OwnerUserID:        binding.OwnerUserID,
+		BotID:              botID,
+		UserID:             binding.OwnerUserID,
+		Platform:           binding.Platform,
+		PlatformServiceKey: binding.PlatformServiceKey,
+		BindingID:          binding.ID,
+		PlatformAccountID:  nullableBindingExternalAccountKey(binding.ExternalAccountKey),
+		Scopes:             scopes,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.issuer,
-			Subject:   fmt.Sprintf("user:%d", userID),
+			Subject:   fmt.Sprintf("user:%d", binding.OwnerUserID),
 			Audience:  jwt.ClaimStrings{audience},
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			ID:        fmt.Sprintf("%s:%d:%d", botID, ref.ID, now.UnixNano()),
+			ID:        fmt.Sprintf("%s:%s:%d:%d", consumer, botID, binding.ID, now.UnixNano()),
 		},
 	}
 

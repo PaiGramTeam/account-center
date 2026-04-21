@@ -70,9 +70,10 @@ message ListAccessibleAccountsResponse {
 
 message IssueServiceTicketRequest {
   string external_user_id = 1;
-  uint64 platform_account_ref_id = 2;
+  uint64 binding_id = 2;
   repeated string requested_scopes = 3;
   string audience = 4;
+  uint64 profile_id = 5;
 }
 
 message IssueServiceTicketResponse {

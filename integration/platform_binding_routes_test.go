@@ -220,6 +220,11 @@ func TestPlatformBindingRoutes(t *testing.T) {
 		putGrantData := decodeResponseData(t, putGrantResp)
 		assert.Equal(t, string(model.ConsumerGrantStatusRevoked), putGrantData["status"])
 
+		var revokedGrant model.ConsumerGrant
+		require.NoError(t, stack.DB.Where("binding_id = ? AND consumer = ?", binding.ID, serviceplatformbinding.ConsumerPaiGramBot).First(&revokedGrant).Error)
+		assert.Equal(t, model.ConsumerGrantStatusRevoked, revokedGrant.Status)
+		assert.True(t, revokedGrant.RevokedAt.Valid)
+
 		deleteResp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/platform-accounts/%d", uint64(createdID)), nil, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusNoContent, deleteResp.Code, deleteResp.Body.String())
 	})

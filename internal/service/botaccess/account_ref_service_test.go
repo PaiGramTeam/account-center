@@ -2,7 +2,6 @@ package botaccess
 
 import (
 	"database/sql"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -23,6 +22,9 @@ func setupBotAccessServiceTestDB(t *testing.T) *gorm.DB {
 		&model.BotIdentity{},
 		&model.PlatformAccountRef{},
 		&model.BotAccountGrant{},
+		&model.PlatformAccountBinding{},
+		&model.PlatformAccountProfile{},
+		&model.ConsumerGrant{},
 	)
 }
 
@@ -121,98 +123,152 @@ func TestAccountRefService_LinkPlatformAccountRejectsOtherUserOwnership(t *testi
 	require.ErrorIs(t, err, ErrPlatformAccountOwnedByOtherUser)
 }
 
-func TestAccountRefService_ListAccessibleAccountsFiltersByBotGrant(t *testing.T) {
+func TestAccountRefService_ListAccessibleAccountsFiltersByConsumerGrant(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
-	identity := seedBotIdentity(t, db, "bot-list", "external-list", 11)
-	seedBotIdentity(t, db, "bot-other", "external-other", 12)
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-list", 11)
+	otherIdentity := seedBotIdentity(t, db, "bot-other", "external-other", 12)
+	otherBot := model.Bot{ID: "bot-other-same-user", Name: "Other Same User", Type: "OTHER", Status: "ACTIVE", OwnerUserID: identity.UserID, APIKey: "other-same-user-key", APISecret: "other-same-user-secret", Scopes: "[]", Metadata: "{}"}
+	require.NoError(t, db.Create(&otherBot).Error)
+	require.NoError(t, db.Create(&model.BotIdentity{UserID: identity.UserID, BotID: otherBot.ID, ExternalUserID: "external-list-other-bot", LinkedAt: time.Now().UTC()}).Error)
 
-	activeVisible := model.PlatformAccountRef{
-		UserID:             identity.UserID,
+	activeVisible := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
 		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-visible", Valid: true},
 		PlatformServiceKey: "tg-main",
-		PlatformAccountID:  "acct-visible",
 		DisplayName:        "Visible",
-		Status:             model.PlatformAccountRefStatusActive,
+		Status:             model.PlatformAccountBindingStatusActive,
 	}
-	filteredPlatform := model.PlatformAccountRef{
-		UserID:             identity.UserID,
+	filteredPlatform := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
 		Platform:           "discord",
+		ExternalAccountKey: sql.NullString{String: "acct-discord", Valid: true},
 		PlatformServiceKey: "dc-main",
-		PlatformAccountID:  "acct-discord",
 		DisplayName:        "Discord",
-		Status:             model.PlatformAccountRefStatusActive,
+		Status:             model.PlatformAccountBindingStatusActive,
 	}
-	inactive := model.PlatformAccountRef{
-		UserID:             identity.UserID,
+	inactive := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
 		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-inactive", Valid: true},
 		PlatformServiceKey: "tg-main",
-		PlatformAccountID:  "acct-inactive",
 		DisplayName:        "Inactive",
-		Status:             model.PlatformAccountRefStatusInactive,
+		Status:             model.PlatformAccountBindingStatusDisabled,
 	}
-	noGrant := model.PlatformAccountRef{
-		UserID:             identity.UserID,
+	noGrant := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
 		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-no-grant", Valid: true},
 		PlatformServiceKey: "tg-main",
-		PlatformAccountID:  "acct-no-grant",
 		DisplayName:        "No Grant",
-		Status:             model.PlatformAccountRefStatusActive,
+		Status:             model.PlatformAccountBindingStatusActive,
 	}
-	revoked := model.PlatformAccountRef{
-		UserID:             identity.UserID,
+	revoked := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
 		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-revoked", Valid: true},
 		PlatformServiceKey: "tg-main",
-		PlatformAccountID:  "acct-revoked",
 		DisplayName:        "Revoked",
-		Status:             model.PlatformAccountRefStatusActive,
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	otherOwner := model.PlatformAccountBinding{
+		OwnerUserID:        otherIdentity.UserID,
+		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-other-owner", Valid: true},
+		PlatformServiceKey: "tg-main",
+		DisplayName:        "Other Owner",
+		Status:             model.PlatformAccountBindingStatusActive,
 	}
 	require.NoError(t, db.Create(&activeVisible).Error)
 	require.NoError(t, db.Create(&filteredPlatform).Error)
 	require.NoError(t, db.Create(&inactive).Error)
 	require.NoError(t, db.Create(&noGrant).Error)
 	require.NoError(t, db.Create(&revoked).Error)
+	require.NoError(t, db.Create(&otherOwner).Error)
 
-	grantJSON, err := json.Marshal([]string{"scope:a"})
-	require.NoError(t, err)
-
-	require.NoError(t, db.Create(&model.BotAccountGrant{UserID: identity.UserID, BotID: identity.BotID, PlatformAccountRefID: activeVisible.ID, Scopes: string(grantJSON), GrantedAt: time.Now().UTC()}).Error)
-	require.NoError(t, db.Create(&model.BotAccountGrant{UserID: identity.UserID, BotID: identity.BotID, PlatformAccountRefID: filteredPlatform.ID, Scopes: string(grantJSON), GrantedAt: time.Now().UTC()}).Error)
-	require.NoError(t, db.Create(&model.BotAccountGrant{UserID: identity.UserID, BotID: identity.BotID, PlatformAccountRefID: inactive.ID, Scopes: string(grantJSON), GrantedAt: time.Now().UTC()}).Error)
-	require.NoError(t, db.Create(&model.BotAccountGrant{UserID: identity.UserID, BotID: identity.BotID, PlatformAccountRefID: revoked.ID, Scopes: string(grantJSON), GrantedAt: time.Now().UTC(), RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}).Error)
-	require.NoError(t, db.Create(&model.BotAccountGrant{UserID: identity.UserID, BotID: "bot-other", PlatformAccountRefID: noGrant.ID, Scopes: string(grantJSON), GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: activeVisible.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: filteredPlatform.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: inactive.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: revoked.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusRevoked, GrantedAt: time.Now().UTC(), RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: otherOwner.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
 
 	accounts, err := service.ListAccessibleAccounts(identity.BotID, identity.ExternalUserID, "telegram")
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
 	assert.Equal(t, activeVisible.ID, accounts[0].ID)
+	assert.Equal(t, activeVisible.OwnerUserID, accounts[0].UserID)
 	assert.Equal(t, "acct-visible", accounts[0].PlatformAccountID)
+
+	otherBotAccounts, err := service.ListAccessibleAccounts(otherBot.ID, "external-list-other-bot", "telegram")
+	require.NoError(t, err)
+	assert.Empty(t, otherBotAccounts)
 }
 
-func TestAccountRefService_GetGrantedAccount(t *testing.T) {
+func TestAccountRefService_GetGrantedBinding(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
-	identity := seedBotIdentity(t, db, "bot-grant", "external-grant", 31)
-	ref := model.PlatformAccountRef{
-		UserID:             identity.UserID,
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-grant", 31)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
 		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-lookup", Valid: true},
 		PlatformServiceKey: "tg-main",
-		PlatformAccountID:  "acct-lookup",
 		DisplayName:        "Lookup",
-		Status:             model.PlatformAccountRefStatusActive,
+		Status:             model.PlatformAccountBindingStatusActive,
 	}
-	require.NoError(t, db.Create(&ref).Error)
-	grantJSON, err := json.Marshal([]string{"scope:a", "scope:b"})
-	require.NoError(t, err)
-	require.NoError(t, db.Create(&model.BotAccountGrant{UserID: identity.UserID, BotID: identity.BotID, PlatformAccountRefID: ref.ID, Scopes: string(grantJSON), GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&binding).Error)
+	grant := model.ConsumerGrant{BindingID: binding.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}
+	require.NoError(t, db.Create(&grant).Error)
 
-	resolvedIdentity, resolvedRef, resolvedGrant, err := service.GetGrantedAccount(identity.BotID, identity.ExternalUserID, ref.ID)
+	resolvedIdentity, resolvedBinding, resolvedGrant, err := service.GetGrantedBinding(identity.BotID, identity.ExternalUserID, binding.ID, 0)
 	require.NoError(t, err)
 	assert.Equal(t, identity.ID, resolvedIdentity.ID)
-	assert.Equal(t, ref.ID, resolvedRef.ID)
-	assert.Equal(t, ref.ID, resolvedGrant.PlatformAccountRefID)
+	assert.Equal(t, binding.ID, resolvedBinding.ID)
+	assert.Equal(t, binding.ID, resolvedGrant.BindingID)
+}
+
+func TestAccountRefService_GetGrantedBindingRejectsProfileFromOtherBinding(t *testing.T) {
+	db := setupBotAccessServiceTestDB(t)
+	service := &AccountRefService{db: db}
+
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-grant-profile", 32)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:binding", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Binding",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	otherBinding := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:other-binding", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Other Binding",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+	require.NoError(t, db.Create(&otherBinding).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: binding.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	foreignProfile := model.PlatformAccountProfile{
+		BindingID:          otherBinding.ID,
+		PlatformProfileKey: "mihomo:20002",
+		GameBiz:            "hk4e_cn",
+		Region:             "cn_gf01",
+		PlayerUID:          "20002",
+		Nickname:           "Foreign",
+	}
+	require.NoError(t, db.Create(&foreignProfile).Error)
+
+	resolvedIdentity, resolvedBinding, resolvedGrant, err := service.GetGrantedBinding(identity.BotID, identity.ExternalUserID, binding.ID, foreignProfile.ID)
+	require.ErrorIs(t, err, ErrPlatformAccountMissing)
+	assert.Nil(t, resolvedIdentity)
+	assert.Nil(t, resolvedBinding)
+	assert.Nil(t, resolvedGrant)
 }
 
 func seedBotIdentity(t *testing.T, db *gorm.DB, botID, externalUserID string, suffix uint64) model.BotIdentity {

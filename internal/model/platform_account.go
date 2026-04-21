@@ -36,7 +36,8 @@ func (BotIdentity) TableName() string {
 	return "bot_identities"
 }
 
-// PlatformAccountRef stores a non-sensitive reference to an external platform account.
+// PlatformAccountRef is a legacy compatibility model retained only for migration read paths.
+// New bot and consumer integrations must use PlatformAccountBinding instead.
 type PlatformAccountRef struct {
 	ID                 uint64                   `gorm:"primaryKey"`
 	UserID             uint64                   `gorm:"not null;index:idx_platform_account_refs_user_platform,priority:1"`
@@ -57,7 +58,8 @@ func (PlatformAccountRef) TableName() string {
 	return "platform_account_refs"
 }
 
-// BotAccountGrant records the scopes a bot may use for a platform account reference.
+// BotAccountGrant is a legacy compatibility model retained only for migration read paths.
+// New bot and consumer integrations must use ConsumerGrant with binding_id semantics instead.
 type BotAccountGrant struct {
 	ID                   uint64         `gorm:"primaryKey"`
 	UserID               uint64         `gorm:"not null;index"`

@@ -61,18 +61,17 @@ func TestAdminRoleRoutesRespectPermissions(t *testing.T) {
 
 	listDenied := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
 	require.Equal(t, http.StatusForbidden, listDenied.Code, listDenied.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, listDenied))
 
 	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceRole, model.ActionRead))
+	listStillDenied := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
+	require.Equal(t, http.StatusForbidden, listStillDenied.Code, listStillDenied.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, listStillDenied))
+
+	grantAdminRoleToUser(t, stack, actorID)
 	listAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
 	require.Equal(t, http.StatusOK, listAllowed.Code, listAllowed.Body.String())
 
-	createDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/roles", map[string]any{
-		"name":         "new-role",
-		"display_name": "New Role",
-	}, headers)
-	require.Equal(t, http.StatusForbidden, createDenied.Code, createDenied.Body.String())
-
-	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceRole, model.ActionCreate))
 	createAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/roles", map[string]any{
 		"name":         "new-role",
 		"display_name": "New Role",

@@ -33,7 +33,7 @@ func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
 	}
 
 	admin := rg.Group("/admin/platform-accounts")
-	admin.Use(middleware.CasbinMiddleware())
+	admin.Use(middleware.RequireRoleMiddleware("admin"), middleware.CasbinMiddleware())
 	{
 		admin.GET("", adminHandler.ListBindings)
 		admin.GET("/:bindingId", adminHandler.GetBinding)

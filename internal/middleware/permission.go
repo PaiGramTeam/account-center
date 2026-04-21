@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"paigram/internal/casbin"
+	"paigram/internal/model"
 	"paigram/internal/response"
 	"paigram/internal/service"
 )
@@ -232,7 +233,11 @@ func RequireRoleMiddleware(roleNames ...string) gin.HandlerFunc {
 		}
 
 		if !has {
-			response.ForbiddenWithCode(c, "FORBIDDEN", "insufficient role permissions", nil)
+			if len(roleNames) == 1 && roleNames[0] == model.RoleAdmin {
+				response.ForbiddenWithCode(c, "ADMIN_REQUIRED", "admin role required", nil)
+			} else {
+				response.ForbiddenWithCode(c, "FORBIDDEN", "insufficient role permissions", nil)
+			}
 			c.Abort()
 			return
 		}

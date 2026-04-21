@@ -260,6 +260,31 @@ func TestPlatformBindingRoutes(t *testing.T) {
 		} {
 			resp := performJSONRequest(t, stack.Router, tc.method, tc.path, tc.body, authHeaders(viewerAccessToken))
 			require.Equal(t, http.StatusForbidden, resp.Code, "%s %s should require admin: %s", tc.method, tc.path, resp.Body.String())
+			assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, resp))
+		}
+
+		grantPermissionsToUser(t, stack, viewerID,
+			model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionList),
+			model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionRead),
+			model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionUpdate),
+			model.BuildPermissionName(model.ResourcePlatformAccount, model.ActionDelete),
+		)
+
+		for _, tc := range []struct {
+			method string
+			path   string
+			body   any
+		}{
+			{method: http.MethodGet, path: "/api/v1/admin/platform-accounts"},
+			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/admin/platform-accounts/%d", binding.ID)},
+			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/admin/platform-accounts/%d/profiles", binding.ID)},
+			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/admin/platform-accounts/%d/consumer-grants", binding.ID)},
+			{method: http.MethodPut, path: fmt.Sprintf("/api/v1/admin/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot), body: map[string]any{"enabled": true}},
+			{method: http.MethodPost, path: fmt.Sprintf("/api/v1/admin/platform-accounts/%d/refresh", binding.ID)},
+		} {
+			resp := performJSONRequest(t, stack.Router, tc.method, tc.path, tc.body, authHeaders(viewerAccessToken))
+			require.Equal(t, http.StatusForbidden, resp.Code, "%s %s should reject non-admins even with permissions: %s", tc.method, tc.path, resp.Body.String())
+			assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, resp))
 		}
 
 		listResp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/platform-accounts", nil, authHeaders(adminAccessToken))
@@ -298,6 +323,7 @@ func TestPlatformBindingRoutes(t *testing.T) {
 
 		deleteUnauthorizedResp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/platform-accounts/%d", deletable.ID), nil, authHeaders(viewerAccessToken))
 		require.Equal(t, http.StatusForbidden, deleteUnauthorizedResp.Code, deleteUnauthorizedResp.Body.String())
+		assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, deleteUnauthorizedResp))
 
 		deleteResp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/platform-accounts/%d", deletable.ID), nil, authHeaders(adminAccessToken))
 		require.Equal(t, http.StatusNoContent, deleteResp.Code, deleteResp.Body.String())

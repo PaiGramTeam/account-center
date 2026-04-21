@@ -14,7 +14,7 @@ type RouterGroup struct{}
 // Init registers the phase-two /admin/audit-logs routes.
 func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
 	adminAudit := rg.Group("/admin")
-	adminAudit.Use(middleware.CasbinMiddleware())
+	adminAudit.Use(middleware.RequireRoleMiddleware("admin"), middleware.CasbinMiddleware())
 	{
 		adminAudit.GET("/audit-logs", handler.ApiGroupApp.AdminAuditApiGroup.AuditHandler.ListAuditLogs)
 		adminAudit.GET("/audit-logs/:id", handler.ApiGroupApp.AdminAuditApiGroup.AuditHandler.GetAuditLog)

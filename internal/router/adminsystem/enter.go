@@ -13,9 +13,10 @@ type RouterGroup struct{}
 
 // Init registers the phase-two /admin/system routes.
 func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
+	adminGate := middleware.RequireRoleMiddleware("admin")
 	permissionCheck := middleware.CasbinMiddleware()
 	adminSystem := rg.Group("/admin/system")
-	adminSystem.Use(permissionCheck)
+	adminSystem.Use(adminGate, permissionCheck)
 	{
 		settings := adminSystem.Group("/settings")
 		{

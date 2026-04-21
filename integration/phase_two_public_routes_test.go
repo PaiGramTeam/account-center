@@ -3,10 +3,15 @@
 package integration
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"paigram/internal/casbin"
+	"paigram/internal/model"
 )
 
 func TestPhaseTwoPublicRouteShape(t *testing.T) {
@@ -57,5 +62,35 @@ func TestPhaseTwoPublicRouteShape(t *testing.T) {
 		resp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/system/platform-services", nil, authHeaders(accessToken))
 
 		require.Equal(t, http.StatusForbidden, resp.Code, resp.Body.String())
+	})
+
+	t.Run("authenticated non-admin with direct system route grant still gets admin required", func(t *testing.T) {
+		userID, accessToken, _, _, _ := registerVerifyAndLogin(t, stack, "phase-two-system-permission")
+
+		role := model.Role{
+			Name:        fmt.Sprintf("system-read-%d", userID),
+			DisplayName: "System Read",
+			Description: "integration test system read role",
+		}
+		require.NoError(t, stack.DB.Create(&role).Error)
+		permission := model.Permission{
+			Name:        fmt.Sprintf("system-route-read-%d", userID),
+			Resource:    model.ResourceSystem,
+			Action:      model.ActionRead,
+			Description: "integration test direct system route grant",
+		}
+		require.NoError(t, stack.DB.Create(&permission).Error)
+		require.NoError(t, stack.DB.Create(&model.RolePermission{RoleID: role.ID, PermissionID: permission.ID}).Error)
+		require.NoError(t, stack.DB.Create(&model.UserRole{UserID: userID, RoleID: role.ID, GrantedBy: userID}).Error)
+
+		enforcer := casbin.GetEnforcer()
+		require.NotNil(t, enforcer)
+		_, err := enforcer.AddPolicy(fmt.Sprint(role.ID), "/api/v1/admin/system/settings/site", http.MethodGet)
+		require.NoError(t, err)
+
+		resp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/system/settings/site", nil, authHeaders(accessToken))
+
+		require.Equal(t, http.StatusForbidden, resp.Code, resp.Body.String())
+		assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, resp))
 	})
 }

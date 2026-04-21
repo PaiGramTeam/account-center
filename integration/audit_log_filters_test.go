@@ -9,10 +9,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"paigram/internal/model"
 )
+
+func TestAdminAuditRoutesRequireAdminEvenWithAuditPermission(t *testing.T) {
+	stack := newIntegrationStack(t)
+	userID, accessToken, _, _, _ := registerAndLogin(t, stack, "audit-viewer-"+time.Now().Format("20060102150405.000000")+"@example.com", "ViewerPass123!")
+	grantPermissionsToUser(t, stack, userID, model.PermAuditRead)
+
+	resp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/audit-logs", nil, authHeaders(accessToken))
+	require.Equal(t, http.StatusForbidden, resp.Code, resp.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, resp))
+	assert.Contains(t, resp.Body.String(), "admin role required")
+	_ = userID
+}
 
 func TestAuditLogFiltersByCategory(t *testing.T) {
 	stack := newIntegrationStack(t)

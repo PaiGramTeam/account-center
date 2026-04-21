@@ -223,17 +223,8 @@ type meEmailIDParams struct {
 	EmailID uint64 `json:"emailId"`
 }
 
-// swagger:parameters deleteMeLoginMethod
-type deleteMeLoginMethodParams struct {
-	// Provider key.
-	// in: path
-	// required: true
-	// example: github
-	Provider string `json:"provider"`
-}
-
-// swagger:parameters patchMePrimaryLoginMethod
-type patchMePrimaryLoginMethodParams struct {
+// swagger:parameters deleteMeLoginMethod patchMePrimaryLoginMethod
+type meLoginMethodProviderParams struct {
 	// Provider key.
 	// in: path
 	// required: true

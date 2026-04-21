@@ -104,7 +104,7 @@ jobs:
         run: go mod download
 
       - name: Run integration tests
-        run: go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./integration/...
+        run: go test -tags=integration -covermode=atomic -coverpkg=./... -coverprofile=coverage-integration.out ./integration/...
         env:
           PAI_TEST_DATABASE_ADDR: 127.0.0.1:3306
           PAI_TEST_DATABASE_USERNAME: root

@@ -176,6 +176,7 @@ type fakeCredentialGateway struct {
 	err              error
 	called           bool
 	deleteCalled     bool
+	deleteCallCount  int
 	deleteErr        error
 	deleteEndpoint   string
 	deleteTicket     string
@@ -234,6 +235,7 @@ func (f *fakeCredentialGateway) RefreshCredential(context.Context, string, strin
 
 func (f *fakeCredentialGateway) DeleteCredential(_ context.Context, endpoint, ticket string, binding *model.PlatformAccountBinding) error {
 	f.deleteCalled = true
+	f.deleteCallCount++
 	f.deleteEndpoint = endpoint
 	f.deleteTicket = ticket
 	if binding != nil {
@@ -530,6 +532,35 @@ func TestDeleteBindingForOwnerMarksDeleteFailedWhenGatewayUnavailable(t *testing
 	assert.Equal(t, "credential_delete_failed", reader.updatedReason)
 	assert.Equal(t, ErrCredentialGatewayUnavailable.Error(), reader.updatedMessage)
 	assert.Nil(t, platformSvc.lastScope)
+}
+
+func TestDeleteBindingForOwnerRetriesControlPlaneCleanupWithoutRepeatingProviderDelete(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding, deleteErr: errors.New("cleanup delete failed")}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway)
+
+	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
+	require.EqualError(t, err, "cleanup delete failed")
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
+	assert.Equal(t, "control_plane_cleanup_failed", reader.updatedReason)
+	assert.Equal(t, 1, gateway.deleteCallCount)
+
+	reader.deleteErr = nil
+	err = svc.DeleteBindingForOwner(context.Background(), 7, 101)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(101), reader.deletedID)
+	assert.Equal(t, 1, gateway.deleteCallCount)
 }
 
 func TestPutCredentialForOwnerPersistsResolvedRuntimeState(t *testing.T) {

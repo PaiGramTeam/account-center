@@ -199,8 +199,16 @@ func (s *OrchestrationService) deleteBinding(ctx context.Context, binding *model
 	if binding == nil {
 		return ErrBindingNotFound
 	}
+	wasCleanupFailed := binding.Status == model.PlatformAccountBindingStatusDeleteFailed && binding.StatusReasonCode == "control_plane_cleanup_failed"
 	if _, err := s.bindingReader.UpdateBindingStatus(binding.ID, model.PlatformAccountBindingStatusDeleting); err != nil {
 		return err
+	}
+	if wasCleanupFailed {
+		_, err := s.bindingReader.DeleteBinding(binding.ID)
+		if err != nil {
+			return s.markDeleteFailed(binding.ID, err, "control_plane_cleanup_failed")
+		}
+		return nil
 	}
 
 	if !binding.ExternalAccountKey.Valid || binding.ExternalAccountKey.String == "" {

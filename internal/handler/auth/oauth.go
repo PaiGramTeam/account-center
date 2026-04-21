@@ -197,15 +197,17 @@ type oauthCallbackRequest struct {
 //
 // Responses:
 //
-//	200: loginResponse
+//	200: oauthCallbackResponse
 //	400: authErrorResponse
 //	401: authErrorResponse
-//	404: authErrorResponse
+//	403: authErrorResponse
 //	409: authErrorResponse
 //	500: authErrorResponse
 //
 // HandleOAuthCallback processes the OAuth callback and issues a local session.
-// Now performs secure backend token exchange - frontend only sends authorization code.
+// Login-purpose callbacks return a login session payload; bind-purpose callbacks return
+// a bind result payload for the authenticated user. Bind-purpose callbacks require the
+// current authenticated user to match the persisted state owner.
 func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	provider := strings.ToLower(c.Param("provider"))
 	providerCfg, ok := h.resolveProvider(provider)
@@ -239,6 +241,22 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		_ = h.db.Delete(&stateRecord)
 		response.BadRequest(c, "oauth state expired")
 		return
+	}
+
+	purpose := oauthPurposeFromState(stateRecord)
+	if purpose == model.OAuthPurposeBindLoginMethod {
+		if err := h.authorizeBindCallback(c, stateRecord); err != nil {
+			if errors.Is(err, errBindAuthRequired) {
+				response.UnauthorizedWithCode(c, "UNAUTHORIZED", "bind callback requires authentication", nil)
+				return
+			}
+			if errors.Is(err, errBindUserMismatch) {
+				response.ForbiddenWithCode(c, "FORBIDDEN", "authenticated user does not match bind state", nil)
+				return
+			}
+			response.InternalServerErrorWithCode(c, "AUTH_ERROR", "authentication failed", nil)
+			return
+		}
 	}
 
 	// Delete state (one-time use)
@@ -280,21 +298,7 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		return
 	}
 
-	purpose := oauthPurposeFromState(stateRecord)
 	if purpose == model.OAuthPurposeBindLoginMethod {
-		if err := h.authorizeBindCallback(c, stateRecord); err != nil {
-			if errors.Is(err, errBindAuthRequired) {
-				response.UnauthorizedWithCode(c, "UNAUTHORIZED", "bind callback requires authentication", nil)
-				return
-			}
-			if errors.Is(err, errBindUserMismatch) {
-				response.ForbiddenWithCode(c, "FORBIDDEN", "authenticated user does not match bind state", nil)
-				return
-			}
-			response.InternalServerErrorWithCode(c, "AUTH_ERROR", "authentication failed", nil)
-			return
-		}
-
 		err = h.bindOAuthLoginMethod(provider, stateRecord, userInfo, tokenResp, now)
 		if err != nil {
 			if errors.Is(err, errProviderAlreadyBound) {

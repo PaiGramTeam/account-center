@@ -165,7 +165,7 @@ func TestHandleOAuthCallbackRequiresAuthenticatedSessionForBindPurpose(t *testin
 	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
 	assert.Equal(t, "UNAUTHORIZED", decodeOAuthErrorCode(t, w))
 
-	assertOAuthStateDeleted(t, db, state.State)
+	assertOAuthStateExists(t, db, state.State)
 }
 
 func TestHandleOAuthCallbackRejectsBindPurposeForDifferentAuthenticatedUser(t *testing.T) {
@@ -203,7 +203,39 @@ func TestHandleOAuthCallbackRejectsBindPurposeForDifferentAuthenticatedUser(t *t
 	require.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
 	assert.Equal(t, "FORBIDDEN", decodeOAuthErrorCode(t, w))
 
-	assertOAuthStateDeleted(t, db, state.State)
+	assertOAuthStateExists(t, db, state.State)
+}
+
+func TestHandleOAuthCallbackDoesNotConsumeStateWhenBindCallbackIsUnauthorized(t *testing.T) {
+	db := setupTestDB(t)
+	ensureUserOAuthStatesTable(t, db)
+	h := setupOAuthTestHandler(db)
+
+	binder := createTestUser(t, db, "binder-no-consume@example.com", "Password123!", true)
+	state := model.UserOAuthState{
+		Provider:     "telegram",
+		State:        "bind-preserve-state",
+		Purpose:      string(model.OAuthPurposeBindLoginMethod),
+		UserID:       sql.NullInt64{Int64: int64(binder.ID), Valid: true},
+		RedirectTo:   "https://app.example.com/settings/login-methods",
+		Nonce:        "expected-nonce",
+		CodeVerifier: "expected-verifier",
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
+	}
+	require.NoError(t, db.Create(&state).Error)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := bytes.NewBufferString(`{"state":"bind-preserve-state","code":"provider-code"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/telegram/callback", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Params = gin.Params{{Key: "provider", Value: "telegram"}}
+
+	h.HandleOAuthCallback(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	assert.Equal(t, "UNAUTHORIZED", decodeOAuthErrorCode(t, w))
+	assertOAuthStateExists(t, db, state.State)
 }
 
 func ensureUserOAuthStatesTable(t *testing.T, db *gorm.DB) {
@@ -268,6 +300,14 @@ func assertOAuthStateDeleted(t *testing.T, db *gorm.DB, state string) {
 	var count int64
 	require.NoError(t, db.Model(&model.UserOAuthState{}).Where("state = ?", state).Count(&count).Error)
 	assert.Zero(t, count)
+}
+
+func assertOAuthStateExists(t *testing.T, db *gorm.DB, state string) {
+	t.Helper()
+
+	var count int64
+	require.NoError(t, db.Model(&model.UserOAuthState{}).Where("state = ?", state).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
 }
 
 func decodeOAuthErrorCode(t *testing.T, recorder *httptest.ResponseRecorder) string {

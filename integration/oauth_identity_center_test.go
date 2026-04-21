@@ -3,7 +3,6 @@
 package integration
 
 import (
-	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -109,17 +108,7 @@ func TestOAuthBindFlowRequiresAuthenticatedSessionForCallback(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, noAuthRes.Code, noAuthRes.Body.String())
 	assert.Equal(t, "UNAUTHORIZED", decodeErrorCode(t, noAuthRes))
 	assertOAuthStatePresent(t, stack, state)
-
-	stateRow := model.UserOAuthState{
-		Provider:     "github",
-		State:        state,
-		Purpose:      string(model.OAuthPurposeBindLoginMethod),
-		UserID:       sql.NullInt64{Int64: int64(binderUserID), Valid: true},
-		RedirectTo:   "https://app.example.com/settings/login-methods",
-		CodeVerifier: "reissued-verifier",
-		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
-	}
-	require.NoError(t, stack.DB.Create(&stateRow).Error)
+	assertOAuthStateOwnedByUser(t, stack, state, binderUserID)
 
 	mismatchRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/oauth/github/callback", map[string]any{
 		"state": state,
@@ -128,6 +117,17 @@ func TestOAuthBindFlowRequiresAuthenticatedSessionForCallback(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, mismatchRes.Code, mismatchRes.Body.String())
 	assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, mismatchRes))
 	assertOAuthStatePresent(t, stack, state)
+	assertOAuthStateOwnedByUser(t, stack, state, binderUserID)
+
+	successRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/oauth/github/callback", map[string]any{
+		"state": state,
+		"code":  "provider-code",
+	}, authHeaders(binderAccessToken))
+	require.Equal(t, http.StatusOK, successRes.Code, successRes.Body.String())
+	successData := decodeResponseData(t, successRes)
+	assert.Equal(t, true, successData["bound"])
+	assert.Equal(t, "bind_login_method", successData["purpose"])
+	assertOAuthStateConsumed(t, stack, state)
 }
 
 func TestOAuthBindFlowWrongUserDoesNotConsumeState(t *testing.T) {
@@ -176,6 +176,23 @@ func assertOAuthStatePresent(t *testing.T, stack *integrationStack, state string
 	var count int64
 	require.NoError(t, stack.DB.Model(&model.UserOAuthState{}).Where("state = ?", state).Count(&count).Error)
 	require.Equal(t, int64(1), count)
+}
+
+func assertOAuthStateConsumed(t *testing.T, stack *integrationStack, state string) {
+	t.Helper()
+
+	var count int64
+	require.NoError(t, stack.DB.Model(&model.UserOAuthState{}).Where("state = ?", state).Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func assertOAuthStateOwnedByUser(t *testing.T, stack *integrationStack, state string, userID uint64) {
+	t.Helper()
+
+	var stateRow model.UserOAuthState
+	require.NoError(t, stack.DB.Where("state = ?", state).First(&stateRow).Error)
+	require.True(t, stateRow.UserID.Valid)
+	require.Equal(t, int64(userID), stateRow.UserID.Int64)
 }
 
 type integrationOAuthProvider struct {

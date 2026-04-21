@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"paigram/internal/model"
 )
 
-const ConsumerPaiGramBot = "paigram-bot"
+const ConsumerPaiGramBot = model.ConsumerPaiGramBot
 
-var SupportedConsumers = []string{ConsumerPaiGramBot}
+var SupportedConsumers = model.SupportedConsumers
 
 type CreateBindingInput struct {
 	OwnerUserID        uint64

@@ -118,9 +118,9 @@ func (s *AccountRefService) ListAccessibleAccounts(botID, externalUserID, platfo
 	if err != nil {
 		return nil, err
 	}
-	consumer := consumerName(botID)
-	if consumer == "" {
-		return []model.PlatformAccountRef{}, nil
+	consumer, err := consumerName(botID)
+	if err != nil {
+		return nil, err
 	}
 
 	query := s.db.Model(&model.PlatformAccountBinding{}).
@@ -153,9 +153,9 @@ func (s *AccountRefService) GetGrantedBinding(botID, externalUserID string, bind
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	consumer := consumerName(botID)
-	if consumer == "" {
-		return nil, nil, nil, ErrBotGrantNotFound
+	consumer, err := consumerName(botID)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	var binding model.PlatformAccountBinding
@@ -192,6 +192,26 @@ func (s *AccountRefService) GetGrantedBinding(botID, externalUserID string, bind
 	return identity, &binding, &grant, nil
 }
 
+func (s *AccountRefService) GetGrantedScopes(botID string, bindingID uint64) ([]string, error) {
+	var grant model.BotAccountGrant
+	if err := s.db.Where("bot_id = ? AND platform_account_ref_id = ?", botID, bindingID).First(&grant).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, ErrBotGrantNotFound
+		}
+		return nil, fmt.Errorf("get bot account grant scopes: %w", err)
+	}
+	if grant.RevokedAt.Valid {
+		return nil, ErrBotGrantRevoked
+	}
+
+	scopes, err := DecodeGrantScopes(grant)
+	if err != nil {
+		return nil, fmt.Errorf("decode bot account grant scopes: %w", err)
+	}
+
+	return scopes, nil
+}
+
 func nullString(value string) sql.NullString {
 	if value == "" {
 		return sql.NullString{}
@@ -200,13 +220,13 @@ func nullString(value string) sql.NullString {
 	return sql.NullString{String: value, Valid: true}
 }
 
-func consumerName(botID string) string {
-	switch botID {
-	case "bot-paigram", "paigram-bot":
-		return "paigram-bot"
-	default:
-		return ""
+func consumerName(botID string) (string, error) {
+	consumer, ok := model.ConsumerForBotID(botID)
+	if !ok {
+		return "", ErrConsumerNotSupported
 	}
+
+	return consumer, nil
 }
 
 func bindingToPlatformAccountRef(binding model.PlatformAccountBinding) model.PlatformAccountRef {

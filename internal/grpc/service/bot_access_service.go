@@ -115,8 +115,16 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 	if req.GetAudience() != binding.PlatformServiceKey {
 		return nil, status.Error(codes.InvalidArgument, "audience does not match binding platform service key")
 	}
+	grantedScopes, err := s.accountRefService.GetGrantedScopes(bot.Id, binding.ID)
+	if err != nil {
+		return nil, mapBotAccessError("get granted scopes", err)
+	}
+	scopes, err := selectTicketScopes(grantedScopes, req.GetRequestedScopes())
+	if err != nil {
+		return nil, mapBotAccessError("validate requested scopes", err)
+	}
 
-	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, req.GetRequestedScopes(), req.GetAudience())
+	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, scopes, req.GetAudience())
 	if err != nil {
 		return nil, mapBotAccessError("issue service ticket", err)
 	}
@@ -224,6 +232,8 @@ func mapBotAccessError(operation string, err error) error {
 		return status.Error(codes.NotFound, "bot account grant not found")
 	case errors.Is(err, botaccess.ErrBotGrantRevoked):
 		return status.Error(codes.PermissionDenied, "bot account grant revoked")
+	case errors.Is(err, botaccess.ErrConsumerNotSupported):
+		return status.Error(codes.InvalidArgument, "consumer is not supported")
 	case errors.Is(err, botaccess.ErrScopeNotGranted):
 		return status.Error(codes.PermissionDenied, "requested scope is not granted")
 	case errors.Is(err, botaccess.ErrPlatformAccountOwnedByOtherUser):

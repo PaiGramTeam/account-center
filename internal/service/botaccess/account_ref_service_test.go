@@ -188,11 +188,13 @@ func TestAccountRefService_ListAccessibleAccountsFiltersByConsumerGrant(t *testi
 	require.NoError(t, db.Create(&revoked).Error)
 	require.NoError(t, db.Create(&otherOwner).Error)
 
-	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: activeVisible.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
-	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: filteredPlatform.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
-	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: inactive.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
-	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: revoked.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusRevoked, GrantedAt: time.Now().UTC(), RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}).Error)
-	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: otherOwner.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	consumer, err := consumerName(identity.BotID)
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: activeVisible.ID, Consumer: consumer, Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: filteredPlatform.ID, Consumer: consumer, Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: inactive.ID, Consumer: consumer, Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: revoked.ID, Consumer: consumer, Status: model.ConsumerGrantStatusRevoked, GrantedAt: time.Now().UTC(), RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: otherOwner.ID, Consumer: consumer, Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
 
 	accounts, err := service.ListAccessibleAccounts(identity.BotID, identity.ExternalUserID, "telegram")
 	require.NoError(t, err)
@@ -220,7 +222,9 @@ func TestAccountRefService_GetGrantedBinding(t *testing.T) {
 		Status:             model.PlatformAccountBindingStatusActive,
 	}
 	require.NoError(t, db.Create(&binding).Error)
-	grant := model.ConsumerGrant{BindingID: binding.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}
+	consumer, err := consumerName(identity.BotID)
+	require.NoError(t, err)
+	grant := model.ConsumerGrant{BindingID: binding.ID, Consumer: consumer, Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}
 	require.NoError(t, db.Create(&grant).Error)
 
 	resolvedIdentity, resolvedBinding, resolvedGrant, err := service.GetGrantedBinding(identity.BotID, identity.ExternalUserID, binding.ID, 0)
@@ -253,7 +257,9 @@ func TestAccountRefService_GetGrantedBindingRejectsProfileFromOtherBinding(t *te
 	}
 	require.NoError(t, db.Create(&binding).Error)
 	require.NoError(t, db.Create(&otherBinding).Error)
-	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: binding.ID, Consumer: consumerName(identity.BotID), Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
+	consumer, err := consumerName(identity.BotID)
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: binding.ID, Consumer: consumer, Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
 	foreignProfile := model.PlatformAccountProfile{
 		BindingID:          otherBinding.ID,
 		PlatformProfileKey: "mihomo:20002",
@@ -269,6 +275,17 @@ func TestAccountRefService_GetGrantedBindingRejectsProfileFromOtherBinding(t *te
 	assert.Nil(t, resolvedIdentity)
 	assert.Nil(t, resolvedBinding)
 	assert.Nil(t, resolvedGrant)
+}
+
+func TestAccountRefService_ListAccessibleAccountsRejectsUnsupportedBot(t *testing.T) {
+	db := setupBotAccessServiceTestDB(t)
+	service := &AccountRefService{db: db}
+
+	identity := seedBotIdentity(t, db, "bot-unsupported", "external-unsupported", 33)
+
+	accounts, err := service.ListAccessibleAccounts(identity.BotID, identity.ExternalUserID, "telegram")
+	require.ErrorIs(t, err, ErrConsumerNotSupported)
+	assert.Nil(t, accounts)
 }
 
 func seedBotIdentity(t *testing.T, db *gorm.DB, botID, externalUserID string, suffix uint64) model.BotIdentity {

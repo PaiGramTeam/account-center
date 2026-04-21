@@ -79,6 +79,12 @@ func TestManagementSwaggerAnnotationsUseAdminUserNamespace(t *testing.T) {
 	require.NoError(t, err)
 	loginLogSource := string(loginLogSourceBytes)
 	assert.NotContains(t, loginLogSource, "@Router /api/v1/users/")
+
+	loginMethodSourceBytes, err := os.ReadFile(filepath.Join("login_method_handler.go"))
+	require.NoError(t, err)
+	loginMethodSource := string(loginMethodSourceBytes)
+	assert.NotContains(t, loginMethodSource, "@Router /api/v1/users/")
+	assert.Contains(t, loginMethodSource, "/api/v1/admin/users/{id}/login-methods")
 }
 
 func TestHandler_CreateUser(t *testing.T) {
@@ -124,6 +130,17 @@ func TestHandler_CreateUser(t *testing.T) {
 			},
 			wantStatus: http.StatusCreated,
 			wantErr:    false,
+		},
+		{
+			name: "reject provider primary login type when create flow cannot provision provider credential",
+			body: map[string]interface{}{
+				"email":              "googleuser@example.com",
+				"password":           "TestPass123!",
+				"display_name":       "Google User",
+				"primary_login_type": "google",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantErr:    true,
 		},
 		{
 			name: "reject roles on create",
@@ -195,6 +212,17 @@ func TestHandler_CreateUser(t *testing.T) {
 				"password":           "short",
 				"display_name":       "Test User",
 				"primary_login_type": "email",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantErr:    true,
+		},
+		{
+			name: "reject legacy oauth primary_login_type",
+			body: map[string]interface{}{
+				"email":              "legacyoauth@example.com",
+				"password":           "TestPass123!",
+				"display_name":       "Legacy OAuth",
+				"primary_login_type": "oauth",
 			},
 			wantStatus: http.StatusBadRequest,
 			wantErr:    true,

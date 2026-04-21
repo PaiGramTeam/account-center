@@ -7,6 +7,7 @@ import (
 	"paigram/internal/config"
 	"paigram/internal/email"
 	"paigram/internal/geolocation"
+	"paigram/internal/middleware"
 	"paigram/internal/security"
 	"paigram/internal/sessioncache"
 )
@@ -58,6 +59,11 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/reset-password", h.ResetPassword)
 
 	oauth := rg.Group("/oauth")
-	oauth.POST("/:provider/init", h.InitiateOAuth)
-	oauth.POST("/:provider/callback", h.HandleOAuthCallback)
+	h.RegisterOAuthRoutes(oauth)
+}
+
+// RegisterOAuthRoutes binds OAuth-specific routes to the router group.
+func (h *Handler) RegisterOAuthRoutes(rg *gin.RouterGroup) {
+	rg.POST("/:provider/init", h.InitiateOAuth)
+	rg.POST("/:provider/callback", middleware.OptionalAuthMiddleware(h.sessionCache), h.HandleOAuthCallback)
 }

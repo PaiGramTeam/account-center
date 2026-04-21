@@ -9,6 +9,7 @@ import (
 	"paigram/internal/config"
 	handlerAdminAudit "paigram/internal/handler/adminaudit"
 	handlerAdminSystem "paigram/internal/handler/adminsystem"
+	handlerAuth "paigram/internal/handler/auth"
 	handlerAuthority "paigram/internal/handler/authority"
 	handlerCasbin "paigram/internal/handler/casbin"
 	handlerMe "paigram/internal/handler/me"
@@ -30,6 +31,7 @@ import (
 // ApiGroup aggregates all API handler groups.
 type ApiGroup struct {
 	CasbinApiGroup          handlerCasbin.ApiGroup
+	AuthApiGroup            handlerAuth.ApiGroup
 	AuthorityApiGroup       handlerAuthority.ApiGroup
 	PlatformApiGroup        handlerPlatform.ApiGroup
 	PlatformBindingApiGroup handlerPlatformBinding.ApiGroup

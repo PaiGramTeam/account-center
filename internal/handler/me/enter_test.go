@@ -24,8 +24,11 @@ type fakeCurrentUserService struct {
 	err               error
 	deleteEmailErr    error
 	verifyEmailErr    error
+	patchPrimaryErr   error
 	verificationEmail *serviceme.VerificationEmailView
 	createdEmail      *serviceme.CreatedEmailView
+	patchedUserID     uint64
+	patchedProvider   string
 }
 
 func (f *fakeCurrentUserService) GetCurrentUserView(_ context.Context, _ uint64) (*CurrentUserView, error) {
@@ -46,6 +49,12 @@ func (f *fakeCurrentUserService) CreateEmail(context.Context, serviceme.CreateEm
 
 func (f *fakeCurrentUserService) PatchPrimaryEmail(context.Context, uint64, uint64) error {
 	return nil
+}
+
+func (f *fakeCurrentUserService) SetPrimaryLoginMethod(_ context.Context, userID uint64, provider string) error {
+	f.patchedUserID = userID
+	f.patchedProvider = provider
+	return f.patchPrimaryErr
 }
 
 func (f *fakeCurrentUserService) ListLoginMethods(context.Context, uint64) ([]serviceme.LoginMethodView, error) {
@@ -251,4 +260,53 @@ func TestCurrentUserHandlerDeleteEmailReturnsNotFoundWhenServiceFails(t *testing
 
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Contains(t, rec.Body.String(), "email not found")
+}
+
+func TestCurrentUserHandlerPatchPrimaryLoginMethodUsesMeRoute(t *testing.T) {
+	service := &fakeCurrentUserService{}
+	handler := NewCurrentUserHandler(service)
+	ctx, rec := testContextWithUser(t, http.MethodPatch, "/api/v1/me/login-methods/github/primary", 7)
+	ctx.Params = []gin.Param{{Key: "provider", Value: "github"}}
+
+	handler.PatchPrimaryLoginMethod(ctx)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, uint64(7), service.patchedUserID)
+	assert.Equal(t, "github", service.patchedProvider)
+	assert.Contains(t, rec.Body.String(), "primary login method updated successfully")
+}
+
+func TestCurrentUserHandlerPatchPrimaryLoginMethodMapsErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		serviceErr   error
+		wantStatus   int
+		wantBodyText string
+	}{
+		{
+			name:         "provider not bound",
+			serviceErr:   serviceme.ErrProviderNotBound,
+			wantStatus:   http.StatusNotFound,
+			wantBodyText: "provider not bound to this account",
+		},
+		{
+			name:         "internal error",
+			serviceErr:   errors.New("boom"),
+			wantStatus:   http.StatusInternalServerError,
+			wantBodyText: "failed to set primary login method",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := NewCurrentUserHandler(&fakeCurrentUserService{patchPrimaryErr: tt.serviceErr})
+			ctx, rec := testContextWithUser(t, http.MethodPatch, "/api/v1/me/login-methods/github/primary", 7)
+			ctx.Params = []gin.Param{{Key: "provider", Value: "github"}}
+
+			handler.PatchPrimaryLoginMethod(ctx)
+
+			require.Equal(t, tt.wantStatus, rec.Code)
+			assert.Contains(t, rec.Body.String(), tt.wantBodyText)
+		})
+	}
 }

@@ -85,6 +85,39 @@ func TestSensitiveSecurityRoutesRequireFreshSession(t *testing.T) {
 	assert.Equal(t, "SESSION_NOT_FRESH", decodeErrorCode(t, staleRes))
 }
 
+func TestLoginMethodMutationRoutesRequireFreshSession(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	userID, accessToken, refreshToken, _, _ := registerVerifyAndLogin(t, stack, "login-method-freshness")
+	session := requireSessionForRefreshToken(t, stack.DB, refreshToken)
+	require.NoError(t, stack.DB.Model(&model.UserSession{}).Where("id = ?", session.ID).Update("created_at", time.Now().UTC().Add(-10*time.Minute)).Error)
+
+	credential := model.UserCredential{
+		UserID:            userID,
+		Provider:          "github",
+		ProviderAccountID: "github-freshness-1",
+	}
+	require.NoError(t, credential.SetAccessToken("github-freshness-access"))
+	require.NoError(t, credential.SetRefreshToken("github-freshness-refresh"))
+	require.NoError(t, stack.DB.Create(&credential).Error)
+
+	setPrimaryRes := performJSONRequest(t, stack.Router, http.MethodPatch, "/api/v1/me/login-methods/github/primary", nil, authHeaders(accessToken))
+	require.Equal(t, http.StatusForbidden, setPrimaryRes.Code, setPrimaryRes.Body.String())
+	assert.Equal(t, "SESSION_NOT_FRESH", decodeErrorCode(t, setPrimaryRes))
+
+	deleteRes := performJSONRequest(t, stack.Router, http.MethodDelete, "/api/v1/me/login-methods/github", nil, authHeaders(accessToken))
+	require.Equal(t, http.StatusForbidden, deleteRes.Code, deleteRes.Body.String())
+	assert.Equal(t, "SESSION_NOT_FRESH", decodeErrorCode(t, deleteRes))
+
+	var persisted model.UserCredential
+	require.NoError(t, stack.DB.Where("user_id = ? AND provider = ?", userID, "github").First(&persisted).Error)
+	assert.Equal(t, "github-freshness-1", persisted.ProviderAccountID)
+
+	var user model.User
+	require.NoError(t, stack.DB.First(&user, userID).Error)
+	assert.Equal(t, model.LoginTypeEmail, user.PrimaryLoginType)
+}
+
 func TestLegacyBotAuthorizationRouteStaysNotFoundForAuthenticatedUsers(t *testing.T) {
 	stack := newIntegrationStack(t)
 

@@ -115,11 +115,17 @@ func (f *fakeRuntimeSummaryBindingReader) PersistRuntimeSummary(bindingID uint64
 }
 
 type fakeOrchestrationPlatformService struct {
-	platform  *model.PlatformService
-	err       error
-	ticket    string
-	ticketErr error
-	lastScope []string
+	platform              *model.PlatformService
+	err                   error
+	ticket                string
+	ticketErr             error
+	lastScope             []string
+	confirmCalled         bool
+	confirmActorType      string
+	confirmActorID        string
+	confirmBinding        *model.PlatformAccountBinding
+	confirmPlayerID       string
+	confirmPrimaryProfile error
 }
 
 func (f *fakeOrchestrationPlatformService) GetEnabledPlatform(string) (*model.PlatformService, error) {
@@ -135,6 +141,15 @@ func (f *fakeOrchestrationPlatformService) IssueBindingScopedTicket(actorType, a
 		return "", time.Time{}, f.ticketErr
 	}
 	return f.ticket, time.Time{}, nil
+}
+
+func (f *fakeOrchestrationPlatformService) ConfirmBindingPrimaryProfile(ctx context.Context, actorType, actorID string, binding *model.PlatformAccountBinding, playerID string) error {
+	f.confirmCalled = true
+	f.confirmActorType = actorType
+	f.confirmActorID = actorID
+	f.confirmBinding = binding
+	f.confirmPlayerID = playerID
+	return f.confirmPrimaryProfile
 }
 
 type fakeRefreshGateway struct {
@@ -189,6 +204,17 @@ type fakeProfileSyncer struct {
 	input  SyncProfilesInput
 	err    error
 
+	profile           *model.PlatformAccountProfile
+	getProfileErr     error
+	lastLookupBinding uint64
+	lastLookupProfile uint64
+	setPrimaryCalled  bool
+	setPrimaryOwnerID uint64
+	setPrimaryBinding uint64
+	setPrimaryProfile *uint64
+	setPrimaryResult  *model.PlatformAccountBinding
+	setPrimaryErr     error
+
 	deleteCalled    bool
 	deleteBindingID uint64
 	deleteErr       error
@@ -207,6 +233,29 @@ func (f *fakeProfileSyncer) DeleteProfiles(bindingID uint64) error {
 	f.deleteCalled = true
 	f.deleteBindingID = bindingID
 	return f.deleteErr
+}
+
+func (f *fakeProfileSyncer) GetProfile(bindingID, profileID uint64) (*model.PlatformAccountProfile, error) {
+	f.lastLookupBinding = bindingID
+	f.lastLookupProfile = profileID
+	if f.getProfileErr != nil {
+		return nil, f.getProfileErr
+	}
+	return f.profile, nil
+}
+
+func (f *fakeProfileSyncer) SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error) {
+	f.setPrimaryCalled = true
+	f.setPrimaryOwnerID = ownerUserID
+	f.setPrimaryBinding = bindingID
+	f.setPrimaryProfile = profileID
+	if f.setPrimaryErr != nil {
+		return nil, f.setPrimaryErr
+	}
+	if f.setPrimaryResult != nil {
+		return f.setPrimaryResult, nil
+	}
+	return &model.PlatformAccountBinding{ID: bindingID, OwnerUserID: ownerUserID}, nil
 }
 
 type fakeGrantCleaner struct {
@@ -697,6 +746,108 @@ func TestPutCredentialForOwnerMarksDraftCredentialInvalidOnValidationFailure(t *
 	assert.Nil(t, summary)
 	assert.Equal(t, model.PlatformAccountBindingStatusCredentialInvalid, reader.binding.Status)
 	assert.Equal(t, "credential_validation_failed", reader.updatedReason)
+}
+
+func TestSetPrimaryProfileForOwnerRejectsForeignProfileBeforeExecutionPlaneCall(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "binding_101_10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{}
+	profileSyncer := &fakeProfileSyncer{getProfileErr: ErrPrimaryProfileNotOwned}
+	svc := NewOrchestrationService(reader, platformSvc, &fakeCredentialGateway{}, profileSyncer)
+
+	updated, err := svc.SetPrimaryProfileForOwner(context.Background(), 7, 101, 404, "session:99")
+	require.ErrorIs(t, err, ErrPrimaryProfileNotOwned)
+	assert.Nil(t, updated)
+	assert.False(t, platformSvc.confirmCalled)
+	assert.False(t, profileSyncer.setPrimaryCalled)
+	assert.Equal(t, uint64(101), profileSyncer.lastLookupBinding)
+	assert.Equal(t, uint64(404), profileSyncer.lastLookupProfile)
+}
+
+func TestSetPrimaryProfileForOwnerRejectsExpiredExecutionPlaneTicketWithoutProjectionWrite(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "binding_101_10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{confirmPrimaryProfile: grpcstatus.Error(codes.Unauthenticated, "service ticket expired")}
+	profileSyncer := &fakeProfileSyncer{profile: &model.PlatformAccountProfile{ID: 404, BindingID: 101, PlayerUID: "1008611"}}
+	svc := NewOrchestrationService(reader, platformSvc, &fakeCredentialGateway{}, profileSyncer)
+
+	updated, err := svc.SetPrimaryProfileForOwner(context.Background(), 7, 101, 404, "session:99")
+	require.ErrorIs(t, err, ErrCredentialValidationFailed)
+	assert.Nil(t, updated)
+	assert.True(t, platformSvc.confirmCalled)
+	assert.False(t, profileSyncer.setPrimaryCalled)
+	assert.Contains(t, err.Error(), "service ticket expired")
+}
+
+func TestSetPrimaryProfileForOwnerRejectsExecutionPlanePrimaryProfileUpdateWithoutProjectionWrite(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "binding_101_10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{confirmPrimaryProfile: grpcstatus.Error(codes.InvalidArgument, "profile confirmation rejected")}
+	profileSyncer := &fakeProfileSyncer{profile: &model.PlatformAccountProfile{ID: 404, BindingID: 101, PlayerUID: "1008611"}}
+	svc := NewOrchestrationService(reader, platformSvc, &fakeCredentialGateway{}, profileSyncer)
+
+	updated, err := svc.SetPrimaryProfileForOwner(context.Background(), 7, 101, 404, "session:99")
+	require.ErrorIs(t, err, ErrCredentialValidationFailed)
+	assert.Nil(t, updated)
+	assert.True(t, platformSvc.confirmCalled)
+	assert.False(t, profileSyncer.setPrimaryCalled)
+	assert.Contains(t, err.Error(), "profile confirmation rejected")
+}
+
+func TestSetPrimaryProfileForOwnerConfirmsExecutionPlaneBeforeProjectionWrite(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "binding_101_10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	updatedBinding := &model.PlatformAccountBinding{
+		ID:               101,
+		OwnerUserID:      7,
+		PrimaryProfileID: sql.NullInt64{Int64: 404, Valid: true},
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{}
+	profileSyncer := &fakeProfileSyncer{
+		profile:          &model.PlatformAccountProfile{ID: 404, BindingID: 101, PlayerUID: "1008611"},
+		setPrimaryResult: updatedBinding,
+	}
+	svc := NewOrchestrationService(reader, platformSvc, &fakeCredentialGateway{}, profileSyncer)
+
+	updated, err := svc.SetPrimaryProfileForOwner(context.Background(), 7, 101, 404, "session:99")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.True(t, platformSvc.confirmCalled)
+	assert.Equal(t, "user", platformSvc.confirmActorType)
+	assert.Equal(t, "session:99", platformSvc.confirmActorID)
+	assert.Equal(t, binding, platformSvc.confirmBinding)
+	assert.Equal(t, "1008611", platformSvc.confirmPlayerID)
+	assert.True(t, profileSyncer.setPrimaryCalled)
+	assert.Equal(t, uint64(7), profileSyncer.setPrimaryOwnerID)
+	assert.Equal(t, uint64(101), profileSyncer.setPrimaryBinding)
+	if assert.NotNil(t, profileSyncer.setPrimaryProfile) {
+		assert.Equal(t, uint64(404), *profileSyncer.setPrimaryProfile)
+	}
+	assert.Equal(t, updatedBinding, updated)
 }
 
 func TestCreateBindingForOwnerCreatesDraftBindsAndSyncsProfiles(t *testing.T) {

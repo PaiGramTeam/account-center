@@ -27,6 +27,8 @@ type orchestrationBindingReader interface {
 type orchestrationProfileSyncer interface {
 	SyncProfiles(input SyncProfilesInput) ([]model.PlatformAccountProfile, error)
 	DeleteProfiles(bindingID uint64) error
+	GetProfile(bindingID, profileID uint64) (*model.PlatformAccountProfile, error)
+	SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error)
 }
 
 type orchestrationGrantCleaner interface {
@@ -36,6 +38,7 @@ type orchestrationGrantCleaner interface {
 type orchestrationPlatformService interface {
 	GetEnabledPlatform(platformKey string) (*model.PlatformService, error)
 	IssueBindingScopedTicket(actorType, actorID string, binding *model.PlatformAccountBinding, scopes []string) (string, time.Time, error)
+	ConfirmBindingPrimaryProfile(ctx context.Context, actorType, actorID string, binding *model.PlatformAccountBinding, playerID string) error
 }
 
 type credentialGateway interface {
@@ -168,6 +171,36 @@ func (s *OrchestrationService) DeleteBindingAsAdmin(ctx context.Context, binding
 	}
 
 	return s.deleteBinding(ctx, binding, "admin", "admin:"+strconv.FormatUint(adminUserID, 10))
+}
+
+func (s *OrchestrationService) SetPrimaryProfileForOwner(ctx context.Context, ownerUserID, bindingID, profileID uint64, actorID string) (*model.PlatformAccountBinding, error) {
+	binding, err := s.bindingReader.GetBindingForOwner(ownerUserID, bindingID)
+	if err != nil {
+		return nil, err
+	}
+	if binding == nil || !binding.ExternalAccountKey.Valid || binding.ExternalAccountKey.String == "" {
+		return nil, ErrBindingRuntimeSummaryNotReady
+	}
+	if s.profileSyncer == nil {
+		return nil, ErrPrimaryProfileNotOwned
+	}
+
+	profile, err := s.profileSyncer.GetProfile(binding.ID, profileID)
+	if err != nil {
+		return nil, err
+	}
+	if profile == nil || profile.PlayerUID == "" {
+		return nil, ErrPrimaryProfileNotOwned
+	}
+
+	if err := s.platformService.ConfirmBindingPrimaryProfile(ctx, "user", actorID, binding, profile.PlayerUID); err != nil {
+		if IsCredentialValidationError(err) {
+			return nil, fmt.Errorf("%w: %v", ErrCredentialValidationFailed, err)
+		}
+		return nil, err
+	}
+
+	return s.profileSyncer.SetPrimaryProfileForOwner(ownerUserID, binding.ID, &profile.ID)
 }
 
 func (s *OrchestrationService) refreshBinding(ctx context.Context, binding *model.PlatformAccountBinding, actorType, actorID string) (*model.PlatformAccountBinding, error) {

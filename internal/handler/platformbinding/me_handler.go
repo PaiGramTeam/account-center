@@ -32,7 +32,6 @@ type bindingService interface {
 type profileService interface {
 	ListProfiles(bindingID uint64, params serviceplatformbinding.ListParams) ([]model.PlatformAccountProfile, int64, error)
 	ListProfilesForOwner(ownerUserID, bindingID uint64, params serviceplatformbinding.ListParams) ([]model.PlatformAccountProfile, int64, error)
-	SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error)
 }
 
 type grantService interface {
@@ -50,6 +49,7 @@ type orchestrationService interface {
 	PutCredentialAsAdmin(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	RefreshBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
 	RefreshBindingAsAdmin(ctx context.Context, bindingID uint64) (*model.PlatformAccountBinding, error)
+	SetPrimaryProfileForOwner(ctx context.Context, ownerUserID, bindingID, profileID uint64, actorID string) (*model.PlatformAccountBinding, error)
 	DeleteBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) error
 	DeleteBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) error
 }
@@ -346,7 +346,7 @@ func (h *MeHandler) PatchPrimaryProfile(c *gin.Context) {
 		return
 	}
 
-	binding, err := h.profileService.SetPrimaryProfileForOwner(userID, bindingID, req.ProfileID)
+	binding, err := h.orchestrationService.SetPrimaryProfileForOwner(c.Request.Context(), userID, bindingID, *req.ProfileID, actorIDFromSession(c, userID))
 	if err != nil {
 		writeBindingError(c, err, "failed to update primary profile")
 		return

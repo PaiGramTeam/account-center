@@ -47,25 +47,13 @@ func (mutationBindingStub) DeleteBindingForOwner(uint64, uint64) (*model.Platfor
 	panic("unexpected call")
 }
 
-type mutationProfileStub struct {
-	called    bool
-	ownerID   uint64
-	bindingID uint64
-	profileID *uint64
-}
+type mutationProfileStub struct{}
 
 func (s *mutationProfileStub) ListProfiles(uint64, serviceplatformbinding.ListParams) ([]model.PlatformAccountProfile, int64, error) {
 	panic("unexpected call")
 }
 func (s *mutationProfileStub) ListProfilesForOwner(uint64, uint64, serviceplatformbinding.ListParams) ([]model.PlatformAccountProfile, int64, error) {
 	panic("unexpected call")
-}
-func (s *mutationProfileStub) SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error) {
-	s.called = true
-	s.ownerID = ownerUserID
-	s.bindingID = bindingID
-	s.profileID = profileID
-	return &model.PlatformAccountBinding{ID: bindingID, OwnerUserID: ownerUserID}, nil
 }
 
 type mutationGrantStub struct {
@@ -98,7 +86,13 @@ func (s *mutationGrantStub) RevokeGrantForOwner(uint64, serviceplatformbinding.R
 	return &model.ConsumerGrant{Status: model.ConsumerGrantStatusRevoked, RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}, nil
 }
 
-type mutationOrchestrationStub struct{}
+type mutationOrchestrationStub struct {
+	setPrimaryCalled  bool
+	setPrimaryOwnerID uint64
+	setPrimaryBinding uint64
+	setPrimaryProfile uint64
+	setPrimaryActorID string
+}
 
 func (mutationOrchestrationStub) CreateBindingForOwner(context.Context, serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error) {
 	panic("unexpected call")
@@ -112,6 +106,14 @@ func (mutationOrchestrationStub) PutCredentialAsAdmin(context.Context, servicepl
 }
 func (mutationOrchestrationStub) RefreshBindingForOwner(context.Context, uint64, uint64) (*model.PlatformAccountBinding, error) {
 	panic("unexpected call")
+}
+func (s *mutationOrchestrationStub) SetPrimaryProfileForOwner(_ context.Context, ownerUserID, bindingID, profileID uint64, actorID string) (*model.PlatformAccountBinding, error) {
+	s.setPrimaryCalled = true
+	s.setPrimaryOwnerID = ownerUserID
+	s.setPrimaryBinding = bindingID
+	s.setPrimaryProfile = profileID
+	s.setPrimaryActorID = actorID
+	return &model.PlatformAccountBinding{ID: bindingID, OwnerUserID: ownerUserID}, nil
 }
 func (mutationOrchestrationStub) DeleteBindingForOwner(context.Context, uint64, uint64) error {
 	panic("unexpected call")
@@ -134,8 +136,8 @@ func (mutationRuntimeSummaryStub) GetRuntimeSummaryAsAdmin(context.Context, uint
 
 func TestMePatchPrimaryProfileRejectsMissingOrZeroProfileID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	profileStub := &mutationProfileStub{}
-	handler := NewMeHandler(mutationBindingStub{}, profileStub, &mutationGrantStub{}, mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+	orchestrationStub := &mutationOrchestrationStub{}
+	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, &mutationGrantStub{}, orchestrationStub, mutationRuntimeSummaryStub{})
 
 	tests := []struct {
 		name string
@@ -158,7 +160,7 @@ func TestMePatchPrimaryProfileRejectsMissingOrZeroProfileID(t *testing.T) {
 
 			require.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Contains(t, w.Body.String(), `"message":"profile_id is required"`)
-			assert.False(t, profileStub.called)
+			assert.False(t, orchestrationStub.setPrimaryCalled)
 		})
 	}
 }
@@ -166,7 +168,7 @@ func TestMePatchPrimaryProfileRejectsMissingOrZeroProfileID(t *testing.T) {
 func TestMePutConsumerGrantRejectsMissingEnabledField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	grantStub := &mutationGrantStub{}
-	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, &mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -186,7 +188,7 @@ func TestMePutConsumerGrantRejectsMissingEnabledField(t *testing.T) {
 func TestAdminPutConsumerGrantRejectsMissingEnabledField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	grantStub := &mutationGrantStub{}
-	handler := NewAdminHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+	handler := NewAdminHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, &mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -205,8 +207,8 @@ func TestAdminPutConsumerGrantRejectsMissingEnabledField(t *testing.T) {
 
 func TestMePatchPrimaryProfileAllowsNonZeroProfileID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	profileStub := &mutationProfileStub{}
-	handler := NewMeHandler(mutationBindingStub{}, profileStub, &mutationGrantStub{}, mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+	orchestrationStub := &mutationOrchestrationStub{}
+	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, &mutationGrantStub{}, orchestrationStub, mutationRuntimeSummaryStub{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -218,18 +220,17 @@ func TestMePatchPrimaryProfileAllowsNonZeroProfileID(t *testing.T) {
 	handler.PatchPrimaryProfile(c)
 
 	require.Equal(t, http.StatusOK, w.Code)
-	require.True(t, profileStub.called)
-	require.NotNil(t, profileStub.profileID)
-	assert.Equal(t, uint64(12), *profileStub.profileID)
-	assert.Equal(t, uint64(7), profileStub.ownerID)
-	assert.Equal(t, uint64(101), profileStub.bindingID)
+	require.True(t, orchestrationStub.setPrimaryCalled)
+	assert.Equal(t, uint64(12), orchestrationStub.setPrimaryProfile)
+	assert.Equal(t, uint64(7), orchestrationStub.setPrimaryOwnerID)
+	assert.Equal(t, uint64(101), orchestrationStub.setPrimaryBinding)
 	assert.Contains(t, w.Body.String(), fmt.Sprintf(`"id":%d`, 101))
 }
 
 func TestMePutConsumerGrantAllowsExplicitEnabledFalse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	grantStub := &mutationGrantStub{}
-	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, &mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
 
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)

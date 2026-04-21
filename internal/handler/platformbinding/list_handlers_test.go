@@ -42,6 +42,10 @@ func (noopOrchestrationService) RefreshBindingForOwner(_ context.Context, _ uint
 	return nil, nil
 }
 
+func (noopOrchestrationService) SetPrimaryProfileForOwner(_ context.Context, _ uint64, _ uint64, _ uint64, _ string) (*model.PlatformAccountBinding, error) {
+	return nil, nil
+}
+
 func (noopOrchestrationService) DeleteBindingForOwner(_ context.Context, _ uint64, _ uint64) error {
 	return nil
 }

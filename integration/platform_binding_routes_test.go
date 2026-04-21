@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"paigram/internal/model"
@@ -665,11 +666,12 @@ func TestDeletePlatformBindingRouteReturnsNotFoundOnRepeatDelete(t *testing.T) {
 
 type platformBindingRouteStub struct {
 	platformv1.UnimplementedPlatformServiceServer
-	putResponse    *platformv1.PutCredentialResponse
-	putErr         error
-	deleteErr      error
-	lastPut        *platformv1.PutCredentialRequest
-	deleteRequests []*platformv1.DeleteCredentialRequest
+	putResponse              *platformv1.PutCredentialResponse
+	putErr                   error
+	deleteErr                error
+	confirmPrimaryProfileErr error
+	lastPut                  *platformv1.PutCredentialRequest
+	deleteRequests           []*platformv1.DeleteCredentialRequest
 }
 
 func (s *platformBindingRouteStub) DescribePlatform(context.Context, *platformv1.DescribePlatformRequest) (*platformv1.DescribePlatformResponse, error) {
@@ -700,12 +702,46 @@ func (s *platformBindingRouteStub) DeleteCredential(_ context.Context, req *plat
 	return &platformv1.DeleteCredentialResponse{Success: true}, nil
 }
 
+func (s *platformBindingRouteStub) ConfirmPrimaryProfile(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
+	if s.confirmPrimaryProfileErr != nil {
+		return nil, s.confirmPrimaryProfileErr
+	}
+	return &emptypb.Empty{}, nil
+}
+
+type confirmPrimaryProfileService interface {
+	ConfirmPrimaryProfile(context.Context, *emptypb.Empty) (*emptypb.Empty, error)
+}
+
+var confirmPrimaryProfileServiceDesc = grpc.ServiceDesc{
+	ServiceName: "mihomo.v1.MihomoAccountService",
+	HandlerType: (*confirmPrimaryProfileService)(nil),
+	Methods: []grpc.MethodDesc{{
+		MethodName: "ConfirmPrimaryProfile",
+		Handler: func(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+			in := new(emptypb.Empty)
+			if err := dec(in); err != nil {
+				return nil, err
+			}
+			if interceptor == nil {
+				return srv.(confirmPrimaryProfileService).ConfirmPrimaryProfile(ctx, in)
+			}
+			info := &grpc.UnaryServerInfo{Server: srv, FullMethod: "/mihomo.v1.MihomoAccountService/ConfirmPrimaryProfile"}
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				return srv.(confirmPrimaryProfileService).ConfirmPrimaryProfile(ctx, req.(*emptypb.Empty))
+			}
+			return interceptor(ctx, in, info, handler)
+		},
+	}},
+}
+
 func startPlatformBindingRouteServer(t *testing.T, stub *platformBindingRouteStub) string {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	server := grpc.NewServer()
 	platformv1.RegisterPlatformServiceServer(server, stub)
+	server.RegisterService(&confirmPrimaryProfileServiceDesc, stub)
 	serveErrCh := make(chan error, 1)
 	go func() {
 		serveErrCh <- server.Serve(listener)

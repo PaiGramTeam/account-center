@@ -25,12 +25,13 @@ import (
 	"paigram/internal/config"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
+	"paigram/internal/service"
 )
 
 func TestStartBindLoginMethodPersistsBindPurposeAndUserID(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
-	h := setupOAuthTestHandler(db)
+	h := setupOAuthTestHandler(t, db)
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -68,7 +69,7 @@ func TestStartBindLoginMethodPersistsBindPurposeAndUserID(t *testing.T) {
 func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderAlreadyBelongsToAnotherUser(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
-	h := setupOAuthTestHandler(db)
+	h := setupOAuthTestHandler(t, db)
 
 	owner := createTestUser(t, db, "owner@example.com", "Password123!", true)
 	binder := createTestUser(t, db, "binder@example.com", "Password123!", true)
@@ -121,6 +122,7 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderAlreadyBelongsToAn
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/telegram/callback", body)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = gin.Params{{Key: "provider", Value: "telegram"}}
+	middleware.SetUserID(c, binder.ID)
 
 	h.HandleOAuthCallback(c)
 
@@ -135,7 +137,7 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderAlreadyBelongsToAn
 func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderWouldReplaceExistingAccountOnSameUser(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
-	h := setupOAuthTestHandler(db)
+	h := setupOAuthTestHandler(t, db)
 
 	binder := createTestUser(t, db, "binder-rebind@example.com", "Password123!", true)
 
@@ -186,7 +188,7 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderWouldReplaceExisti
 func TestHandleOAuthCallbackRequiresAuthenticatedSessionForBindPurpose(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
-	h := setupOAuthTestHandler(db)
+	h := setupOAuthTestHandler(t, db)
 
 	binder := createTestUser(t, db, "binder-no-auth@example.com", "Password123!", true)
 	state := model.UserOAuthState{
@@ -222,7 +224,7 @@ func TestHandleOAuthCallbackRequiresAuthenticatedSessionForBindPurpose(t *testin
 func TestHandleOAuthCallbackRejectsBindPurposeForDifferentAuthenticatedUser(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
-	h := setupOAuthTestHandler(db)
+	h := setupOAuthTestHandler(t, db)
 
 	binder := createTestUser(t, db, "binder-mismatch@example.com", "Password123!", true)
 	otherUser := createTestUser(t, db, "other-mismatch@example.com", "Password123!", true)
@@ -260,7 +262,7 @@ func TestHandleOAuthCallbackRejectsBindPurposeForDifferentAuthenticatedUser(t *t
 func TestHandleOAuthCallbackDoesNotConsumeStateWhenBindCallbackIsUnauthorized(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
-	h := setupOAuthTestHandler(db)
+	h := setupOAuthTestHandler(t, db)
 
 	binder := createTestUser(t, db, "binder-no-consume@example.com", "Password123!", true)
 	state := model.UserOAuthState{
@@ -311,10 +313,25 @@ func ensureUserOAuthStatesTable(t *testing.T, db *gorm.DB) {
 	`).Error)
 }
 
-func setupOAuthTestHandler(db *gorm.DB) *Handler {
+func setupOAuthTestHandler(t *testing.T, db *gorm.DB) *Handler {
+	t.Helper()
+	previous := service.ServiceGroupApp
+	service.ServiceGroupApp = service.NewServiceGroup(db)
+	t.Cleanup(func() {
+		service.ServiceGroupApp = previous
+	})
+
 	h := setupTestHandler(db)
 	h.cfg.OAuthStateTTLSeconds = 300
 	h.cfg.DefaultOAuthRedirectURL = "https://app.example.com/auth/callback"
+	h.cfg.AllowedOAuthProviders = []string{"telegram"}
+	h.cfg.OAuthProviders = map[string]config.OAuthProviderConfig{
+		"telegram": {
+			ClientID:    "telegram-test-client-id",
+			RedirectURL: "https://app.example.com/auth/callback",
+			AuthURL:     "https://oauth.telegram.test/auth",
+		},
+	}
 	return h
 }
 

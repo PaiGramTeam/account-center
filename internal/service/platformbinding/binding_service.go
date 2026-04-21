@@ -208,7 +208,7 @@ func (s *BindingService) handlePersistRuntimeSummaryError(err error, binding *mo
 	if lookupErr != nil {
 		return nil, ErrBindingAlreadyOwned
 	}
-	if existing.ID != binding.ID {
+	if existing.ID != binding.ID && existing.OwnerUserID != binding.OwnerUserID {
 		return nil, ErrBindingAlreadyOwned
 	}
 

@@ -139,6 +139,39 @@ func TestPersistRuntimeSummaryRejectsResolvedDuplicateExternalAccount(t *testing
 	assert.Nil(t, persisted)
 }
 
+func TestPersistRuntimeSummaryReturnsExistingBindingForSameOwnerDuplicate(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewBindingService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+
+	first, err := service.CreateBinding(CreateBindingInput{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Owner Primary",
+	})
+	require.NoError(t, err)
+	_, err = service.PersistRuntimeSummary(first.ID, RuntimeSummary{PlatformAccountID: "cn:10001", Status: "active"})
+	require.NoError(t, err)
+
+	second, err := service.CreateBinding(CreateBindingInput{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{},
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Owner Retry Draft",
+	})
+	require.NoError(t, err)
+
+	persisted, err := service.PersistRuntimeSummary(second.ID, RuntimeSummary{PlatformAccountID: "cn:10001", Status: "active"})
+	require.NoError(t, err)
+	require.NotNil(t, persisted)
+	assert.Equal(t, first.ID, persisted.ID)
+	assert.Equal(t, owner.ID, persisted.OwnerUserID)
+}
+
 func TestBindingServiceUpdatesStatusAndDeletesBinding(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	service := NewBindingService(db)

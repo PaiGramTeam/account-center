@@ -20,6 +20,7 @@ import (
 
 type fakeRuntimeSummaryBindingReader struct {
 	binding          *model.PlatformAccountBinding
+	ownerBinding     *model.PlatformAccountBinding
 	err              error
 	ownerID          uint64
 	id               uint64
@@ -43,6 +44,9 @@ func (f *fakeRuntimeSummaryBindingReader) GetBindingForOwner(ownerUserID, bindin
 	f.id = bindingID
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.ownerBinding != nil && f.ownerBinding.ID == bindingID {
+		return f.ownerBinding, nil
 	}
 	return f.binding, nil
 }
@@ -526,13 +530,126 @@ func TestCreateBindingForOwnerCreatesDraftBindsAndSyncsProfiles(t *testing.T) {
 	assert.True(t, profileSyncer.input.Profiles[0].IsPrimary)
 }
 
+func TestCreateBindingForOwnerReturnsCommittedBindingWhenProfileSyncFails(t *testing.T) {
+	reader := &fakeRuntimeSummaryBindingReader{}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000", ServiceKey: "platform-mihomo-service"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{summary: map[string]any{
+		"platform_account_id": "cn:resolved-account",
+		"status":              "active",
+		"profiles": []map[string]any{{
+			"id":         uint64(42),
+			"game_biz":   "hk4e_cn",
+			"region":     "cn_gf01",
+			"player_id":  "10001",
+			"nickname":   "Traveler",
+			"is_default": true,
+		}},
+	}}
+	profileSyncer := &fakeProfileSyncer{err: errors.New("projection unavailable")}
+	svc := NewOrchestrationService(reader, platformSvc, gateway, profileSyncer)
+
+	binding, err := svc.CreateBindingForOwner(context.Background(), CreateAndBindInput{
+		OwnerUserID:       7,
+		Platform:          "mihomo",
+		DisplayName:       "Main Mihomo Account",
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"abc"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, model.PlatformAccountBindingStatusActive, binding.Status)
+	assert.Equal(t, "cn:resolved-account", binding.ExternalAccountKey.String)
+	assert.True(t, profileSyncer.called)
+}
+
+func TestPutCredentialForOwnerReturnsExistingBindingForSameOwnerDuplicate(t *testing.T) {
+	existing := &model.PlatformAccountBinding{
+		ID:                 202,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:resolved-account", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{summary: map[string]any{
+		"platform_account_id": "cn:resolved-account",
+		"status":              "active",
+	}}
+	svc := NewOrchestrationService(failingPersistBindingReader{fakeRuntimeSummaryBindingReader: reader, returnedBinding: existing}, platformSvc, gateway)
+
+	summary, err := svc.PutCredentialForOwner(context.Background(), PutCredentialInput{
+		OwnerUserID:       7,
+		BindingID:         101,
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"abc"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.False(t, gateway.deleteCalled)
+	assert.Empty(t, reader.updatedReason)
+	assert.Equal(t, []string{"mihomo.credential.bind"}, platformSvc.lastScope)
+	assert.Equal(t, uint64(101), reader.id)
+	assert.Equal(t, "cn:resolved-account", summary.PlatformAccountID)
+}
+
+func TestCreateBindingForOwnerReturnsExistingBindingForSameOwnerDuplicate(t *testing.T) {
+	existing := &model.PlatformAccountBinding{
+		ID:                 202,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Existing Binding",
+		ExternalAccountKey: sql.NullString{String: "cn:resolved-account", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{ownerBinding: existing}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000", ServiceKey: "platform-mihomo-service"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{summary: map[string]any{
+		"platform_account_id": "cn:resolved-account",
+		"status":              "active",
+	}}
+	svc := NewOrchestrationService(failingPersistBindingReader{fakeRuntimeSummaryBindingReader: reader, returnedBinding: existing}, platformSvc, gateway)
+
+	binding, err := svc.CreateBindingForOwner(context.Background(), CreateAndBindInput{
+		OwnerUserID:       7,
+		Platform:          "mihomo",
+		DisplayName:       "Retry Draft",
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"abc"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, uint64(202), binding.ID)
+	assert.False(t, gateway.deleteCalled)
+}
+
 type failingPersistBindingReader struct {
 	*fakeRuntimeSummaryBindingReader
-	err error
+	err             error
+	returnedBinding *model.PlatformAccountBinding
 }
 
 func (f failingPersistBindingReader) PersistRuntimeSummary(bindingID uint64, summary RuntimeSummary) (*model.PlatformAccountBinding, error) {
 	f.fakeRuntimeSummaryBindingReader.id = bindingID
 	f.fakeRuntimeSummaryBindingReader.persistedSummary = &summary
-	return nil, f.err
+	return f.returnedBinding, f.err
 }

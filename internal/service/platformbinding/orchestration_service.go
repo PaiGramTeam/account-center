@@ -72,14 +72,21 @@ func (s *OrchestrationService) CreateBindingForOwner(ctx context.Context, input 
 		return nil, err
 	}
 
-	if _, err := s.putCredential(ctx, binding, PutCredentialInput{
+	_, updatedBinding, err := s.putCredential(ctx, binding, PutCredentialInput{
 		OwnerUserID:       input.OwnerUserID,
 		BindingID:         binding.ID,
 		ActorType:         input.ActorType,
 		ActorID:           input.ActorID,
 		CredentialPayload: input.CredentialPayload,
-	}); err != nil {
+	})
+	if err != nil {
+		if updatedBinding != nil {
+			return updatedBinding, nil
+		}
 		return nil, err
+	}
+	if updatedBinding != nil {
+		return updatedBinding, nil
 	}
 
 	return s.bindingReader.GetBindingForOwner(input.OwnerUserID, binding.ID)
@@ -91,7 +98,8 @@ func (s *OrchestrationService) PutCredentialForOwner(ctx context.Context, input 
 		return nil, err
 	}
 
-	return s.putCredential(ctx, binding, input)
+	summary, _, err := s.putCredential(ctx, binding, input)
+	return summary, err
 }
 
 func (s *OrchestrationService) PutCredentialAsAdmin(ctx context.Context, input PutCredentialInput) (*RuntimeSummary, error) {
@@ -100,7 +108,8 @@ func (s *OrchestrationService) PutCredentialAsAdmin(ctx context.Context, input P
 		return nil, err
 	}
 
-	return s.putCredential(ctx, binding, input)
+	summary, _, err := s.putCredential(ctx, binding, input)
+	return summary, err
 }
 
 func (s *OrchestrationService) RefreshBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error) {
@@ -146,17 +155,17 @@ func (s *OrchestrationService) refreshBinding(ctx context.Context, binding *mode
 	return s.bindingReader.UpdateBindingStatus(binding.ID, model.PlatformAccountBindingStatusRefreshRequired)
 }
 
-func (s *OrchestrationService) putCredential(ctx context.Context, binding *model.PlatformAccountBinding, input PutCredentialInput) (*RuntimeSummary, error) {
+func (s *OrchestrationService) putCredential(ctx context.Context, binding *model.PlatformAccountBinding, input PutCredentialInput) (*RuntimeSummary, *model.PlatformAccountBinding, error) {
 	if s.gateway == nil {
-		return nil, ErrCredentialGatewayUnavailable
+		return nil, nil, ErrCredentialGatewayUnavailable
 	}
 
 	platformRow, err := s.platformService.GetEnabledPlatform(binding.Platform)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, serviceplatform.ErrPlatformServiceUnavailable
+			return nil, nil, serviceplatform.ErrPlatformServiceUnavailable
 		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	scopes := []string{"mihomo.credential.bind"}
@@ -166,17 +175,17 @@ func (s *OrchestrationService) putCredential(ctx context.Context, binding *model
 
 	ticket, _, err := s.platformService.IssueBindingScopedTicket(input.ActorType, input.ActorID, binding, scopes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	summary, err := s.gateway.PutCredential(ctx, platformRow.Endpoint, ticket, binding, input.CredentialPayload)
 	if err != nil {
-		return nil, s.handlePutCredentialError(binding, err)
+		return nil, nil, s.handlePutCredentialError(binding, err)
 	}
 
 	runtimeSummary, err := decodeRuntimeSummary(summary)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	updatedBinding, err := s.bindingReader.PersistRuntimeSummary(binding.ID, *runtimeSummary)
 	if err != nil {
@@ -184,17 +193,17 @@ func (s *OrchestrationService) putCredential(ctx context.Context, binding *model
 			cleanupErr := s.compensateDeleteCredential(ctx, binding, runtimeSummary.PlatformAccountID, input.ActorType, input.ActorID, platformRow.Endpoint)
 			if cleanupErr != nil {
 				_, _ = s.bindingReader.UpdateBindingFailure(binding.ID, model.PlatformAccountBindingStatusDeleteFailed, "compensation_delete_failed", cleanupErr.Error())
-				return nil, fmt.Errorf("%w: cleanup failed: %v", ErrBindingAlreadyOwned, cleanupErr)
+				return nil, nil, fmt.Errorf("%w: cleanup failed: %v", ErrBindingAlreadyOwned, cleanupErr)
 			}
 			_, _ = s.bindingReader.UpdateBindingFailure(binding.ID, model.PlatformAccountBindingStatusCredentialInvalid, "duplicate_owner", "platform binding already owned by another user")
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	if err := s.syncProfiles(binding, updatedBinding, runtimeSummary); err != nil {
-		return nil, err
+		return runtimeSummary, updatedBinding, err
 	}
 
-	return runtimeSummary, nil
+	return runtimeSummary, updatedBinding, nil
 }
 
 func (s *OrchestrationService) handlePutCredentialError(binding *model.PlatformAccountBinding, err error) error {

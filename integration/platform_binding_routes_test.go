@@ -464,6 +464,89 @@ func TestCreatePlatformBindingRouteMarksDeleteFailedWhenCleanupFails(t *testing.
 	_ = ownerID
 }
 
+func TestCreatePlatformBindingRouteReturnsExistingBindingForSameOwnerRetry(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-same-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	existing := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:same-owner", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Existing Binding",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&existing).Error)
+
+	stub := &platformBindingRouteStub{
+		putResponse: &platformv1.PutCredentialResponse{Summary: &platformv1.GetCredentialSummaryResponse{
+			PlatformAccountId: "cn:same-owner",
+			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+		}},
+	}
+	endpoint := startPlatformBindingRouteServer(t, stub)
+	seedEnabledPlatformService(t, stack, endpoint)
+
+	resp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/platform-accounts", map[string]any{
+		"platform":           "mihomo",
+		"display_name":       "Retry Draft",
+		"credential_payload": map[string]any{"cookie_bundle": "abc"},
+	}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusCreated, resp.Code, resp.Body.String())
+	data := decodeResponseData(t, resp)
+	assert.Equal(t, float64(existing.ID), data["id"])
+	assert.Equal(t, "cn:same-owner", data["external_account_key"])
+	assert.Empty(t, stub.deleteRequests)
+
+	var drafts []model.PlatformAccountBinding
+	require.NoError(t, stack.DB.Where("owner_user_id = ? AND display_name = ?", ownerID, "Retry Draft").Find(&drafts).Error)
+	assert.Len(t, drafts, 1)
+	assert.Equal(t, model.PlatformAccountBindingStatusPendingBind, drafts[0].Status)
+	assert.False(t, drafts[0].ExternalAccountKey.Valid)
+}
+
+func TestPlatformBindingCredentialUpdateRoutesRemainSupported(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-put-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	adminID, adminAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-put-admin-%d@example.com", time.Now().UnixNano()), "AdminPass123!")
+	grantAdminRoleToUser(t, stack, adminID)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:update-path", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Update Path",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&binding).Error)
+
+	stub := &platformBindingRouteStub{
+		putResponse: &platformv1.PutCredentialResponse{Summary: &platformv1.GetCredentialSummaryResponse{
+			PlatformAccountId: "cn:update-path",
+			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+		}},
+	}
+	endpoint := startPlatformBindingRouteServer(t, stub)
+	seedEnabledPlatformService(t, stack, endpoint)
+
+	meResp := performJSONRequest(t, stack.Router, http.MethodPut, fmt.Sprintf("/api/v1/me/platform-accounts/%d/credential", binding.ID), map[string]any{
+		"cookie_bundle": "owner-update",
+	}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusOK, meResp.Code, meResp.Body.String())
+	meData := decodeResponseData(t, meResp)
+	assert.Equal(t, "cn:update-path", meData["platform_account_id"])
+	assert.Equal(t, "cn:update-path", stub.lastPut.GetPlatformAccountId())
+	assert.JSONEq(t, `{"cookie_bundle":"owner-update"}`, stub.lastPut.GetCredentialPayloadJson())
+
+	adminResp := performJSONRequest(t, stack.Router, http.MethodPut, fmt.Sprintf("/api/v1/admin/platform-accounts/%d/credential", binding.ID), map[string]any{
+		"cookie_bundle": "admin-update",
+	}, authHeaders(adminAccessToken))
+	require.Equal(t, http.StatusOK, adminResp.Code, adminResp.Body.String())
+	adminData := decodeResponseData(t, adminResp)
+	assert.Equal(t, "cn:update-path", adminData["platform_account_id"])
+	assert.Equal(t, "cn:update-path", stub.lastPut.GetPlatformAccountId())
+	assert.JSONEq(t, `{"cookie_bundle":"admin-update"}`, stub.lastPut.GetCredentialPayloadJson())
+}
+
 type platformBindingRouteStub struct {
 	platformv1.UnimplementedPlatformServiceServer
 	putResponse    *platformv1.PutCredentialResponse

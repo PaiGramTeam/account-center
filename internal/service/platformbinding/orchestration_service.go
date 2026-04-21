@@ -205,10 +205,13 @@ func (s *OrchestrationService) deleteBinding(ctx context.Context, binding *model
 
 	if !binding.ExternalAccountKey.Valid || binding.ExternalAccountKey.String == "" {
 		_, err := s.bindingReader.DeleteBinding(binding.ID)
-		return err
+		if err != nil {
+			return s.markDeleteFailed(binding.ID, err, "control_plane_cleanup_failed")
+		}
+		return nil
 	}
 	if s.gateway == nil {
-		return ErrCredentialGatewayUnavailable
+		return s.markDeleteFailed(binding.ID, ErrCredentialGatewayUnavailable, "credential_delete_failed")
 	}
 
 	platformRow, err := s.platformService.GetEnabledPlatform(binding.Platform)

@@ -23,6 +23,7 @@ type fakeRuntimeSummaryBindingReader struct {
 	binding          *model.PlatformAccountBinding
 	ownerBinding     *model.PlatformAccountBinding
 	err              error
+	deleteErr        error
 	ownerID          uint64
 	id               uint64
 	deletedID        uint64
@@ -90,6 +91,9 @@ func (f *fakeRuntimeSummaryBindingReader) CreateBinding(input CreateBindingInput
 
 func (f *fakeRuntimeSummaryBindingReader) DeleteBinding(bindingID uint64) (*model.PlatformAccountBinding, error) {
 	f.deletedID = bindingID
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
 	if f.binding != nil && f.binding.ID == bindingID {
 		deleted := *f.binding
 		deleted.Status = model.PlatformAccountBindingStatusDeleted
@@ -485,6 +489,47 @@ func TestDeleteBindingForOwnerNormalizesMissingPlatformServiceAsUnavailable(t *t
 	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
 	assert.Equal(t, "credential_delete_failed", reader.updatedReason)
 	assert.False(t, gateway.deleteCalled)
+}
+
+func TestDeleteBindingForOwnerMarksDeleteFailedWhenDraftCleanupDeleteFails(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding, deleteErr: errors.New("cleanup delete failed")}
+	platformSvc := &fakeOrchestrationPlatformService{}
+	gateway := &fakeCredentialGateway{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway)
+
+	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
+	require.EqualError(t, err, "cleanup delete failed")
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
+	assert.Equal(t, "control_plane_cleanup_failed", reader.updatedReason)
+	assert.Equal(t, "cleanup delete failed", reader.updatedMessage)
+	assert.False(t, gateway.deleteCalled)
+	assert.Nil(t, platformSvc.lastScope)
+}
+
+func TestDeleteBindingForOwnerMarksDeleteFailedWhenGatewayUnavailable(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{}
+	svc := NewOrchestrationService(reader, platformSvc, nil)
+
+	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
+	require.ErrorIs(t, err, ErrCredentialGatewayUnavailable)
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
+	assert.Equal(t, "credential_delete_failed", reader.updatedReason)
+	assert.Equal(t, ErrCredentialGatewayUnavailable.Error(), reader.updatedMessage)
+	assert.Nil(t, platformSvc.lastScope)
 }
 
 func TestPutCredentialForOwnerPersistsResolvedRuntimeState(t *testing.T) {

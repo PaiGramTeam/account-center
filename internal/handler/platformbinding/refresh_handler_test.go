@@ -53,6 +53,10 @@ type refreshOrchestrationStub struct {
 	called      bool
 }
 
+func (s *refreshOrchestrationStub) CreateBindingForOwner(_ context.Context, _ serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error) {
+	panic("unexpected call")
+}
+
 func (s *refreshOrchestrationStub) PutCredentialForOwner(_ context.Context, _ serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error) {
 	panic("unexpected call")
 }

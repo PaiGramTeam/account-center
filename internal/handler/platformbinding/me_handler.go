@@ -45,6 +45,7 @@ type grantService interface {
 }
 
 type orchestrationService interface {
+	CreateBindingForOwner(ctx context.Context, input serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error)
 	PutCredentialForOwner(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	PutCredentialAsAdmin(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	RefreshBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
@@ -57,10 +58,9 @@ type runtimeSummaryService interface {
 }
 
 type CreateBindingRequest struct {
-	Platform           string  `json:"platform"`
-	ExternalAccountKey *string `json:"external_account_key"`
-	PlatformServiceKey string  `json:"platform_service_key"`
-	DisplayName        string  `json:"display_name"`
+	Platform          string          `json:"platform"`
+	DisplayName       string          `json:"display_name"`
+	CredentialPayload json.RawMessage `json:"credential_payload"`
 }
 
 type PutConsumerGrantRequest struct {
@@ -115,7 +115,7 @@ func (h *MeHandler) ListBindings(c *gin.Context) {
 }
 
 // swagger:route POST /api/v1/me/platform-accounts platformbinding-me createMyPlatformBinding
-// Create a current-user platform binding draft.
+// Create a current-user platform binding draft and bind it immediately.
 func (h *MeHandler) CreateBinding(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
@@ -127,13 +127,19 @@ func (h *MeHandler) CreateBinding(c *gin.Context) {
 		response.BadRequest(c, "invalid request payload")
 		return
 	}
+	if len(req.CredentialPayload) == 0 || string(req.CredentialPayload) == "null" {
+		response.BadRequest(c, "credential_payload is required")
+		return
+	}
 
-	binding, err := h.bindingService.CreateBinding(serviceplatformbinding.CreateBindingInput{
-		OwnerUserID:        userID,
-		Platform:           strings.TrimSpace(req.Platform),
-		ExternalAccountKey: normalizeExternalAccountKey(req.ExternalAccountKey),
-		PlatformServiceKey: strings.TrimSpace(req.PlatformServiceKey),
-		DisplayName:        strings.TrimSpace(req.DisplayName),
+	actorID := actorIDFromSession(c, userID)
+	binding, err := h.orchestrationService.CreateBindingForOwner(c.Request.Context(), serviceplatformbinding.CreateAndBindInput{
+		OwnerUserID:       userID,
+		Platform:          strings.TrimSpace(req.Platform),
+		DisplayName:       strings.TrimSpace(req.DisplayName),
+		ActorType:         "user",
+		ActorID:           actorID,
+		CredentialPayload: req.CredentialPayload,
 	})
 	if err != nil {
 		writeBindingError(c, err, "failed to create platform binding")
@@ -553,6 +559,8 @@ func writeBindingError(c *gin.Context, err error, fallback string) {
 		response.NotFound(c, "consumer grant not found")
 	case errors.Is(err, serviceplatformbinding.ErrBindingAlreadyOwned):
 		response.Conflict(c, "platform binding already owned by another user")
+	case errors.Is(err, serviceplatformbinding.ErrCredentialValidationFailed):
+		response.Error(c, http.StatusUnprocessableEntity, "platform credential validation failed")
 	case errors.Is(err, serviceplatformbinding.ErrConsumerNotSupported):
 		response.BadRequest(c, "consumer is not supported")
 	case errors.Is(err, serviceplatformbinding.ErrBindingRuntimeSummaryNotReady):

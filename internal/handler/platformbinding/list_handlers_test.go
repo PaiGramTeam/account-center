@@ -26,6 +26,10 @@ import (
 
 type noopOrchestrationService struct{}
 
+func (noopOrchestrationService) CreateBindingForOwner(_ context.Context, _ serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error) {
+	return nil, nil
+}
+
 func (noopOrchestrationService) PutCredentialForOwner(_ context.Context, _ serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error) {
 	return nil, nil
 }

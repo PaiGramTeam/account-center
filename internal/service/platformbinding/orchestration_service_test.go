@@ -24,6 +24,9 @@ type fakeRuntimeSummaryBindingReader struct {
 	ownerID          uint64
 	id               uint64
 	updated          bool
+	updatedStatus    model.PlatformAccountBindingStatus
+	updatedReason    string
+	updatedMessage   string
 	persistedSummary *RuntimeSummary
 }
 
@@ -46,8 +49,35 @@ func (f *fakeRuntimeSummaryBindingReader) GetBindingForOwner(ownerUserID, bindin
 
 func (f *fakeRuntimeSummaryBindingReader) UpdateBindingStatus(bindingID uint64, status model.PlatformAccountBindingStatus) (*model.PlatformAccountBinding, error) {
 	f.updated = true
+	f.updatedStatus = status
 	if f.binding != nil {
 		f.binding.Status = status
+	}
+	return f.binding, nil
+}
+
+func (f *fakeRuntimeSummaryBindingReader) UpdateBindingFailure(bindingID uint64, status model.PlatformAccountBindingStatus, reasonCode, reasonMessage string) (*model.PlatformAccountBinding, error) {
+	f.id = bindingID
+	f.updated = true
+	f.updatedStatus = status
+	f.updatedReason = reasonCode
+	f.updatedMessage = reasonMessage
+	if f.binding != nil {
+		f.binding.Status = status
+		f.binding.StatusReasonCode = reasonCode
+		f.binding.StatusReasonMessage = reasonMessage
+	}
+	return f.binding, nil
+}
+
+func (f *fakeRuntimeSummaryBindingReader) CreateBinding(input CreateBindingInput) (*model.PlatformAccountBinding, error) {
+	f.binding = &model.PlatformAccountBinding{
+		ID:                 404,
+		OwnerUserID:        input.OwnerUserID,
+		Platform:           input.Platform,
+		PlatformServiceKey: input.PlatformServiceKey,
+		DisplayName:        input.DisplayName,
+		Status:             model.PlatformAccountBindingStatusPendingBind,
 	}
 	return f.binding, nil
 }
@@ -122,15 +152,30 @@ type fakeRuntimeSummaryPlatformService struct {
 }
 
 type fakeCredentialGateway struct {
-	summary            map[string]any
-	err                error
-	called             bool
-	deleteCalled       bool
-	deleteErr          error
-	deleteEndpoint     string
-	deleteTicket       string
-	deleteBindingID    uint64
-	deleteAccountKey   sql.NullString
+	summary          map[string]any
+	err              error
+	called           bool
+	deleteCalled     bool
+	deleteErr        error
+	deleteEndpoint   string
+	deleteTicket     string
+	deleteBindingID  uint64
+	deleteAccountKey sql.NullString
+}
+
+type fakeProfileSyncer struct {
+	called bool
+	input  SyncProfilesInput
+	err    error
+}
+
+func (f *fakeProfileSyncer) SyncProfiles(input SyncProfilesInput) ([]model.PlatformAccountProfile, error) {
+	f.called = true
+	f.input = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return nil, nil
 }
 
 func (f *fakeCredentialGateway) PutCredential(context.Context, string, string, *model.PlatformAccountBinding, json.RawMessage) (map[string]any, error) {
@@ -372,6 +417,113 @@ func TestPutCredentialForOwnerCompensatesOnResolvedBindingConflict(t *testing.T)
 	assert.Equal(t, sql.NullString{String: "cn:resolved-account", Valid: true}, gateway.deleteAccountKey)
 	assert.Equal(t, "127.0.0.1:9000", gateway.deleteEndpoint)
 	assert.Equal(t, []string{"mihomo.credential.delete"}, platformSvc.lastScope)
+	assert.Equal(t, model.PlatformAccountBindingStatusCredentialInvalid, reader.binding.Status)
+	assert.Equal(t, "duplicate_owner", reader.updatedReason)
+}
+
+func TestPutCredentialForOwnerMarksDeleteFailedWhenCompensationFails(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{
+		summary: map[string]any{
+			"platform_account_id": "cn:resolved-account",
+			"status":              "active",
+		},
+		deleteErr: errors.New("cleanup unavailable"),
+	}
+	svc := NewOrchestrationService(failingPersistBindingReader{fakeRuntimeSummaryBindingReader: reader, err: ErrBindingAlreadyOwned}, platformSvc, gateway)
+
+	summary, err := svc.PutCredentialForOwner(context.Background(), PutCredentialInput{
+		OwnerUserID:       7,
+		BindingID:         101,
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"abc"}`),
+	})
+	require.ErrorIs(t, err, ErrBindingAlreadyOwned)
+	assert.Nil(t, summary)
+	assert.True(t, gateway.deleteCalled)
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
+	assert.Equal(t, "compensation_delete_failed", reader.updatedReason)
+}
+
+func TestPutCredentialForOwnerMarksDraftCredentialInvalidOnValidationFailure(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:          101,
+		OwnerUserID: 7,
+		Platform:    "mihomo",
+		Status:      model.PlatformAccountBindingStatusPendingBind,
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{err: grpcstatus.Error(codes.InvalidArgument, "credential rejected")}
+	svc := NewOrchestrationService(reader, platformSvc, gateway)
+
+	summary, err := svc.PutCredentialForOwner(context.Background(), PutCredentialInput{
+		OwnerUserID:       7,
+		BindingID:         101,
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"bad"}`),
+	})
+	require.ErrorIs(t, err, ErrCredentialValidationFailed)
+	assert.Nil(t, summary)
+	assert.Equal(t, model.PlatformAccountBindingStatusCredentialInvalid, reader.binding.Status)
+	assert.Equal(t, "credential_validation_failed", reader.updatedReason)
+}
+
+func TestCreateBindingForOwnerCreatesDraftBindsAndSyncsProfiles(t *testing.T) {
+	reader := &fakeRuntimeSummaryBindingReader{}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000", ServiceKey: "platform-mihomo-service"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeCredentialGateway{summary: map[string]any{
+		"platform_account_id": "cn:resolved-account",
+		"status":              "active",
+		"profiles": []map[string]any{{
+			"id":         uint64(42),
+			"game_biz":   "hk4e_cn",
+			"region":     "cn_gf01",
+			"player_id":  "10001",
+			"nickname":   "Traveler",
+			"level":      int32(60),
+			"is_default": true,
+		}},
+	}}
+	profileSyncer := &fakeProfileSyncer{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway, profileSyncer)
+
+	binding, err := svc.CreateBindingForOwner(context.Background(), CreateAndBindInput{
+		OwnerUserID:       7,
+		Platform:          "mihomo",
+		DisplayName:       "Main Mihomo Account",
+		ActorType:         "user",
+		ActorID:           "session:99",
+		CredentialPayload: json.RawMessage(`{"cookie_bundle":"abc"}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, binding)
+	assert.Equal(t, uint64(7), binding.OwnerUserID)
+	assert.Equal(t, "platform-mihomo-service", binding.PlatformServiceKey)
+	assert.True(t, profileSyncer.called)
+	assert.Equal(t, uint64(404), profileSyncer.input.BindingID)
+	require.Len(t, profileSyncer.input.Profiles, 1)
+	assert.Equal(t, "mihomo:42", profileSyncer.input.Profiles[0].PlatformProfileKey)
+	assert.Equal(t, "10001", profileSyncer.input.Profiles[0].PlayerUID)
+	assert.True(t, profileSyncer.input.Profiles[0].IsPrimary)
 }
 
 type failingPersistBindingReader struct {

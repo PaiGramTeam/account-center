@@ -155,6 +155,22 @@ func (s *BindingService) UpdateBindingStatus(bindingID uint64, status model.Plat
 	return binding, nil
 }
 
+func (s *BindingService) UpdateBindingFailure(bindingID uint64, status model.PlatformAccountBindingStatus, reasonCode, reasonMessage string) (*model.PlatformAccountBinding, error) {
+	binding, err := s.GetBindingByID(bindingID)
+	if err != nil {
+		return nil, err
+	}
+
+	binding.Status = status
+	binding.StatusReasonCode = reasonCode
+	binding.StatusReasonMessage = reasonMessage
+	if err := s.db.Save(binding).Error; err != nil {
+		return nil, err
+	}
+
+	return binding, nil
+}
+
 func (s *BindingService) PersistRuntimeSummary(bindingID uint64, summary RuntimeSummary) (*model.PlatformAccountBinding, error) {
 	binding, err := s.GetBindingByID(bindingID)
 	if err != nil {

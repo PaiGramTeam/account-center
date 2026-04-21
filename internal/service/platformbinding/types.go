@@ -20,6 +20,15 @@ type CreateBindingInput struct {
 	DisplayName        string
 }
 
+type CreateAndBindInput struct {
+	OwnerUserID       uint64
+	Platform          string
+	DisplayName       string
+	ActorType         string
+	ActorID           string
+	CredentialPayload json.RawMessage
+}
+
 type UpsertGrantInput struct {
 	BindingID uint64
 	Consumer  string

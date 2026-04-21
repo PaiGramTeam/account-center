@@ -100,6 +100,10 @@ func (s *mutationGrantStub) RevokeGrantForOwner(uint64, serviceplatformbinding.R
 
 type mutationOrchestrationStub struct{}
 
+func (mutationOrchestrationStub) CreateBindingForOwner(context.Context, serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error) {
+	panic("unexpected call")
+}
+
 func (mutationOrchestrationStub) PutCredentialForOwner(context.Context, serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error) {
 	panic("unexpected call")
 }

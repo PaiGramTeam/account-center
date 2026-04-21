@@ -3,14 +3,21 @@
 package integration
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"net/http"
 	"testing"
 	"time"
 
+	platformv1 "github.com/PaiGramTeam/proto-contracts/platform/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"paigram/internal/model"
 	serviceplatformbinding "paigram/internal/service/platformbinding"
@@ -144,6 +151,14 @@ func TestPlatformBindingRoutes(t *testing.T) {
 	}
 	require.NoError(t, stack.DB.Create(&grant).Error)
 
+	createStub := &platformBindingRouteStub{
+		putResponse: &platformv1.PutCredentialResponse{Summary: &platformv1.GetCredentialSummaryResponse{
+			PlatformAccountId: "cn:new-account",
+			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+		}},
+	}
+	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, createStub))
+
 	t.Run("me routes support list create get profiles grants put grant and delete", func(t *testing.T) {
 		listResp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me/platform-accounts", nil, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusOK, listResp.Code, listResp.Body.String())
@@ -153,16 +168,16 @@ func TestPlatformBindingRoutes(t *testing.T) {
 		assert.Len(t, items, 1)
 
 		createResp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/platform-accounts", map[string]any{
-			"platform":             "mihomo",
-			"external_account_key": "cn:new-account",
-			"platform_service_key": "platform-mihomo-service",
-			"display_name":         "New Draft",
+			"platform":           "mihomo",
+			"display_name":       "New Draft",
+			"credential_payload": map[string]any{"cookie_bundle": "abc"},
 		}, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusCreated, createResp.Code, createResp.Body.String())
 		createdData := decodeResponseData(t, createResp)
 		createdID, ok := createdData["id"].(float64)
 		require.True(t, ok, "expected numeric id, got %T", createdData["id"])
-		assert.Equal(t, string(model.PlatformAccountBindingStatusPendingBind), createdData["status"])
+		assert.Equal(t, string(model.PlatformAccountBindingStatusActive), createdData["status"])
+		assert.Equal(t, "cn:new-account", createdData["external_account_key"])
 
 		getResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), nil, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusOK, getResp.Code, getResp.Body.String())
@@ -288,4 +303,233 @@ func TestPlatformBindingRoutes(t *testing.T) {
 	})
 
 	_ = viewerID
+}
+
+func TestCreatePlatformBindingRouteBindsImmediately(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-create-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+
+	stub := &platformBindingRouteStub{
+		putResponse: &platformv1.PutCredentialResponse{Summary: &platformv1.GetCredentialSummaryResponse{
+			PlatformAccountId: "cn:route-success",
+			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+			LastValidatedAt:   timestamppb.New(time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)),
+			LastRefreshedAt:   timestamppb.New(time.Date(2026, 4, 20, 12, 5, 0, 0, time.UTC)),
+			Profiles: []*platformv1.ProfileSummary{{
+				Id:                42,
+				PlatformAccountId: "cn:route-success",
+				GameBiz:           "hk4e_cn",
+				Region:            "cn_gf01",
+				PlayerId:          "10001",
+				Nickname:          "Traveler",
+				Level:             60,
+				IsDefault:         true,
+			}},
+		}},
+	}
+	endpoint := startPlatformBindingRouteServer(t, stub)
+	seedEnabledPlatformService(t, stack, endpoint)
+
+	resp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/platform-accounts", map[string]any{
+		"platform":           "mihomo",
+		"display_name":       "Main Mihomo Account",
+		"credential_payload": map[string]any{"cookie_bundle": "abc"},
+	}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusCreated, resp.Code, resp.Body.String())
+	data := decodeResponseData(t, resp)
+	assert.Equal(t, "active", data["status"])
+	assert.Equal(t, "cn:route-success", data["external_account_key"])
+	assert.Equal(t, "platform-mihomo-service", data["platform_service_key"])
+
+	var binding model.PlatformAccountBinding
+	require.NoError(t, stack.DB.Where("owner_user_id = ? AND platform = ?", ownerID, "mihomo").First(&binding).Error)
+	assert.Equal(t, model.PlatformAccountBindingStatusActive, binding.Status)
+	assert.Equal(t, "cn:route-success", binding.ExternalAccountKey.String)
+
+	var profiles []model.PlatformAccountProfile
+	require.NoError(t, stack.DB.Where("binding_id = ?", binding.ID).Order("id ASC").Find(&profiles).Error)
+	require.Len(t, profiles, 1)
+	assert.Equal(t, "Traveler", profiles[0].Nickname)
+	assert.True(t, profiles[0].IsPrimary)
+	assert.Equal(t, int64(profiles[0].ID), binding.PrimaryProfileID.Int64)
+	assert.Empty(t, stub.lastPut.GetPlatformAccountId())
+	assert.JSONEq(t, `{"cookie_bundle":"abc"}`, stub.lastPut.GetCredentialPayloadJson())
+	assert.Empty(t, stub.deleteRequests)
+	assert.Empty(t, data["status_reason_code"])
+	assert.Empty(t, data["status_reason_message"])
+	_ = ownerID
+}
+
+func TestCreatePlatformBindingRouteHandlesDuplicateOwnerConflict(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-conflict-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	otherOwner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, stack.DB.Create(&otherOwner).Error)
+	require.NoError(t, stack.DB.Create(&model.PlatformAccountBinding{
+		OwnerUserID:        otherOwner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:duplicate-owner", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Existing Owner",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}).Error)
+
+	stub := &platformBindingRouteStub{
+		putResponse: &platformv1.PutCredentialResponse{Summary: &platformv1.GetCredentialSummaryResponse{
+			PlatformAccountId: "cn:duplicate-owner",
+			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+		}},
+	}
+	endpoint := startPlatformBindingRouteServer(t, stub)
+	seedEnabledPlatformService(t, stack, endpoint)
+
+	resp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/platform-accounts", map[string]any{
+		"platform":           "mihomo",
+		"display_name":       "Conflict Draft",
+		"credential_payload": map[string]any{"cookie_bundle": "abc"},
+	}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+
+	var binding model.PlatformAccountBinding
+	require.NoError(t, stack.DB.Where("owner_user_id = ? AND display_name = ?", ownerID, "Conflict Draft").First(&binding).Error)
+	assert.Equal(t, model.PlatformAccountBindingStatusCredentialInvalid, binding.Status)
+	assert.Equal(t, "duplicate_owner", binding.StatusReasonCode)
+	assert.False(t, binding.ExternalAccountKey.Valid)
+	require.Len(t, stub.deleteRequests, 1)
+	assert.Equal(t, "cn:duplicate-owner", stub.deleteRequests[0].GetPlatformAccountId())
+	_ = ownerID
+}
+
+func TestCreatePlatformBindingRouteMarksDraftInvalidOnProviderValidationFailure(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-invalid-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+
+	stub := &platformBindingRouteStub{putErr: grpcstatus.Error(codes.InvalidArgument, "credential rejected")}
+	endpoint := startPlatformBindingRouteServer(t, stub)
+	seedEnabledPlatformService(t, stack, endpoint)
+
+	resp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/platform-accounts", map[string]any{
+		"platform":           "mihomo",
+		"display_name":       "Invalid Draft",
+		"credential_payload": map[string]any{"cookie_bundle": "bad"},
+	}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
+
+	var binding model.PlatformAccountBinding
+	require.NoError(t, stack.DB.Where("owner_user_id = ? AND display_name = ?", ownerID, "Invalid Draft").First(&binding).Error)
+	assert.Equal(t, model.PlatformAccountBindingStatusCredentialInvalid, binding.Status)
+	assert.Equal(t, "credential_validation_failed", binding.StatusReasonCode)
+	assert.False(t, binding.ExternalAccountKey.Valid)
+	assert.Empty(t, stub.deleteRequests)
+	_ = ownerID
+}
+
+func TestCreatePlatformBindingRouteMarksDeleteFailedWhenCleanupFails(t *testing.T) {
+	stack := newIntegrationStack(t)
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-delete-failed-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	otherOwner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, stack.DB.Create(&otherOwner).Error)
+	require.NoError(t, stack.DB.Create(&model.PlatformAccountBinding{
+		OwnerUserID:        otherOwner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:cleanup-failed", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Existing Owner",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}).Error)
+
+	stub := &platformBindingRouteStub{
+		putResponse: &platformv1.PutCredentialResponse{Summary: &platformv1.GetCredentialSummaryResponse{
+			PlatformAccountId: "cn:cleanup-failed",
+			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+		}},
+		deleteErr: grpcstatus.Error(codes.Unavailable, "cleanup down"),
+	}
+	endpoint := startPlatformBindingRouteServer(t, stub)
+	seedEnabledPlatformService(t, stack, endpoint)
+
+	resp := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/me/platform-accounts", map[string]any{
+		"platform":           "mihomo",
+		"display_name":       "Cleanup Failed Draft",
+		"credential_payload": map[string]any{"cookie_bundle": "abc"},
+	}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+
+	var binding model.PlatformAccountBinding
+	require.NoError(t, stack.DB.Where("owner_user_id = ? AND display_name = ?", ownerID, "Cleanup Failed Draft").First(&binding).Error)
+	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, binding.Status)
+	assert.Equal(t, "compensation_delete_failed", binding.StatusReasonCode)
+	assert.False(t, binding.ExternalAccountKey.Valid)
+	require.Len(t, stub.deleteRequests, 1)
+	_ = ownerID
+}
+
+type platformBindingRouteStub struct {
+	platformv1.UnimplementedPlatformServiceServer
+	putResponse    *platformv1.PutCredentialResponse
+	putErr         error
+	deleteErr      error
+	lastPut        *platformv1.PutCredentialRequest
+	deleteRequests []*platformv1.DeleteCredentialRequest
+}
+
+func (s *platformBindingRouteStub) DescribePlatform(context.Context, *platformv1.DescribePlatformRequest) (*platformv1.DescribePlatformResponse, error) {
+	return &platformv1.DescribePlatformResponse{}, nil
+}
+
+func (s *platformBindingRouteStub) GetCredentialSummary(context.Context, *platformv1.GetCredentialSummaryRequest) (*platformv1.GetCredentialSummaryResponse, error) {
+	return &platformv1.GetCredentialSummaryResponse{}, nil
+}
+
+func (s *platformBindingRouteStub) PutCredential(_ context.Context, req *platformv1.PutCredentialRequest) (*platformv1.PutCredentialResponse, error) {
+	s.lastPut = req
+	if s.putErr != nil {
+		return nil, s.putErr
+	}
+	return s.putResponse, nil
+}
+
+func (s *platformBindingRouteStub) RefreshCredential(context.Context, *platformv1.RefreshCredentialRequest) (*platformv1.RefreshCredentialResponse, error) {
+	return &platformv1.RefreshCredentialResponse{}, nil
+}
+
+func (s *platformBindingRouteStub) DeleteCredential(_ context.Context, req *platformv1.DeleteCredentialRequest) (*platformv1.DeleteCredentialResponse, error) {
+	s.deleteRequests = append(s.deleteRequests, req)
+	if s.deleteErr != nil {
+		return nil, s.deleteErr
+	}
+	return &platformv1.DeleteCredentialResponse{Success: true}, nil
+}
+
+func startPlatformBindingRouteServer(t *testing.T, stub *platformBindingRouteStub) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	platformv1.RegisterPlatformServiceServer(server, stub)
+	serveErrCh := make(chan error, 1)
+	go func() {
+		serveErrCh <- server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+		<-serveErrCh
+	})
+	return listener.Addr().String()
+}
+
+func seedEnabledPlatformService(t *testing.T, stack *integrationStack, endpoint string) {
+	t.Helper()
+	require.NoError(t, stack.DB.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             endpoint,
+		Enabled:              true,
+		SupportedActionsJSON: `["bind_credential"]`,
+		CredentialSchemaJSON: `{"type":"object"}`,
+	}).Error)
 }

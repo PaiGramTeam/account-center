@@ -228,18 +228,18 @@ type InitiateOAuthRequest struct {
 // swagger:model initiateOAuthResponse
 type InitiateOAuthResponse struct {
 	Data struct {
-		// OAuth state token
-		// example: random-state-token-123
-		State string `json:"state"`
-		// OAuth nonce token
-		// example: random-nonce-token-456
-		Nonce string `json:"nonce"`
-		// State expiration time
-		// example: 2024-01-23T12:05:00Z
-		ExpiresAt string `json:"expires_at"`
 		// OAuth provider authorization URL
 		// example: https://accounts.google.com/o/oauth2/v2/auth?...
 		AuthURL string `json:"auth_url"`
+		// OAuth state token
+		// example: random-state-token-123
+		State string `json:"state"`
+		// State expiration time
+		// example: 2024-01-23T12:05:00Z
+		ExpiresAt string `json:"expires_at"`
+		// OAuth flow purpose
+		// example: login
+		Purpose string `json:"purpose"`
 	} `json:"data"`
 }
 
@@ -269,22 +269,49 @@ type OAuthCallbackRequest struct {
 	// example: random-state-token-123
 	State string `json:"state"`
 	// OAuth authorization code
-	// example: auth-code-from-provider
-	Code string `json:"code,omitempty"`
-	// Provider account ID
 	// required: true
-	// example: 1234567890
-	ProviderAccountID string `json:"provider_account_id"`
-	// User email from provider
-	// example: user@example.com
-	Email string `json:"email,omitempty"`
-	// Whether email is verified by provider
-	// example: true
-	EmailVerified bool `json:"email_verified,omitempty"`
-	// User display name from provider
-	// example: John Doe
-	DisplayName string `json:"display_name,omitempty"`
-	// User avatar URL from provider
-	// example: https://example.com/avatar.jpg
-	AvatarURL string `json:"avatar_url,omitempty"`
+	// example: auth-code-from-provider
+	Code string `json:"code"`
+}
+
+// swagger:model oauthCallbackResponse
+type OAuthCallbackResponse struct {
+	Data struct {
+		// User ID. Returned for both login and bind callback success payloads.
+		// example: 12345
+		UserID uint64 `json:"user_id,omitempty"`
+		// Login callback JWT access token.
+		// example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+		AccessToken string `json:"access_token,omitempty"`
+		// Login callback JWT refresh token.
+		// example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+		RefreshToken string `json:"refresh_token,omitempty"`
+		// Login callback access token expiration.
+		// example: 2024-01-23T12:15:00Z
+		AccessExpiry string `json:"access_expiry,omitempty"`
+		// Login callback refresh token expiration.
+		// example: 2024-01-30T12:00:00Z
+		RefreshExpiry string `json:"refresh_expiry,omitempty"`
+		// Login callback resolved email.
+		// example: user@example.com
+		Email string `json:"email,omitempty"`
+		// Bind callback provider name.
+		// example: github
+		Provider string `json:"provider,omitempty"`
+		// Bind callback provider account ID.
+		// example: 1234567890
+		ProviderAccountID string `json:"provider_account_id,omitempty"`
+		// OAuth flow purpose.
+		// example: bind_login_method
+		Purpose string `json:"purpose,omitempty"`
+		// Whether the login method is bound.
+		// example: true
+		Bound bool `json:"bound,omitempty"`
+	} `json:"data"`
+}
+
+// swagger:response oauthCallbackResponse
+type swaggerOAuthCallbackResponse struct {
+	// in: body
+	Body OAuthCallbackResponse
 }

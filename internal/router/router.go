@@ -66,11 +66,6 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 
 	registerSwagger(engine)
 
-	// Initialize handler groups with dependencies
-	if err := handler.InitializeApiGroups(db, cache, authCfg); err != nil {
-		return nil, fmt.Errorf("initialize api groups: %w", err)
-	}
-
 	// swagger:route GET /healthz health healthCheck
 	//
 	// Health check endpoint.
@@ -94,8 +89,14 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	// Initialize geolocation service
 	geoService := geolocation.NewService()
 
+	// Initialize handler groups with dependencies
+	if err := handler.InitializeApiGroups(db, cache, authCfg); err != nil {
+		return nil, fmt.Errorf("initialize api groups: %w", err)
+	}
+	handler.ApiGroupApp.AuthApiGroup = *authhandler.NewApiGroup(db, authCfg, emailService, cfg.Security, cache, geoService)
+
 	// Public routes - no authentication required
-	authHandler := authhandler.NewHandler(db, authCfg, emailService, cfg.Security, cache, geoService)
+	authHandler := &handler.ApiGroupApp.AuthApiGroup.Handler
 	authGroup := v1.Group("/auth")
 	{
 		// Apply rate limiting to auth endpoints if enabled
@@ -171,8 +172,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 				Store:   rateLimitStore,
 			}))
 			{
-				oauth.POST("/:provider/init", authHandler.InitiateOAuth)
-				oauth.POST("/:provider/callback", authHandler.HandleOAuthCallback)
+				authHandler.RegisterOAuthRoutes(oauth)
 			}
 		} else {
 			// No rate limiting - register routes normally

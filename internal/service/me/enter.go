@@ -30,6 +30,7 @@ var (
 )
 
 // ServiceGroup holds phase-two current-user services.
+// CurrentUserService is also reused by admin login-method management handlers.
 type ServiceGroup struct {
 	CurrentUserService CurrentUserService
 	SecurityService    SecurityService

@@ -74,6 +74,40 @@ func TestBuildLoginMethodViewsMarksOnlySingleOAuthCredentialPrimary(t *testing.T
 	assert.False(t, views[2].IsPrimary)
 }
 
+func TestBuildLoginMethodViewsUsesProviderSpecificPrimaryLoginType(t *testing.T) {
+	base := time.Now().UTC()
+	views := buildLoginMethodViews(model.LoginTypeGithub, []model.UserCredential{
+		{Provider: "google", ProviderAccountID: "google-1", CreatedAt: base},
+		{Provider: "github", ProviderAccountID: "github-1", CreatedAt: base.Add(time.Minute)},
+		{Provider: "email", ProviderAccountID: "user@example.com", CreatedAt: base.Add(2 * time.Minute)},
+	})
+
+	require.Len(t, views, 3)
+	assert.Equal(t, "google", views[0].Provider)
+	assert.False(t, views[0].IsPrimary)
+	assert.Equal(t, "github", views[1].Provider)
+	assert.True(t, views[1].IsPrimary)
+	assert.Equal(t, "email", views[2].Provider)
+	assert.False(t, views[2].IsPrimary)
+}
+
+func TestBuildLoginMethodViewsUsesCustomProviderPrimaryLoginType(t *testing.T) {
+	base := time.Now().UTC()
+	views := buildLoginMethodViews(model.LoginType("discord"), []model.UserCredential{
+		{Provider: "google", ProviderAccountID: "google-1", CreatedAt: base},
+		{Provider: "discord", ProviderAccountID: "discord-1", CreatedAt: base.Add(time.Minute)},
+		{Provider: "email", ProviderAccountID: "user@example.com", CreatedAt: base.Add(2 * time.Minute)},
+	})
+
+	require.Len(t, views, 3)
+	assert.Equal(t, "google", views[0].Provider)
+	assert.False(t, views[0].IsPrimary)
+	assert.Equal(t, "discord", views[1].Provider)
+	assert.True(t, views[1].IsPrimary)
+	assert.Equal(t, "email", views[2].Provider)
+	assert.False(t, views[2].IsPrimary)
+}
+
 func TestBuildLoginMethodViewsOrdersSameCreatedAtDeterministically(t *testing.T) {
 	createdAt := time.Now().UTC()
 	views := buildLoginMethodViews(model.LoginTypeOAuth, []model.UserCredential{
@@ -100,6 +134,28 @@ func TestDeleteLoginMethodGuardAllowsSecondaryOAuthButProtectsPrimary(t *testing
 	require.ErrorIs(t, validateDeleteLoginMethod(model.LoginTypeOAuth, credentials, "google"), ErrCannotUnbindPrimaryLogin)
 }
 
+func TestValidateDeleteLoginMethodProtectsExplicitPrimaryProvider(t *testing.T) {
+	credentials := []model.UserCredential{
+		{Provider: "google", ProviderAccountID: "google-1", CreatedAt: time.Now().UTC()},
+		{Provider: "github", ProviderAccountID: "github-1", CreatedAt: time.Now().UTC().Add(time.Minute)},
+		{Provider: "email", ProviderAccountID: "user@example.com", CreatedAt: time.Now().UTC().Add(2 * time.Minute)},
+	}
+
+	require.NoError(t, validateDeleteLoginMethod(model.LoginTypeGoogle, credentials, "github"))
+	require.ErrorIs(t, validateDeleteLoginMethod(model.LoginTypeGoogle, credentials, "google"), ErrCannotUnbindPrimaryLogin)
+}
+
+func TestValidateDeleteLoginMethodProtectsCustomPrimaryProvider(t *testing.T) {
+	credentials := []model.UserCredential{
+		{Provider: "discord", ProviderAccountID: "discord-1", CreatedAt: time.Now().UTC()},
+		{Provider: "github", ProviderAccountID: "github-1", CreatedAt: time.Now().UTC().Add(time.Minute)},
+		{Provider: "email", ProviderAccountID: "user@example.com", CreatedAt: time.Now().UTC().Add(2 * time.Minute)},
+	}
+
+	require.NoError(t, validateDeleteLoginMethod(model.LoginType("discord"), credentials, "github"))
+	require.ErrorIs(t, validateDeleteLoginMethod(model.LoginType("discord"), credentials, "discord"), ErrCannotUnbindPrimaryLogin)
+}
+
 func TestCurrentUserServiceDeleteLoginMethodAllowsSecondaryOAuthButProtectsPrimary(t *testing.T) {
 	db := setupMeServiceTestDB(t)
 	service := NewCurrentUserService(db)
@@ -121,6 +177,22 @@ func TestCurrentUserServiceDeleteLoginMethodAllowsSecondaryOAuthButProtectsPrima
 	var googleCount int64
 	require.NoError(t, db.Model(&model.UserCredential{}).Where("user_id = ? AND provider = ?", user.ID, "google").Count(&googleCount).Error)
 	assert.EqualValues(t, 1, googleCount)
+}
+
+func TestCurrentUserServiceSetPrimaryLoginMethodPromotesBoundProvider(t *testing.T) {
+	db := setupMeServiceTestDB(t)
+	service := NewCurrentUserService(db)
+	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.UserCredential{UserID: user.ID, Provider: "email", ProviderAccountID: "user@example.com"}).Error)
+	require.NoError(t, db.Create(&model.UserCredential{UserID: user.ID, Provider: "github", ProviderAccountID: "github-1"}).Error)
+
+	err := service.SetPrimaryLoginMethod(context.Background(), user.ID, "github")
+	require.NoError(t, err)
+
+	var updated model.User
+	require.NoError(t, db.First(&updated, user.ID).Error)
+	assert.Equal(t, model.LoginTypeGithub, updated.PrimaryLoginType)
 }
 
 func TestCurrentUserServiceDeleteEmailPromotesRemainingEmailToPrimary(t *testing.T) {

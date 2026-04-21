@@ -24,6 +24,7 @@ type CurrentUserReader interface {
 	VerifyEmail(context.Context, serviceme.VerifyEmailInput) (*serviceme.VerificationEmailView, error)
 	PatchPrimaryEmail(context.Context, uint64, uint64) error
 	ListLoginMethods(context.Context, uint64) ([]serviceme.LoginMethodView, error)
+	SetPrimaryLoginMethod(context.Context, uint64, string) error
 	DeleteLoginMethod(context.Context, uint64, string) error
 }
 
@@ -368,6 +369,44 @@ func (h *CurrentUserHandler) ListLoginMethods(c *gin.Context) {
 		return
 	}
 	response.Success(c, methods)
+}
+
+// swagger:route PATCH /api/v1/me/login-methods/{provider}/primary me patchMePrimaryLoginMethod
+//
+// Set primary current-user login method.
+//
+// Promotes a bound login method on the authenticated account to primary.
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - BearerAuth: []
+//
+// Responses:
+//
+//	200: meMessageResponse
+//	401: meErrorResponse
+//	404: meErrorResponse
+//	500: meErrorResponse
+//
+// PatchPrimaryLoginMethod promotes a bound login method to primary.
+func (h *CurrentUserHandler) PatchPrimaryLoginMethod(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == 0 {
+		response.Unauthorized(c, "user not authenticated")
+		return
+	}
+	if err := h.service.SetPrimaryLoginMethod(c.Request.Context(), userID, c.Param("provider")); err != nil {
+		switch {
+		case errors.Is(err, serviceme.ErrProviderNotBound):
+			response.NotFoundWithCode(c, "PROVIDER_NOT_BOUND", err.Error(), nil)
+		default:
+			response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "failed to set primary login method", nil)
+		}
+		return
+	}
+	response.Success(c, gin.H{"message": "primary login method updated successfully"})
 }
 
 // swagger:route DELETE /api/v1/me/login-methods/{provider} me deleteMeLoginMethod

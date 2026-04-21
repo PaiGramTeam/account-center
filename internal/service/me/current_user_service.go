@@ -77,6 +77,7 @@ type LoginMethodView struct {
 	DisplayName       string    `json:"display_name,omitempty"`
 	AvatarURL         string    `json:"avatar_url,omitempty"`
 	IsPrimary         bool      `json:"is_primary"`
+	CanUnbind         bool      `json:"can_unbind"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
@@ -380,17 +381,32 @@ func (s *CurrentUserService) VerifyEmail(ctx context.Context, input VerifyEmailI
 
 // ListLoginMethods returns current-user login methods.
 func (s *CurrentUserService) ListLoginMethods(ctx context.Context, userID uint64) ([]LoginMethodView, error) {
-	var credentials []model.UserCredential
-	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Order("created_at ASC").Find(&credentials).Error; err != nil {
-		return nil, err
-	}
-
 	var user model.User
-	if err := s.db.WithContext(ctx).Select("id", "primary_login_type").First(&user, userID).Error; err != nil {
+	if err := s.db.WithContext(ctx).Preload("Credentials").First(&user, userID).Error; err != nil {
 		return nil, err
 	}
 
-	return buildLoginMethodViews(user.PrimaryLoginType, credentials), nil
+	return buildLoginMethodViews(user.PrimaryLoginType, user.Credentials), nil
+}
+
+// SetPrimaryLoginMethod promotes an existing bound login method.
+func (s *CurrentUserService) SetPrimaryLoginMethod(ctx context.Context, userID uint64, provider string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.Preload("Credentials").First(&user, userID).Error; err != nil {
+			return err
+		}
+		for _, credential := range user.Credentials {
+			if credential.Provider == provider {
+				if user.PrimaryLoginType == model.LoginType(provider) {
+					return nil
+				}
+				return tx.Model(&model.User{}).Where("id = ?", user.ID).Update("primary_login_type", model.LoginType(provider)).Error
+			}
+		}
+		return ErrProviderNotBound
+	})
 }
 
 // DeleteLoginMethod unbinds a login method for the current user.
@@ -435,6 +451,7 @@ func buildLoginMethodViews(primary model.LoginType, credentials []model.UserCred
 			Provider:          credential.Provider,
 			ProviderAccountID: credential.ProviderAccountID,
 			IsPrimary:         credential.Provider == primaryProvider,
+			CanUnbind:         validateDeleteLoginMethod(primary, ordered, credential.Provider) == nil,
 			CreatedAt:         credential.CreatedAt,
 			UpdatedAt:         credential.UpdatedAt,
 		}
@@ -478,13 +495,20 @@ func validateDeleteLoginMethod(primary model.LoginType, credentials []model.User
 }
 
 func primaryLoginProvider(primary model.LoginType, credentials []model.UserCredential) string {
-	if primary == model.LoginTypeEmail {
+	primaryProvider := strings.ToLower(strings.TrimSpace(string(primary)))
+	switch primaryProvider {
+	case "":
+		return ""
+	case string(model.LoginTypeEmail):
 		return string(model.LoginTypeEmail)
-	}
-	for _, credential := range orderLoginMethodCredentials(credentials) {
-		if credential.Provider != string(model.LoginTypeEmail) {
-			return credential.Provider
+	case string(model.LoginTypeOAuth):
+		for _, credential := range orderLoginMethodCredentials(credentials) {
+			if credential.Provider != string(model.LoginTypeEmail) {
+				return credential.Provider
+			}
 		}
+	default:
+		return primaryProvider
 	}
 	return ""
 }

@@ -1,6 +1,7 @@
 package user
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -22,6 +23,7 @@ import (
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	serviceme "paigram/internal/service/me"
 	"paigram/internal/service/user"
 	"paigram/internal/sessioncache"
 )
@@ -29,8 +31,15 @@ import (
 // Handler exposes REST handlers for user resources.
 type Handler struct {
 	userService  UserServiceInterface
+	loginMethods LoginMethodService
 	sessionCache sessioncache.Store
 	db           *gorm.DB // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
+}
+
+// LoginMethodService defines reusable login-method operations shared with /me.
+type LoginMethodService interface {
+	ListLoginMethods(ctx context.Context, userID uint64) ([]serviceme.LoginMethodView, error)
+	SetPrimaryLoginMethod(ctx context.Context, userID uint64, provider string) error
 }
 
 // UserServiceInterface defines the interface for user business logic.
@@ -70,6 +79,7 @@ func NewHandlerWithDBAndCache(userService UserServiceInterface, db *gorm.DB, cac
 	}
 	return &Handler{
 		userService:  userService,
+		loginMethods: serviceme.NewCurrentUserService(db),
 		sessionCache: cache,
 		db:           db,
 	}
@@ -621,7 +631,7 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		Email            string    `json:"email" binding:"required,email"`
 		Password         string    `json:"password" binding:"required,min=8,max=72"`
 		DisplayName      string    `json:"display_name" binding:"required,min=1,max=255"`
-		PrimaryLoginType string    `json:"primary_login_type" binding:"required,oneof=email oauth"`
+		PrimaryLoginType string    `json:"primary_login_type" binding:"required,oneof=email google github telegram"`
 		AvatarURL        string    `json:"avatar_url" binding:"omitempty,url"`
 		Bio              string    `json:"bio" binding:"omitempty,max=500"`
 		Locale           string    `json:"locale" binding:"omitempty"`
@@ -635,6 +645,10 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	}
 	if req.Roles != nil {
 		response.BadRequest(c, "roles must be managed via authorities")
+		return
+	}
+	if model.LoginType(req.PrimaryLoginType) != model.LoginTypeEmail {
+		response.BadRequest(c, "primary_login_type=email is required until provider credential provisioning is supported")
 		return
 	}
 

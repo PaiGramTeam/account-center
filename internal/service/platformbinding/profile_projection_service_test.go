@@ -1,6 +1,7 @@
 package platformbinding
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -243,4 +244,127 @@ func TestProfileProjectionServiceSyncProfilesDoesNotClobberRuntimeSummaryFields(
 	assert.Equal(t, int64(profiles[0].ID), updatedBinding.PrimaryProfileID.Int64)
 	assert.True(t, updatedBinding.LastSyncedAt.Valid)
 	assert.WithinDuration(t, time.Date(2026, 4, 19, 13, 34, 56, 0, time.UTC), updatedBinding.LastSyncedAt.Time, time.Millisecond)
+}
+
+func TestProfileProjectionServiceSyncProfilesRemovesStaleProfiles(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewProfileProjectionService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: ns("cn:profile-drift"),
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Profile Drift",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+	require.NoError(t, db.Create(&[]model.PlatformAccountProfile{
+		{
+			BindingID:          binding.ID,
+			PlatformProfileKey: "mihomo:10001",
+			GameBiz:            "hk4e_cn",
+			Region:             "cn_gf01",
+			PlayerUID:          "10001",
+			Nickname:           "Traveler",
+			IsPrimary:          true,
+		},
+		{
+			BindingID:          binding.ID,
+			PlatformProfileKey: "mihomo:stale",
+			GameBiz:            "hk4e_global",
+			Region:             "os_asia",
+			PlayerUID:          "99999",
+			Nickname:           "Stale",
+		},
+	}).Error)
+
+	profiles, err := service.SyncProfiles(SyncProfilesInput{
+		BindingID: binding.ID,
+		Profiles: []ProfileProjectionInput{{
+			PlatformProfileKey: "mihomo:10001",
+			GameBiz:            "hk4e_cn",
+			Region:             "cn_gf01",
+			PlayerUID:          "10001",
+			Nickname:           "Traveler Updated",
+			IsPrimary:          true,
+		}},
+		SyncedAt: time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Len(t, profiles, 1)
+
+	var persisted []model.PlatformAccountProfile
+	require.NoError(t, db.Where("binding_id = ?", binding.ID).Order("id ASC").Find(&persisted).Error)
+	require.Len(t, persisted, 1)
+	assert.Equal(t, "mihomo:10001", persisted[0].PlatformProfileKey)
+	assert.Equal(t, "Traveler Updated", persisted[0].Nickname)
+}
+
+func TestRuntimeSummaryServiceRepairProjectionPersistsSummaryAndProfiles(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	bindingService := NewBindingService(db)
+	profileService := NewProfileProjectionService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: ns("cn:repair-me"),
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Repair Me",
+		Status:             model.PlatformAccountBindingStatusRefreshRequired,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+	require.NoError(t, db.Create(&[]model.PlatformAccountProfile{
+		{
+			BindingID:          binding.ID,
+			PlatformProfileKey: "mihomo:10001",
+			GameBiz:            "hk4e_cn",
+			Region:             "cn_gf01",
+			PlayerUID:          "10001",
+			Nickname:           "Traveler",
+			IsPrimary:          true,
+		},
+		{
+			BindingID:          binding.ID,
+			PlatformProfileKey: "mihomo:stale",
+			GameBiz:            "hk4e_global",
+			Region:             "os_asia",
+			PlayerUID:          "99999",
+			Nickname:           "Stale",
+		},
+	}).Error)
+
+	platformSvc := &fakeRuntimeSummaryPlatformService{summary: map[string]any{
+		"platform_account_id": "cn:repair-me",
+		"status":              "active",
+		"last_validated_at":   "2026-04-20T12:34:56Z",
+		"last_refreshed_at":   "2026-04-20T12:35:56Z",
+		"profiles": []map[string]any{{
+			"id":         uint64(42),
+			"game_biz":   "hk4e_cn",
+			"region":     "cn_gf01",
+			"player_id":  "10001",
+			"nickname":   "Traveler Repaired",
+			"level":      int32(60),
+			"is_default": true,
+		}},
+	}}
+	service := NewRuntimeSummaryService(platformSvc, bindingService, profileService)
+
+	updated, err := service.RepairProjection(context.Background(), binding.ID)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, model.PlatformAccountBindingStatusActive, updated.Status)
+	assert.True(t, updated.LastSyncedAt.Valid)
+	assert.True(t, updated.LastValidatedAt.Valid)
+
+	var persisted []model.PlatformAccountProfile
+	require.NoError(t, db.Where("binding_id = ?", binding.ID).Order("id ASC").Find(&persisted).Error)
+	require.Len(t, persisted, 1)
+	assert.Equal(t, "mihomo:42", persisted[0].PlatformProfileKey)
+	assert.Equal(t, "Traveler Repaired", persisted[0].Nickname)
+	assert.True(t, persisted[0].IsPrimary)
 }

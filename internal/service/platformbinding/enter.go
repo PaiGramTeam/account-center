@@ -25,6 +25,6 @@ func NewServiceGroup(db *gorm.DB, platformService *serviceplatform.PlatformServi
 		GrantService:             *grantService,
 		ProfileProjectionService: *profileProjectionService,
 		OrchestrationService:     *NewOrchestrationService(bindingService, platformService, serviceplatform.NewGRPCGenericCredentialGateway(nil), profileProjectionService, grantService, auditService),
-		RuntimeSummaryService:    *NewRuntimeSummaryService(platformService, bindingService),
+		RuntimeSummaryService:    *NewRuntimeSummaryService(platformService, bindingService, profileProjectionService),
 	}
 }

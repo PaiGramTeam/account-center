@@ -43,7 +43,9 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 		}
 
 		primaryProfileID := sql.NullInt64{}
+		profileKeys := make([]string, 0, len(input.Profiles))
 		for _, item := range input.Profiles {
+			profileKeys = append(profileKeys, item.PlatformProfileKey)
 			var profile model.PlatformAccountProfile
 			lookup := tx.Where("binding_id = ? AND platform_profile_key = ?", input.BindingID, item.PlatformProfileKey).First(&profile)
 			if lookup.Error != nil {
@@ -80,6 +82,14 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 			}
 
 			profiles = append(profiles, profile)
+		}
+
+		deleteQuery := tx.Where("binding_id = ?", input.BindingID)
+		if len(profileKeys) > 0 {
+			deleteQuery = deleteQuery.Where("platform_profile_key NOT IN ?", profileKeys)
+		}
+		if err := deleteQuery.Delete(&model.PlatformAccountProfile{}).Error; err != nil {
+			return err
 		}
 
 		return tx.Model(&model.PlatformAccountBinding{}).

@@ -230,6 +230,17 @@ func (s *OrchestrationService) DeleteBindingAsAdmin(ctx context.Context, binding
 	return nil
 }
 
+func (s *OrchestrationService) RepairDeleteFailedBinding(ctx context.Context, bindingID uint64) error {
+	binding, err := s.bindingReader.GetBindingByID(bindingID)
+	if err != nil {
+		return err
+	}
+	if binding == nil || binding.Status != model.PlatformAccountBindingStatusDeleteFailed {
+		return nil
+	}
+	return s.deleteBinding(ctx, binding, "consumer", "platform-binding-delete-repair")
+}
+
 func (s *OrchestrationService) SetPrimaryProfileForOwner(ctx context.Context, ownerUserID, bindingID, profileID uint64, actorID string) (*model.PlatformAccountBinding, error) {
 	binding, err := s.bindingReader.GetBindingForOwner(ownerUserID, bindingID)
 	if err != nil {

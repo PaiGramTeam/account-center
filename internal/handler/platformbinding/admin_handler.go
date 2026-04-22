@@ -106,7 +106,7 @@ func (h *AdminHandler) ListConsumerGrants(c *gin.Context) {
 }
 
 // swagger:route PUT /api/v1/admin/platform-accounts/{bindingId}/consumer-grants/{consumer} platformbinding-admin putPlatformBindingConsumerGrant
-// Upsert or revoke one platform binding consumer grant across all users.
+// Upsert or idempotently revoke one registry-controlled platform binding consumer grant across all users.
 func (h *AdminHandler) PutConsumerGrant(c *gin.Context) {
 	bindingID, ok := parseBindingID(c)
 	if !ok {

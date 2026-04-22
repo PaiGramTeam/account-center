@@ -416,7 +416,7 @@ func parseListParams(c *gin.Context) (int, int) {
 }
 
 // swagger:route PUT /api/v1/me/platform-accounts/{bindingId}/consumer-grants/{consumer} platformbinding-me putMyPlatformBindingConsumerGrant
-// Upsert or revoke one current-user platform binding consumer grant.
+// Upsert or idempotently revoke one registry-controlled current-user platform binding consumer grant.
 func (h *MeHandler) PutConsumerGrant(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
@@ -463,9 +463,8 @@ func putConsumerGrant(c *gin.Context, grantService grantService, bindingID, acto
 		return nil, false
 	}
 
-	consumer := strings.TrimSpace(c.Param("consumer"))
-	if consumer == "" {
-		response.BadRequest(c, "consumer is required")
+	consumer, ok := parseConsumer(c)
+	if !ok {
 		return nil, false
 	}
 
@@ -498,15 +497,24 @@ func putConsumerGrant(c *gin.Context, grantService grantService, bindingID, acto
 	return grant, true
 }
 
+func parseConsumer(c *gin.Context) (string, bool) {
+	consumer := strings.TrimSpace(c.Param("consumer"))
+	if consumer == "" {
+		response.BadRequest(c, "consumer is required")
+		return "", false
+	}
+
+	return consumer, true
+}
+
 func putConsumerGrantForOwner(c *gin.Context, grantService grantService, ownerUserID, bindingID uint64) (*model.ConsumerGrant, bool) {
 	req, ok := readPutConsumerGrantRequest(c)
 	if !ok {
 		return nil, false
 	}
 
-	consumer := strings.TrimSpace(c.Param("consumer"))
-	if consumer == "" {
-		response.BadRequest(c, "consumer is required")
+	consumer, ok := parseConsumer(c)
+	if !ok {
 		return nil, false
 	}
 

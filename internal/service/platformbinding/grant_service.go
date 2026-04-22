@@ -83,7 +83,13 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 	err := s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("binding_id = ? AND consumer = ?", input.BindingID, input.Consumer).First(&grant).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrGrantNotFound
+				grant = model.ConsumerGrant{
+					BindingID: input.BindingID,
+					Consumer:  input.Consumer,
+					Status:    model.ConsumerGrantStatusRevoked,
+					RevokedAt: sql.NullTime{Time: revokedAt, Valid: true},
+				}
+				return nil
 			}
 
 			return err

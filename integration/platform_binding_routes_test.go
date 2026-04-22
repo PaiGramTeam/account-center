@@ -332,6 +332,64 @@ func TestPlatformBindingRoutes(t *testing.T) {
 	_ = viewerID
 }
 
+func TestPlatformBindingConsumerGrantRoutesSupportRegistryConsumersAndIdempotentDisable(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-consumer-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	adminID, adminAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-consumer-admin-%d@example.com", time.Now().UnixNano()), "AdminPass123!")
+	grantAdminRoleToUser(t, stack, adminID)
+
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: fmt.Sprintf("cn:consumer-%d", time.Now().UnixNano()), Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Consumer Binding",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&binding).Error)
+
+	enableResp := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot),
+		map[string]any{"enabled": true}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusOK, enableResp.Code, enableResp.Body.String())
+	assert.Equal(t, string(model.ConsumerGrantStatusActive), decodeResponseData(t, enableResp)["status"])
+
+	disableResp := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot),
+		map[string]any{"enabled": false}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusOK, disableResp.Code, disableResp.Body.String())
+	assert.Equal(t, string(model.ConsumerGrantStatusRevoked), decodeResponseData(t, disableResp)["status"])
+
+	repeatDisableResp := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot),
+		map[string]any{"enabled": false}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusOK, repeatDisableResp.Code, repeatDisableResp.Body.String())
+	assert.Equal(t, string(model.ConsumerGrantStatusRevoked), decodeResponseData(t, repeatDisableResp)["status"])
+
+	pamgramResp := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/admin/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPamgram),
+		map[string]any{"enabled": true}, authHeaders(adminAccessToken))
+	require.Equal(t, http.StatusOK, pamgramResp.Code, pamgramResp.Body.String())
+	pamgramData := decodeResponseData(t, pamgramResp)
+	assert.Equal(t, serviceplatformbinding.ConsumerPamgram, pamgramData["consumer"])
+	assert.Equal(t, string(model.ConsumerGrantStatusActive), pamgramData["status"])
+
+	unsupportedResp := performJSONRequest(t, stack.Router, http.MethodPut,
+		fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, "unsupported-consumer"),
+		map[string]any{"enabled": true}, authHeaders(ownerAccessToken))
+	require.Equal(t, http.StatusBadRequest, unsupportedResp.Code, unsupportedResp.Body.String())
+	assert.Equal(t, "INVALID_REQUEST", decodeErrorCode(t, unsupportedResp))
+
+	var grants []model.ConsumerGrant
+	require.NoError(t, stack.DB.Where("binding_id = ?", binding.ID).Order("consumer ASC").Find(&grants).Error)
+	require.Len(t, grants, 2)
+	assert.Equal(t, serviceplatformbinding.ConsumerPaiGramBot, grants[0].Consumer)
+	assert.Equal(t, model.ConsumerGrantStatusRevoked, grants[0].Status)
+	assert.Equal(t, serviceplatformbinding.ConsumerPamgram, grants[1].Consumer)
+	assert.Equal(t, model.ConsumerGrantStatusActive, grants[1].Status)
+}
+
 func TestCreatePlatformBindingRouteBindsImmediately(t *testing.T) {
 	stack := newIntegrationStack(t)
 	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-create-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")

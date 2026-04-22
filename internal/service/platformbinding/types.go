@@ -8,7 +8,10 @@ import (
 	"paigram/internal/model"
 )
 
-const ConsumerPaiGramBot = model.ConsumerPaiGramBot
+const (
+	ConsumerPaiGramBot = model.ConsumerPaiGramBot
+	ConsumerPamgram    = model.ConsumerPamgram
+)
 
 var SupportedConsumers = model.SupportedConsumers
 

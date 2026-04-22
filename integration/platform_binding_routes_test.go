@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"paigram/internal/model"
+	"paigram/internal/response"
 	serviceplatformbinding "paigram/internal/service/platformbinding"
 )
 
@@ -379,7 +380,7 @@ func TestPlatformBindingConsumerGrantRoutesSupportRegistryConsumersAndIdempotent
 		fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, "unsupported-consumer"),
 		map[string]any{"enabled": true}, authHeaders(ownerAccessToken))
 	require.Equal(t, http.StatusBadRequest, unsupportedResp.Code, unsupportedResp.Body.String())
-	assert.Equal(t, "INVALID_REQUEST", decodeErrorCode(t, unsupportedResp))
+	assert.Equal(t, response.ErrCodeInvalidInput, decodeErrorCode(t, unsupportedResp))
 
 	var grants []model.ConsumerGrant
 	require.NoError(t, stack.DB.Where("binding_id = ?", binding.ID).Order("consumer ASC").Find(&grants).Error)

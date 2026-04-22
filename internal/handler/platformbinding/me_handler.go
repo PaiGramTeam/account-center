@@ -572,7 +572,7 @@ func writeBindingError(c *gin.Context, err error, fallback string) {
 	case errors.Is(err, serviceplatformbinding.ErrCredentialValidationFailed):
 		response.Error(c, http.StatusUnprocessableEntity, "platform credential validation failed")
 	case errors.Is(err, serviceplatformbinding.ErrConsumerNotSupported):
-		response.BadRequest(c, "consumer is not supported")
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "consumer is not supported", nil)
 	case errors.Is(err, serviceplatformbinding.ErrBindingRuntimeSummaryNotReady):
 		response.Conflict(c, "platform binding runtime summary is not ready")
 	case errors.Is(err, serviceplatformbinding.ErrPrimaryProfileNotOwned):

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 
 	"paigram/internal/middleware"
 	"paigram/internal/model"
+	"paigram/internal/response"
 	serviceplatformbinding "paigram/internal/service/platformbinding"
 )
 
@@ -61,6 +63,8 @@ type mutationGrantStub struct {
 	upsertForOwnerCalled bool
 	revokeCalled         bool
 	revokeForOwnerCalled bool
+	upsertErr            error
+	upsertForOwnerErr    error
 }
 
 func (s *mutationGrantStub) ListGrants(uint64, serviceplatformbinding.ListParams) ([]model.ConsumerGrant, int64, error) {
@@ -71,10 +75,16 @@ func (s *mutationGrantStub) ListGrantsForOwner(uint64, uint64, serviceplatformbi
 }
 func (s *mutationGrantStub) UpsertGrant(serviceplatformbinding.UpsertGrantInput) (*model.ConsumerGrant, bool, error) {
 	s.upsertCalled = true
+	if s.upsertErr != nil {
+		return nil, false, s.upsertErr
+	}
 	return &model.ConsumerGrant{}, true, nil
 }
 func (s *mutationGrantStub) UpsertGrantForOwner(uint64, serviceplatformbinding.UpsertGrantInput) (*model.ConsumerGrant, bool, error) {
 	s.upsertForOwnerCalled = true
+	if s.upsertForOwnerErr != nil {
+		return nil, false, s.upsertForOwnerErr
+	}
 	return &model.ConsumerGrant{}, true, nil
 }
 func (s *mutationGrantStub) RevokeGrant(serviceplatformbinding.RevokeGrantInput) (*model.ConsumerGrant, error) {
@@ -244,4 +254,29 @@ func TestMePutConsumerGrantAllowsExplicitEnabledFalse(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.False(t, grantStub.upsertForOwnerCalled)
 	assert.True(t, grantStub.revokeForOwnerCalled)
+}
+
+func TestMePutConsumerGrantReturnsCodedBadRequestForUnsupportedConsumer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	grantStub := &mutationGrantStub{upsertForOwnerErr: serviceplatformbinding.ErrConsumerNotSupported}
+	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, &mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = []gin.Param{{Key: "bindingId", Value: "101"}, {Key: "consumer", Value: "unsupported-consumer"}}
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/me/platform-accounts/101/consumer-grants/unsupported-consumer", bytes.NewBufferString(`{"enabled":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	middleware.SetUserID(c, 7)
+
+	handler.PutConsumerGrant(c)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	assert.True(t, grantStub.upsertForOwnerCalled)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	errorData, ok := payload["error"].(map[string]any)
+	require.True(t, ok, "expected error map in response, got %T", payload["error"])
+	assert.Equal(t, response.ErrCodeInvalidInput, errorData["code"])
+	assert.Equal(t, "consumer is not supported", errorData["message"])
 }

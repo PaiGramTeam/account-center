@@ -139,6 +139,22 @@ func TestPlatformBindingReconcileScannerFindsDeleteFailedAndStaleBindings(t *tes
 			deleted_at DATETIME NULL
 		)
 	`).Error)
+	require.NoError(t, db.Exec(`
+		CREATE TABLE platform_account_profiles (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			binding_id INTEGER NOT NULL,
+			platform_profile_key TEXT NOT NULL,
+			game_biz TEXT NOT NULL,
+			region TEXT NOT NULL,
+			player_uid TEXT NOT NULL,
+			nickname TEXT NOT NULL,
+			level INTEGER NULL,
+			is_primary BOOLEAN NOT NULL,
+			source_updated_at DATETIME NULL,
+			created_at DATETIME NULL,
+			updated_at DATETIME NULL
+		)
+	`).Error)
 	require.NoError(t, db.Create(&[]model.PlatformAccountBinding{
 		{
 			OwnerUserID:        1,
@@ -168,12 +184,32 @@ func TestPlatformBindingReconcileScannerFindsDeleteFailedAndStaleBindings(t *tes
 			LastSyncedAt:       sql.NullTime{Time: time.Now().UTC(), Valid: true},
 			LastValidatedAt:    sql.NullTime{Time: time.Now().UTC(), Valid: true},
 		},
+		{
+			OwnerUserID:        1,
+			Platform:           "mihomo",
+			ExternalAccountKey: sql.NullString{String: "cn:fresh-with-drift", Valid: true},
+			PlatformServiceKey: "platform-mihomo-service",
+			DisplayName:        "Fresh But Missing Profiles",
+			Status:             model.PlatformAccountBindingStatusActive,
+			LastSyncedAt:       sql.NullTime{Time: time.Now().UTC(), Valid: true},
+			LastValidatedAt:    sql.NullTime{Time: time.Now().UTC(), Valid: true},
+		},
+	}).Error)
+	require.NoError(t, db.Create(&model.PlatformAccountProfile{
+		BindingID:          3,
+		PlatformProfileKey: "mihomo:10001",
+		GameBiz:            "hk4e_cn",
+		Region:             "cn_gf01",
+		PlayerUID:          "10001",
+		Nickname:           "Traveler",
+		IsPrimary:          true,
 	}).Error)
 
 	scanner := &platformBindingReconcileScanner{db: db}
 	candidates, err := scanner.ListCandidates(time.Now().UTC().Add(-24 * time.Hour))
 	require.NoError(t, err)
-	require.Len(t, candidates, 2)
+	require.Len(t, candidates, 3)
 	assert.Equal(t, model.PlatformAccountBindingStatusActive, candidates[0].Status)
 	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, candidates[1].Status)
+	assert.Equal(t, uint64(4), candidates[2].BindingID)
 }

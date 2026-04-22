@@ -138,8 +138,12 @@ func (h *AdminHandler) RefreshBinding(c *gin.Context) {
 	if !ok {
 		return
 	}
+	adminUserID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
 
-	binding, err := h.orchestrationService.RefreshBindingAsAdmin(c.Request.Context(), bindingID)
+	binding, err := h.orchestrationService.RefreshBindingAsAdmin(c.Request.Context(), bindingID, adminUserID)
 	if err != nil {
 		writeBindingError(c, err, "failed to refresh platform binding")
 		return

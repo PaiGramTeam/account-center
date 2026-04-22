@@ -16,8 +16,18 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/internal/model"
+	serviceaudit "paigram/internal/service/audit"
 	serviceplatform "paigram/internal/service/platform"
 )
+
+type fakeOrchestrationAuditWriter struct {
+	events []serviceaudit.WriteInput
+}
+
+func (f *fakeOrchestrationAuditWriter) Record(_ context.Context, input serviceaudit.WriteInput) error {
+	f.events = append(f.events, input)
+	return nil
+}
 
 type fakeRuntimeSummaryBindingReader struct {
 	binding          *model.PlatformAccountBinding
@@ -439,6 +449,34 @@ func TestRefreshBindingForOwnerDelegatesToRefreshGateway(t *testing.T) {
 	assert.Equal(t, binding, gateway.binding)
 	assert.Equal(t, []string{"mihomo.credential.refresh"}, platformSvc.lastScope)
 	assert.False(t, reader.updated)
+}
+
+func TestRefreshBindingAsAdminRecordsAdminActorUserID(t *testing.T) {
+	binding := &model.PlatformAccountBinding{
+		ID:                 101,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
+	}
+	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
+	platformSvc := &fakeOrchestrationPlatformService{
+		platform: &model.PlatformService{Endpoint: "127.0.0.1:9000"},
+		ticket:   "service-ticket",
+	}
+	gateway := &fakeRefreshGateway{}
+	auditWriter := &fakeOrchestrationAuditWriter{}
+	svc := NewOrchestrationService(reader, platformSvc, gateway, auditWriter)
+
+	updated, err := svc.RefreshBindingAsAdmin(context.Background(), 101, 19)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	require.NotEmpty(t, auditWriter.events)
+
+	last := auditWriter.events[len(auditWriter.events)-1]
+	require.Equal(t, "binding_refresh", last.Action)
+	require.Equal(t, "admin", last.ActorType)
+	require.NotNil(t, last.ActorUserID)
+	require.Equal(t, uint64(19), *last.ActorUserID)
 }
 
 func TestDeleteBindingForOwnerDeletesProviderCredentialAndControlPlaneState(t *testing.T) {

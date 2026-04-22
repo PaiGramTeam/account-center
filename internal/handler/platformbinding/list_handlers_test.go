@@ -50,7 +50,7 @@ func (noopOrchestrationService) DeleteBindingForOwner(_ context.Context, _ uint6
 	return nil
 }
 
-func (noopOrchestrationService) RefreshBindingAsAdmin(_ context.Context, _ uint64) (*model.PlatformAccountBinding, error) {
+func (noopOrchestrationService) RefreshBindingAsAdmin(_ context.Context, _ uint64, _ uint64) (*model.PlatformAccountBinding, error) {
 	return nil, nil
 }
 

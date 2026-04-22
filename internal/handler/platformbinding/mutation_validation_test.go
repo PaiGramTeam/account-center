@@ -63,6 +63,8 @@ type mutationGrantStub struct {
 	upsertForOwnerCalled bool
 	revokeCalled         bool
 	revokeForOwnerCalled bool
+	revokeInput          serviceplatformbinding.RevokeGrantInput
+	revokeForOwnerInput  serviceplatformbinding.RevokeGrantInput
 	upsertErr            error
 	upsertForOwnerErr    error
 }
@@ -87,12 +89,14 @@ func (s *mutationGrantStub) UpsertGrantForOwner(uint64, serviceplatformbinding.U
 	}
 	return &model.ConsumerGrant{}, true, nil
 }
-func (s *mutationGrantStub) RevokeGrant(serviceplatformbinding.RevokeGrantInput) (*model.ConsumerGrant, error) {
+func (s *mutationGrantStub) RevokeGrant(input serviceplatformbinding.RevokeGrantInput) (*model.ConsumerGrant, error) {
 	s.revokeCalled = true
+	s.revokeInput = input
 	return &model.ConsumerGrant{Status: model.ConsumerGrantStatusRevoked, RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}, nil
 }
-func (s *mutationGrantStub) RevokeGrantForOwner(uint64, serviceplatformbinding.RevokeGrantInput) (*model.ConsumerGrant, error) {
+func (s *mutationGrantStub) RevokeGrantForOwner(ownerUserID uint64, input serviceplatformbinding.RevokeGrantInput) (*model.ConsumerGrant, error) {
 	s.revokeForOwnerCalled = true
+	s.revokeForOwnerInput = input
 	return &model.ConsumerGrant{Status: model.ConsumerGrantStatusRevoked, RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}, nil
 }
 
@@ -128,7 +132,7 @@ func (s *mutationOrchestrationStub) SetPrimaryProfileForOwner(_ context.Context,
 func (mutationOrchestrationStub) DeleteBindingForOwner(context.Context, uint64, uint64) error {
 	panic("unexpected call")
 }
-func (mutationOrchestrationStub) RefreshBindingAsAdmin(context.Context, uint64) (*model.PlatformAccountBinding, error) {
+func (mutationOrchestrationStub) RefreshBindingAsAdmin(context.Context, uint64, uint64) (*model.PlatformAccountBinding, error) {
 	panic("unexpected call")
 }
 func (mutationOrchestrationStub) DeleteBindingAsAdmin(context.Context, uint64, uint64) error {
@@ -254,6 +258,8 @@ func TestMePutConsumerGrantAllowsExplicitEnabledFalse(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.False(t, grantStub.upsertForOwnerCalled)
 	assert.True(t, grantStub.revokeForOwnerCalled)
+	assert.True(t, grantStub.revokeForOwnerInput.ActorUserID.Valid)
+	assert.Equal(t, int64(7), grantStub.revokeForOwnerInput.ActorUserID.Int64)
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
@@ -264,6 +270,27 @@ func TestMePutConsumerGrantAllowsExplicitEnabledFalse(t *testing.T) {
 	assert.NotContains(t, data, "granted_at")
 	assert.NotContains(t, data, "created_at")
 	assert.NotContains(t, data, "updated_at")
+}
+
+func TestAdminPutConsumerGrantAllowsExplicitEnabledFalseWithActorAttribution(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	grantStub := &mutationGrantStub{}
+	handler := NewAdminHandler(mutationBindingStub{}, &mutationProfileStub{}, grantStub, &mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = []gin.Param{{Key: "bindingId", Value: strconv.FormatUint(101, 10)}, {Key: "consumer", Value: "paigram-bot"}}
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/platform-accounts/101/consumer-grants/paigram-bot", bytes.NewBufferString(`{"enabled":false}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	middleware.SetUserID(c, 9)
+
+	handler.PutConsumerGrant(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, grantStub.upsertCalled)
+	assert.True(t, grantStub.revokeCalled)
+	assert.True(t, grantStub.revokeInput.ActorUserID.Valid)
+	assert.Equal(t, int64(9), grantStub.revokeInput.ActorUserID.Int64)
 }
 
 func TestWriteBindingErrorReturnsCodedCredentialValidationFailure(t *testing.T) {

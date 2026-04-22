@@ -49,7 +49,7 @@ type orchestrationService interface {
 	PutCredentialForOwner(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	PutCredentialAsAdmin(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	RefreshBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
-	RefreshBindingAsAdmin(ctx context.Context, bindingID uint64) (*model.PlatformAccountBinding, error)
+	RefreshBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) (*model.PlatformAccountBinding, error)
 	SetPrimaryProfileForOwner(ctx context.Context, ownerUserID, bindingID, profileID uint64, actorID string) (*model.PlatformAccountBinding, error)
 	DeleteBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) error
 	DeleteBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) error
@@ -486,9 +486,10 @@ func putConsumerGrant(c *gin.Context, grantService grantService, bindingID, acto
 	}
 
 	grant, err := grantService.RevokeGrant(serviceplatformbinding.RevokeGrantInput{
-		BindingID: bindingID,
-		Consumer:  consumer,
-		RevokedAt: time.Now().UTC(),
+		BindingID:   bindingID,
+		Consumer:    consumer,
+		RevokedAt:   time.Now().UTC(),
+		ActorUserID: grantedBy,
 	})
 	if err != nil {
 		writeBindingError(c, err, "failed to update consumer grant")
@@ -536,9 +537,10 @@ func putConsumerGrantForOwner(c *gin.Context, grantService grantService, ownerUs
 	}
 
 	grant, err := grantService.RevokeGrantForOwner(ownerUserID, serviceplatformbinding.RevokeGrantInput{
-		BindingID: bindingID,
-		Consumer:  consumer,
-		RevokedAt: time.Now().UTC(),
+		BindingID:   bindingID,
+		Consumer:    consumer,
+		RevokedAt:   time.Now().UTC(),
+		ActorUserID: grantedBy,
 	})
 	if err != nil {
 		writeBindingError(c, err, "failed to update consumer grant")

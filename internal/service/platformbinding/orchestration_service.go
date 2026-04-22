@@ -183,18 +183,19 @@ func (s *OrchestrationService) RefreshBindingForOwner(ctx context.Context, owner
 	return updated, nil
 }
 
-func (s *OrchestrationService) RefreshBindingAsAdmin(ctx context.Context, bindingID uint64) (*model.PlatformAccountBinding, error) {
+func (s *OrchestrationService) RefreshBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) (*model.PlatformAccountBinding, error) {
 	binding, err := s.bindingReader.GetBindingByID(bindingID)
 	if err != nil {
 		return nil, err
 	}
 
-	updated, err := s.refreshBinding(ctx, binding, "admin", "binding-refresh-admin")
+	actorID := "admin:" + strconv.FormatUint(adminUserID, 10)
+	updated, err := s.refreshBinding(ctx, binding, "admin", actorID)
 	if err != nil {
-		s.recordBindingAudit(ctx, binding, "binding_refresh", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "admin", "binding-refresh-admin", nil)
+		s.recordBindingAudit(ctx, binding, "binding_refresh", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "admin", actorID, nil)
 		return nil, err
 	}
-	s.recordBindingAudit(ctx, updated, "binding_refresh", "success", "", uint64Ptr(binding.OwnerUserID), "admin", "binding-refresh-admin", nil)
+	s.recordBindingAudit(ctx, updated, "binding_refresh", "success", "", uint64Ptr(binding.OwnerUserID), "admin", actorID, nil)
 	return updated, nil
 }
 

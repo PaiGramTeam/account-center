@@ -163,3 +163,43 @@ func TestGrantServiceUpsertWritesUnifiedAuditEvent(t *testing.T) {
 	assert.Contains(t, event.MetadataJSON, ConsumerPaiGramBot)
 	assert.Contains(t, event.MetadataJSON, "grant_enabled")
 }
+
+func TestGrantServiceRevokeWritesAdminActorAttribution(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewGrantService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	admin := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	require.NoError(t, db.Create(&admin).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: ns("cn:grant-revoke-audit"),
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Grant Revoke Audit",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID: binding.ID,
+		Consumer:  ConsumerPaiGramBot,
+		Status:    model.ConsumerGrantStatusActive,
+		GrantedBy: sql.NullInt64{Int64: int64(owner.ID), Valid: true},
+		GrantedAt: time.Now().UTC(),
+	}).Error)
+
+	_, err := service.RevokeGrant(RevokeGrantInput{
+		BindingID:   binding.ID,
+		Consumer:    ConsumerPaiGramBot,
+		RevokedAt:   time.Now().UTC(),
+		ActorUserID: sql.NullInt64{Int64: int64(admin.ID), Valid: true},
+	})
+	require.NoError(t, err)
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "platform_binding", "grant_change").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "admin", event.ActorType)
+	assert.True(t, event.ActorUserID.Valid)
+	assert.Equal(t, int64(admin.ID), event.ActorUserID.Int64)
+	assert.Contains(t, event.MetadataJSON, `"grant_enabled":false`)
+}

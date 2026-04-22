@@ -424,6 +424,11 @@ func TestPlatformBindingConsumerGrantDisableIsIdempotentWhenGrantIsMissing(t *te
 		assert.Equal(t, float64(binding.ID), data["binding_id"])
 		assert.Equal(t, serviceplatformbinding.ConsumerPaiGramBot, data["consumer"])
 		assert.Equal(t, string(model.ConsumerGrantStatusRevoked), data["status"])
+		assert.NotContains(t, data, "id")
+		assert.NotContains(t, data, "granted_by")
+		assert.NotContains(t, data, "granted_at")
+		assert.NotContains(t, data, "created_at")
+		assert.NotContains(t, data, "updated_at")
 	}
 }
 
@@ -537,6 +542,7 @@ func TestCreatePlatformBindingRouteMarksDraftInvalidOnProviderValidationFailure(
 		"credential_payload": map[string]any{"cookie_bundle": "bad"},
 	}, authHeaders(ownerAccessToken))
 	require.Equal(t, http.StatusUnprocessableEntity, resp.Code, resp.Body.String())
+	assert.Equal(t, "PLATFORM_CREDENTIAL_VALIDATION_FAILED", decodeErrorCode(t, resp))
 
 	var binding model.PlatformAccountBinding
 	require.NoError(t, stack.DB.Where("owner_user_id = ? AND display_name = ?", ownerID, "Invalid Draft").First(&binding).Error)

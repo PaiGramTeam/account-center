@@ -566,12 +566,10 @@ func writeBindingError(c *gin.Context, err error, fallback string) {
 	switch {
 	case errors.Is(err, serviceplatformbinding.ErrBindingNotFound):
 		response.NotFoundWithCode(c, pkgerrors.ErrorCodePlatformBindingNotFound, "platform binding not found", nil)
-	case errors.Is(err, serviceplatformbinding.ErrGrantNotFound):
-		response.NotFoundWithCode(c, pkgerrors.ErrorCodeConsumerGrantRequired, "consumer grant required", nil)
 	case errors.Is(err, serviceplatformbinding.ErrBindingAlreadyOwned):
 		response.ConflictWithCode(c, pkgerrors.ErrorCodePlatformAccountAlreadyBound, "platform account already bound", nil)
 	case errors.Is(err, serviceplatformbinding.ErrCredentialValidationFailed):
-		response.Error(c, http.StatusUnprocessableEntity, "platform credential validation failed")
+		response.ErrorWithCode(c, http.StatusUnprocessableEntity, pkgerrors.ErrorCodePlatformCredentialValidationFailed, "platform credential validation failed", nil)
 	case errors.Is(err, serviceplatformbinding.ErrConsumerNotSupported):
 		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "consumer is not supported", nil)
 	case errors.Is(err, serviceplatformbinding.ErrBindingRuntimeSummaryNotReady):
@@ -661,17 +659,21 @@ func buildGrantViews(items []model.ConsumerGrant) []gin.H {
 }
 
 func buildGrantView(item *model.ConsumerGrant) gin.H {
-	return gin.H{
-		"id":         item.ID,
+	view := gin.H{
 		"binding_id": item.BindingID,
 		"consumer":   item.Consumer,
 		"status":     item.Status,
-		"granted_by": nullableInt64(item.GrantedBy),
-		"granted_at": item.GrantedAt,
 		"revoked_at": nullableTime(item.RevokedAt),
-		"created_at": item.CreatedAt,
-		"updated_at": item.UpdatedAt,
 	}
+	if item.ID != 0 {
+		view["id"] = item.ID
+		view["granted_by"] = nullableInt64(item.GrantedBy)
+		view["granted_at"] = item.GrantedAt
+		view["created_at"] = item.CreatedAt
+		view["updated_at"] = item.UpdatedAt
+	}
+
+	return view
 }
 
 func nullableInt64(value sql.NullInt64) any {

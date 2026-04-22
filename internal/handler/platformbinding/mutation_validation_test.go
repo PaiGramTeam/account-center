@@ -254,6 +254,34 @@ func TestMePutConsumerGrantAllowsExplicitEnabledFalse(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.False(t, grantStub.upsertForOwnerCalled)
 	assert.True(t, grantStub.revokeForOwnerCalled)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	data, ok := payload["data"].(map[string]any)
+	require.True(t, ok, "expected data map in response, got %T", payload["data"])
+	assert.NotContains(t, data, "id")
+	assert.NotContains(t, data, "granted_by")
+	assert.NotContains(t, data, "granted_at")
+	assert.NotContains(t, data, "created_at")
+	assert.NotContains(t, data, "updated_at")
+}
+
+func TestWriteBindingErrorReturnsCodedCredentialValidationFailure(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	writeBindingError(c, serviceplatformbinding.ErrCredentialValidationFailed, "fallback")
+
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	errorData, ok := payload["error"].(map[string]any)
+	require.True(t, ok, "expected error map in response, got %T", payload["error"])
+	assert.Equal(t, "PLATFORM_CREDENTIAL_VALIDATION_FAILED", errorData["code"])
+	assert.Equal(t, "platform credential validation failed", errorData["message"])
 }
 
 func TestMePutConsumerGrantReturnsCodedBadRequestForUnsupportedConsumer(t *testing.T) {

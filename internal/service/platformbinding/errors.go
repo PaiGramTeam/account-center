@@ -17,7 +17,6 @@ var (
 	ErrCredentialGatewayUnavailable  = errors.New("platform credential orchestration is unavailable")
 	ErrCredentialValidationFailed    = errors.New("platform credential validation failed")
 	ErrConsumerNotSupported          = errors.New("consumer is not supported")
-	ErrGrantNotFound                 = errors.New("consumer grant not found")
 	ErrMultiplePrimaryProfiles       = errors.New("multiple primary profiles are not supported")
 	ErrPrimaryProfileNotOwned        = errors.New("primary profile must belong to binding")
 )

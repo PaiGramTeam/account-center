@@ -105,12 +105,12 @@ func (h *PlatformBindingReconcileHandler) ProcessTask(_ context.Context, task *a
 func (s *platformBindingReconcileScanner) ListCandidates(staleBefore time.Time) ([]platformBindingRepairCandidate, error) {
 	var bindings []model.PlatformAccountBinding
 	const runtimeStaleClause = "external_account_key <> '' AND external_account_key IS NOT NULL AND (last_synced_at IS NULL OR last_synced_at < ? OR last_validated_at IS NULL OR last_validated_at < ?)"
-	const profileDriftClause = "external_account_key <> '' AND external_account_key IS NOT NULL AND NOT EXISTS (SELECT 1 FROM platform_account_profiles WHERE platform_account_profiles.binding_id = platform_account_bindings.id)"
+	const profileDriftClause = "external_account_key <> '' AND external_account_key IS NOT NULL AND EXISTS (SELECT 1 FROM platform_account_profiles WHERE platform_account_profiles.binding_id = platform_account_bindings.id AND COALESCE(platform_account_profiles.source_updated_at, platform_account_profiles.updated_at, platform_account_profiles.created_at) < ?)"
 	err := s.db.Model(&model.PlatformAccountBinding{}).
 		Where("status = ?", model.PlatformAccountBindingStatusDeleteFailed).
 		Or("status = ?", model.PlatformAccountBindingStatusRefreshRequired).
 		Or(runtimeStaleClause, staleBefore, staleBefore).
-		Or(profileDriftClause).
+		Or(profileDriftClause, staleBefore).
 		Order("id ASC").
 		Find(&bindings).Error
 	if err != nil {

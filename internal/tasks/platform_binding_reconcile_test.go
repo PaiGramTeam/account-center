@@ -118,7 +118,149 @@ func TestPlatformBindingReconcileHandlerReturnsEnqueueError(t *testing.T) {
 }
 
 func TestPlatformBindingReconcileScannerFindsDeleteFailedAndStaleBindings(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	db := setupPlatformBindingReconcileScannerDB(t)
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&[]model.PlatformAccountBinding{
+		{
+			OwnerUserID:        1,
+			Platform:           "mihomo",
+			ExternalAccountKey: sql.NullString{String: "cn:stale", Valid: true},
+			PlatformServiceKey: "platform-mihomo-service",
+			DisplayName:        "Stale",
+			Status:             model.PlatformAccountBindingStatusActive,
+			LastSyncedAt:       sql.NullTime{Time: now.Add(-48 * time.Hour), Valid: true},
+			LastValidatedAt:    sql.NullTime{Time: now.Add(-48 * time.Hour), Valid: true},
+		},
+		{
+			OwnerUserID:        1,
+			Platform:           "mihomo",
+			ExternalAccountKey: sql.NullString{String: "cn:delete", Valid: true},
+			PlatformServiceKey: "platform-mihomo-service",
+			DisplayName:        "Delete Failed",
+			Status:             model.PlatformAccountBindingStatusDeleteFailed,
+		},
+		{
+			OwnerUserID:        1,
+			Platform:           "mihomo",
+			ExternalAccountKey: sql.NullString{String: "cn:fresh", Valid: true},
+			PlatformServiceKey: "platform-mihomo-service",
+			DisplayName:        "Fresh",
+			Status:             model.PlatformAccountBindingStatusActive,
+			LastSyncedAt:       sql.NullTime{Time: now, Valid: true},
+			LastValidatedAt:    sql.NullTime{Time: now, Valid: true},
+		},
+		{
+			OwnerUserID:        1,
+			Platform:           "mihomo",
+			ExternalAccountKey: sql.NullString{String: "cn:profile-drift", Valid: true},
+			PlatformServiceKey: "platform-mihomo-service",
+			DisplayName:        "Fresh But Drifted Profiles",
+			Status:             model.PlatformAccountBindingStatusActive,
+			LastSyncedAt:       sql.NullTime{Time: now, Valid: true},
+			LastValidatedAt:    sql.NullTime{Time: now, Valid: true},
+		},
+		{
+			OwnerUserID:        1,
+			Platform:           "mihomo",
+			ExternalAccountKey: sql.NullString{String: "cn:valid-empty", Valid: true},
+			PlatformServiceKey: "platform-mihomo-service",
+			DisplayName:        "Fresh Empty Profiles",
+			Status:             model.PlatformAccountBindingStatusActive,
+			LastSyncedAt:       sql.NullTime{Time: now, Valid: true},
+			LastValidatedAt:    sql.NullTime{Time: now, Valid: true},
+		},
+	}).Error)
+	require.NoError(t, db.Create(&model.PlatformAccountProfile{
+		BindingID:          3,
+		PlatformProfileKey: "mihomo:10001",
+		GameBiz:            "hk4e_cn",
+		Region:             "cn_gf01",
+		PlayerUID:          "10001",
+		Nickname:           "Traveler",
+		IsPrimary:          true,
+	}).Error)
+	require.NoError(t, db.Model(&model.PlatformAccountProfile{}).Where("binding_id = ?", 3).Updates(map[string]any{
+		"updated_at":        now.Add(-48 * time.Hour),
+		"source_updated_at": now.Add(-48 * time.Hour),
+	}).Error)
+
+	scanner := &platformBindingReconcileScanner{db: db}
+	candidates, err := scanner.ListCandidates(now.Add(-24 * time.Hour))
+	require.NoError(t, err)
+	require.Len(t, candidates, 3)
+	assert.Equal(t, uint64(1), candidates[0].BindingID)
+	assert.Equal(t, uint64(2), candidates[1].BindingID)
+	assert.Equal(t, uint64(3), candidates[2].BindingID)
+}
+
+func TestPlatformBindingReconcileScannerSkipsFreshValidEmptyProfiles(t *testing.T) {
+	db := setupPlatformBindingReconcileScannerDB(t)
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&model.PlatformAccountBinding{
+		OwnerUserID:        1,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:valid-empty", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Fresh Empty Profiles",
+		Status:             model.PlatformAccountBindingStatusActive,
+		LastSyncedAt:       sql.NullTime{Time: now, Valid: true},
+		LastValidatedAt:    sql.NullTime{Time: now, Valid: true},
+	}).Error)
+
+	scanner := &platformBindingReconcileScanner{db: db}
+	candidates, err := scanner.ListCandidates(now.Add(-24 * time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, candidates)
+}
+
+func TestPlatformBindingReconcileScannerFindsFreshBindingsWithDriftedProfiles(t *testing.T) {
+	db := setupPlatformBindingReconcileScannerDB(t)
+	now := time.Now().UTC()
+	require.NoError(t, db.Create(&model.PlatformAccountBinding{
+		OwnerUserID:        1,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "cn:profile-drift", Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Fresh But Drifted Profiles",
+		Status:             model.PlatformAccountBindingStatusActive,
+		LastSyncedAt:       sql.NullTime{Time: now, Valid: true},
+		LastValidatedAt:    sql.NullTime{Time: now, Valid: true},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.PlatformAccountProfile{
+		{
+			BindingID:          1,
+			PlatformProfileKey: "mihomo:10001",
+			GameBiz:            "hk4e_cn",
+			Region:             "cn_gf01",
+			PlayerUID:          "10001",
+			Nickname:           "Traveler",
+			IsPrimary:          true,
+		},
+		{
+			BindingID:          1,
+			PlatformProfileKey: "mihomo:10002",
+			GameBiz:            "hk4e_cn",
+			Region:             "cn_qd01",
+			PlayerUID:          "10002",
+			Nickname:           "Lumine",
+			IsPrimary:          false,
+		},
+	}).Error)
+	require.NoError(t, db.Model(&model.PlatformAccountProfile{}).Where("binding_id = ?", 1).Updates(map[string]any{
+		"updated_at":        now.Add(-48 * time.Hour),
+		"source_updated_at": now.Add(-48 * time.Hour),
+	}).Error)
+
+	scanner := &platformBindingReconcileScanner{db: db}
+	candidates, err := scanner.ListCandidates(now.Add(-24 * time.Hour))
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, uint64(1), candidates[0].BindingID)
+}
+
+func setupPlatformBindingReconcileScannerDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.Exec(`
 		CREATE TABLE platform_account_bindings (
@@ -155,61 +297,5 @@ func TestPlatformBindingReconcileScannerFindsDeleteFailedAndStaleBindings(t *tes
 			updated_at DATETIME NULL
 		)
 	`).Error)
-	require.NoError(t, db.Create(&[]model.PlatformAccountBinding{
-		{
-			OwnerUserID:        1,
-			Platform:           "mihomo",
-			ExternalAccountKey: sql.NullString{String: "cn:stale", Valid: true},
-			PlatformServiceKey: "platform-mihomo-service",
-			DisplayName:        "Stale",
-			Status:             model.PlatformAccountBindingStatusActive,
-			LastSyncedAt:       sql.NullTime{Time: time.Now().UTC().Add(-48 * time.Hour), Valid: true},
-			LastValidatedAt:    sql.NullTime{Time: time.Now().UTC().Add(-48 * time.Hour), Valid: true},
-		},
-		{
-			OwnerUserID:        1,
-			Platform:           "mihomo",
-			ExternalAccountKey: sql.NullString{String: "cn:delete", Valid: true},
-			PlatformServiceKey: "platform-mihomo-service",
-			DisplayName:        "Delete Failed",
-			Status:             model.PlatformAccountBindingStatusDeleteFailed,
-		},
-		{
-			OwnerUserID:        1,
-			Platform:           "mihomo",
-			ExternalAccountKey: sql.NullString{String: "cn:fresh", Valid: true},
-			PlatformServiceKey: "platform-mihomo-service",
-			DisplayName:        "Fresh",
-			Status:             model.PlatformAccountBindingStatusActive,
-			LastSyncedAt:       sql.NullTime{Time: time.Now().UTC(), Valid: true},
-			LastValidatedAt:    sql.NullTime{Time: time.Now().UTC(), Valid: true},
-		},
-		{
-			OwnerUserID:        1,
-			Platform:           "mihomo",
-			ExternalAccountKey: sql.NullString{String: "cn:fresh-with-drift", Valid: true},
-			PlatformServiceKey: "platform-mihomo-service",
-			DisplayName:        "Fresh But Missing Profiles",
-			Status:             model.PlatformAccountBindingStatusActive,
-			LastSyncedAt:       sql.NullTime{Time: time.Now().UTC(), Valid: true},
-			LastValidatedAt:    sql.NullTime{Time: time.Now().UTC(), Valid: true},
-		},
-	}).Error)
-	require.NoError(t, db.Create(&model.PlatformAccountProfile{
-		BindingID:          3,
-		PlatformProfileKey: "mihomo:10001",
-		GameBiz:            "hk4e_cn",
-		Region:             "cn_gf01",
-		PlayerUID:          "10001",
-		Nickname:           "Traveler",
-		IsPrimary:          true,
-	}).Error)
-
-	scanner := &platformBindingReconcileScanner{db: db}
-	candidates, err := scanner.ListCandidates(time.Now().UTC().Add(-24 * time.Hour))
-	require.NoError(t, err)
-	require.Len(t, candidates, 3)
-	assert.Equal(t, model.PlatformAccountBindingStatusActive, candidates[0].Status)
-	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, candidates[1].Status)
-	assert.Equal(t, uint64(4), candidates[2].BindingID)
+	return db
 }

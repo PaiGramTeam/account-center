@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -141,4 +143,33 @@ func TestMeHandlerGetRuntimeSummaryReturnsServiceUnavailableForRealGRPCOutage(t 
 	require.True(t, ok, "expected error body, got %T", body["error"])
 	require.Equal(t, "PLATFORM_SERVICE_UNAVAILABLE", errorBody["code"])
 	require.Equal(t, "platform service unavailable", errorBody["message"])
+}
+
+func TestRuntimeSummarySwaggerAnnotationsDocumentLiveRoutes(t *testing.T) {
+	meHandlerSource, err := os.ReadFile("me_handler.go")
+	require.NoError(t, err)
+	adminHandlerSource, err := os.ReadFile("admin_handler.go")
+	require.NoError(t, err)
+	swaggerModelsSource, err := os.ReadFile("swagger_models.go")
+	require.NoError(t, err)
+
+	meHandlerText := string(meHandlerSource)
+	adminHandlerText := string(adminHandlerSource)
+	swaggerModelsText := string(swaggerModelsSource)
+
+	require.Contains(t, meHandlerText, "//\t200: platformBindingRuntimeSummaryEnvelope")
+	require.Contains(t, meHandlerText, "//\t400: platformBindingErrorResponse")
+	require.Contains(t, meHandlerText, "//\t401: platformBindingErrorResponse")
+	require.Contains(t, meHandlerText, "//\t404: platformBindingErrorResponse")
+	require.Contains(t, meHandlerText, "//\t409: platformBindingErrorResponse")
+	require.Contains(t, meHandlerText, "//\t500: platformBindingErrorResponse")
+
+	require.Contains(t, adminHandlerText, "//\t200: platformBindingRuntimeSummaryEnvelope")
+	require.Contains(t, adminHandlerText, "//\t400: platformBindingErrorResponse")
+	require.Contains(t, adminHandlerText, "//\t401: platformBindingErrorResponse")
+	require.Contains(t, adminHandlerText, "//\t404: platformBindingErrorResponse")
+	require.Contains(t, adminHandlerText, "//\t409: platformBindingErrorResponse")
+	require.Contains(t, adminHandlerText, "//\t500: platformBindingErrorResponse")
+
+	require.True(t, strings.Contains(swaggerModelsText, "getMyPlatformBindingRuntimeSummary") && strings.Contains(swaggerModelsText, "getPlatformBindingRuntimeSummary"), "runtime-summary operations must be included in shared bindingId swagger parameters")
 }

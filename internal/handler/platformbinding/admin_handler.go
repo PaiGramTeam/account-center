@@ -187,6 +187,23 @@ func (h *AdminHandler) PutCredential(c *gin.Context) {
 
 // swagger:route GET /api/v1/admin/platform-accounts/{bindingId}/runtime-summary platformbinding-admin getPlatformBindingRuntimeSummary
 // Get one platform binding runtime summary across all users.
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - BearerAuth: []
+//
+// Responses:
+//
+//	200: platformBindingRuntimeSummaryEnvelope
+//	400: platformBindingErrorResponse
+//	401: platformBindingErrorResponse
+//	404: platformBindingErrorResponse
+//	409: platformBindingErrorResponse
+//	500: platformBindingErrorResponse
+//
+// Get one platform binding runtime summary across all users.
 func (h *AdminHandler) GetRuntimeSummary(c *gin.Context) {
 	bindingID, ok := parseBindingID(c)
 	if !ok {

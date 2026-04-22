@@ -304,6 +304,23 @@ func (h *MeHandler) PutCredential(c *gin.Context) {
 
 // swagger:route GET /api/v1/me/platform-accounts/{bindingId}/runtime-summary platformbinding-me getMyPlatformBindingRuntimeSummary
 // Get one current-user platform binding runtime summary.
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - BearerAuth: []
+//
+// Responses:
+//
+//	200: platformBindingRuntimeSummaryEnvelope
+//	400: platformBindingErrorResponse
+//	401: platformBindingErrorResponse
+//	404: platformBindingErrorResponse
+//	409: platformBindingErrorResponse
+//	500: platformBindingErrorResponse
+//
+// Get one current-user platform binding runtime summary.
 func (h *MeHandler) GetRuntimeSummary(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {

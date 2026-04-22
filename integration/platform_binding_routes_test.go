@@ -73,7 +73,7 @@ func TestMePlatformAccountRoutesEnforceOwnership(t *testing.T) {
 			{method: http.MethodPatch, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/primary-profile", binding.ID), body: map[string]any{"profile_id": profile.ID}},
 			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/profiles", binding.ID)},
 			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants", binding.ID)},
-			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/summary", binding.ID)},
+			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/runtime-summary", binding.ID)},
 			{method: http.MethodPut, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot), body: map[string]any{"enabled": true}},
 		} {
 			resp := performJSONRequest(t, stack.Router, tc.method, tc.path, tc.body, authHeaders(ownerAccessToken))
@@ -92,7 +92,7 @@ func TestMePlatformAccountRoutesEnforceOwnership(t *testing.T) {
 			{method: http.MethodPatch, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/primary-profile", binding.ID), body: map[string]any{"profile_id": profile.ID}},
 			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/profiles", binding.ID)},
 			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants", binding.ID)},
-			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/summary", binding.ID)},
+			{method: http.MethodGet, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/runtime-summary", binding.ID)},
 			{method: http.MethodPut, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot), body: map[string]any{"enabled": false}},
 			{method: http.MethodDelete, path: fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID)},
 		} {
@@ -157,6 +157,28 @@ func TestPlatformBindingRoutes(t *testing.T) {
 	require.NoError(t, stack.DB.Create(&grant).Error)
 
 	createStub := &platformBindingRouteStub{
+		summaryResponse: &platformv1.GetCredentialSummaryResponse{
+			PlatformAccountId: "cn:owner-main",
+			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+			Profiles: []*platformv1.ProfileSummary{
+				{
+					Id:                10001,
+					PlatformAccountId: "cn:owner-main",
+					GameBiz:           "hk4e_cn",
+					Region:            "cn_gf01",
+					PlayerId:          "10001",
+					Nickname:          "Traveler",
+				},
+				{
+					Id:                10002,
+					PlatformAccountId: "cn:owner-main",
+					GameBiz:           "hk4e_global",
+					Region:            "os_asia",
+					PlayerId:          "10002",
+					Nickname:          "Lumine",
+				},
+			},
+		},
 		putResponse: &platformv1.PutCredentialResponse{Summary: &platformv1.GetCredentialSummaryResponse{
 			PlatformAccountId: "cn:new-account",
 			Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
@@ -218,11 +240,11 @@ func TestPlatformBindingRoutes(t *testing.T) {
 		require.Equal(t, http.StatusUnprocessableEntity, invalidPrimaryResp.Code, invalidPrimaryResp.Body.String())
 		assert.Equal(t, "PRIMARY_PROFILE_INVALID", decodeErrorCode(t, invalidPrimaryResp))
 
-		summaryResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/me/platform-accounts/%d/summary", binding.ID), nil, authHeaders(ownerAccessToken))
+		summaryResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/me/platform-accounts/%d/runtime-summary", binding.ID), nil, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusOK, summaryResp.Code, summaryResp.Body.String())
 		summaryData := decodeResponseData(t, summaryResp)
-		assert.Equal(t, "Owner Main Updated", summaryData["display_name"])
-		assert.Equal(t, float64(profiles[1].ID), summaryData["primary_profile_id"])
+		assert.Equal(t, "cn:owner-main", summaryData["platform_account_id"])
+		assert.NotEmpty(t, summaryData["status"])
 		summaryProfiles, ok := summaryData["profiles"].([]any)
 		require.True(t, ok, "expected summary profiles array, got %T", summaryData["profiles"])
 		assert.Len(t, summaryProfiles, 2)

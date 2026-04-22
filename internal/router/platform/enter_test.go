@@ -25,7 +25,7 @@ func TestRouterGroupInitRegistersPlatformRoutes(t *testing.T) {
 
 	assert.Equal(t, 1, routeCounts["GET /api/v1/me/platforms"])
 	assert.Equal(t, 1, routeCounts["GET /api/v1/me/platforms/:platform/schema"])
-	assert.Equal(t, 1, routeCounts["GET /api/v1/me/platform-accounts/:bindingId/summary"])
+	assert.Zero(t, routeCounts["GET /api/v1/me/platform-accounts/:bindingId/summary"])
 	assert.Zero(t, routeCounts["GET /api/v1/platform-services"])
 	assert.Zero(t, routeCounts["GET /api/v1/platform-services/:id"])
 	assert.Zero(t, routeCounts["POST /api/v1/platform-services"])

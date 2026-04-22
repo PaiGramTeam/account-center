@@ -320,6 +320,39 @@ func TestCurrentUserServiceGetCurrentUserViewIncludesRolesAndPermissions(t *test
 	require.Equal(t, []string{"platform_account:read"}, view.Permissions)
 }
 
+func TestCurrentUserServiceUpdateCurrentUserUpdatesAllowedProfileFields(t *testing.T) {
+	db := setupMeServiceTestDB(t)
+	service := NewCurrentUserService(db)
+	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.UserProfile{UserID: user.ID, DisplayName: "Before", AvatarURL: "https://example.com/old.png", Bio: "Old bio", Locale: "en_US"}).Error)
+
+	displayName := "After"
+	avatarURL := "https://example.com/new.png"
+	bio := "New bio"
+	locale := "zh_CN"
+
+	view, err := service.UpdateCurrentUser(context.Background(), UpdateCurrentUserInput{
+		UserID:      user.ID,
+		DisplayName: &displayName,
+		AvatarURL:   &avatarURL,
+		Bio:         &bio,
+		Locale:      &locale,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "After", view.DisplayName)
+	assert.Equal(t, "https://example.com/new.png", view.AvatarURL)
+	assert.Equal(t, "New bio", view.Bio)
+	assert.Equal(t, "zh_CN", view.Locale)
+
+	var profile model.UserProfile
+	require.NoError(t, db.Where("user_id = ?", user.ID).First(&profile).Error)
+	assert.Equal(t, "After", profile.DisplayName)
+	assert.Equal(t, "https://example.com/new.png", profile.AvatarURL)
+	assert.Equal(t, "New bio", profile.Bio)
+	assert.Equal(t, "zh_CN", profile.Locale)
+}
+
 func TestSecurityServiceGetOverviewSummarizesCurrentUserSecurityState(t *testing.T) {
 	db := setupMeServiceTestDB(t)
 	service := NewSecurityService(db, sessioncache.NewNoopStore())

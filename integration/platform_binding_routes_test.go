@@ -393,7 +393,7 @@ func TestPlatformBindingConsumerGrantRoutesSupportRegistryConsumersAndIdempotent
 	assert.Equal(t, model.ConsumerGrantStatusActive, grants[1].Status)
 }
 
-func TestPlatformBindingConsumerGrantDisableRequiresExistingGrant(t *testing.T) {
+func TestPlatformBindingConsumerGrantDisableIsIdempotentWhenGrantIsMissing(t *testing.T) {
 	stack := newIntegrationStack(t)
 
 	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-grant-missing-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
@@ -419,8 +419,11 @@ func TestPlatformBindingConsumerGrantDisableRequiresExistingGrant(t *testing.T) 
 		{name: "admin", path: fmt.Sprintf("/api/v1/admin/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot), headers: authHeaders(adminAccessToken)},
 	} {
 		resp := performJSONRequest(t, stack.Router, http.MethodPut, tc.path, map[string]any{"enabled": false}, tc.headers)
-		require.Equal(t, http.StatusNotFound, resp.Code, "%s => %s", tc.name, resp.Body.String())
-		assert.Equal(t, "CONSUMER_GRANT_REQUIRED", decodeErrorCode(t, resp))
+		require.Equal(t, http.StatusOK, resp.Code, "%s => %s", tc.name, resp.Body.String())
+		data := decodeResponseData(t, resp)
+		assert.Equal(t, float64(binding.ID), data["binding_id"])
+		assert.Equal(t, serviceplatformbinding.ConsumerPaiGramBot, data["consumer"])
+		assert.Equal(t, string(model.ConsumerGrantStatusRevoked), data["status"])
 	}
 }
 

@@ -26,7 +26,7 @@ func TestListGrantsPaginatesResults(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&binding).Error)
 
-	for _, consumer := range []string{"paigram-bot", "pamgram", "mihomo.sync"} {
+	for _, consumer := range []string{ConsumerPaiGramBot, ConsumerPamgram, "mihomo.sync"} {
 		require.NoError(t, db.Create(&model.ConsumerGrant{
 			BindingID: binding.ID,
 			Consumer:  consumer,

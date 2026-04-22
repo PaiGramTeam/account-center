@@ -928,6 +928,7 @@ func TestCreateBindingForOwnerCreatesDraftBindsAndSyncsProfiles(t *testing.T) {
 	assert.Equal(t, "mihomo:42", profileSyncer.input.Profiles[0].PlatformProfileKey)
 	assert.Equal(t, "10001", profileSyncer.input.Profiles[0].PlayerUID)
 	assert.True(t, profileSyncer.input.Profiles[0].IsPrimary)
+	assert.True(t, profileSyncer.input.Profiles[0].SourceUpdatedAt.Valid)
 }
 
 func TestCreateBindingForOwnerReturnsCommittedBindingWhenProfileSyncFails(t *testing.T) {

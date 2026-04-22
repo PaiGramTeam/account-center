@@ -448,6 +448,7 @@ func (s *OrchestrationService) syncProfiles(binding, updatedBinding *model.Platf
 	if s.profileSyncer == nil || binding == nil || summary == nil || len(summary.Profiles) == 0 {
 		return nil
 	}
+	syncedAt := time.Now().UTC()
 	bindingID := binding.ID
 	if updatedBinding != nil {
 		bindingID = updatedBinding.ID
@@ -456,10 +457,15 @@ func (s *OrchestrationService) syncProfiles(binding, updatedBinding *model.Platf
 	if len(profiles) == 0 {
 		return nil
 	}
+	for i := range profiles {
+		if !profiles[i].SourceUpdatedAt.Valid {
+			profiles[i].SourceUpdatedAt = sql.NullTime{Time: syncedAt, Valid: true}
+		}
+	}
 	_, err := s.profileSyncer.SyncProfiles(SyncProfilesInput{
 		BindingID: bindingID,
 		Profiles:  profiles,
-		SyncedAt:  time.Now().UTC(),
+		SyncedAt:  syncedAt,
 	})
 	return err
 }
@@ -483,9 +489,22 @@ func buildProfileProjectionInputs(platform string, rawProfiles []map[string]any)
 			Nickname:           nickname,
 			Level:              nullableLevel(raw["level"]),
 			IsPrimary:          mapBool(raw["is_default"]),
+			SourceUpdatedAt:    nullableSourceUpdatedAt(raw["source_updated_at"]),
 		})
 	}
 	return profiles
+}
+
+func nullableSourceUpdatedAt(value any) sql.NullTime {
+	text, ok := value.(string)
+	if !ok || text == "" {
+		return sql.NullTime{}
+	}
+	timestamp, err := time.Parse(time.RFC3339, text)
+	if err != nil {
+		return sql.NullTime{}
+	}
+	return sql.NullTime{Time: timestamp.UTC(), Valid: true}
 }
 
 func derivePlatformProfileKey(platform string, raw map[string]any, playerUID string) string {

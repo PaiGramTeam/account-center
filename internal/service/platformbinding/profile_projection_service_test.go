@@ -302,6 +302,45 @@ func TestProfileProjectionServiceSyncProfilesRemovesStaleProfiles(t *testing.T) 
 	assert.Equal(t, "Traveler Updated", persisted[0].Nickname)
 }
 
+func TestProfileProjectionServiceSyncProfilesDefaultsSourceUpdatedAtToSyncedAt(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewProfileProjectionService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: ns("cn:source-updated-default"),
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Source Updated Default",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+
+	syncedAt := time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
+	profiles, err := service.SyncProfiles(SyncProfilesInput{
+		BindingID: binding.ID,
+		SyncedAt:  syncedAt,
+		Profiles: []ProfileProjectionInput{{
+			PlatformProfileKey: "mihomo:10001",
+			GameBiz:            "hk4e_cn",
+			Region:             "cn_gf01",
+			PlayerUID:          "10001",
+			Nickname:           "Traveler",
+			IsPrimary:          true,
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, profiles, 1)
+	assert.True(t, profiles[0].SourceUpdatedAt.Valid)
+	assert.WithinDuration(t, syncedAt, profiles[0].SourceUpdatedAt.Time, time.Millisecond)
+
+	var persisted model.PlatformAccountProfile
+	require.NoError(t, db.First(&persisted, profiles[0].ID).Error)
+	assert.True(t, persisted.SourceUpdatedAt.Valid)
+	assert.WithinDuration(t, syncedAt, persisted.SourceUpdatedAt.Time, time.Millisecond)
+}
+
 func TestRuntimeSummaryServiceRepairProjectionPersistsSummaryAndProfiles(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	bindingService := NewBindingService(db)

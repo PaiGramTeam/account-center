@@ -46,6 +46,10 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 		profileKeys := make([]string, 0, len(input.Profiles))
 		for _, item := range input.Profiles {
 			profileKeys = append(profileKeys, item.PlatformProfileKey)
+			sourceUpdatedAt := item.SourceUpdatedAt
+			if !sourceUpdatedAt.Valid {
+				sourceUpdatedAt = sql.NullTime{Time: syncedAt, Valid: true}
+			}
 			var profile model.PlatformAccountProfile
 			lookup := tx.Where("binding_id = ? AND platform_profile_key = ?", input.BindingID, item.PlatformProfileKey).First(&profile)
 			if lookup.Error != nil {
@@ -65,7 +69,7 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 			profile.Nickname = item.Nickname
 			profile.Level = item.Level
 			profile.IsPrimary = item.IsPrimary
-			profile.SourceUpdatedAt = item.SourceUpdatedAt
+			profile.SourceUpdatedAt = sourceUpdatedAt
 
 			if profile.ID == 0 {
 				if err := tx.Create(&profile).Error; err != nil {

@@ -247,7 +247,7 @@ func TestPlatformBindingReconcileScannerFindsFreshBindingsWithDriftedProfiles(t 
 		},
 	}).Error)
 	require.NoError(t, db.Model(&model.PlatformAccountProfile{}).Where("binding_id = ?", 1).Updates(map[string]any{
-		"updated_at":        now.Add(-48 * time.Hour),
+		"updated_at":        now,
 		"source_updated_at": now.Add(-48 * time.Hour),
 	}).Error)
 

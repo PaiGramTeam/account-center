@@ -131,3 +131,35 @@ func TestGrantServiceRevokeGrantIsIdempotentWhenGrantDoesNotExist(t *testing.T) 
 	require.NoError(t, db.Model(&model.ConsumerGrant{}).Where("binding_id = ? AND consumer = ?", binding.ID, ConsumerPaiGramBot).Count(&count).Error)
 	assert.Zero(t, count)
 }
+
+func TestGrantServiceUpsertWritesUnifiedAuditEvent(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewGrantService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: ns("cn:grant-audit"),
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Grant Audit",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+
+	_, _, err := service.UpsertGrant(UpsertGrantInput{
+		BindingID: binding.ID,
+		Consumer:  ConsumerPaiGramBot,
+		GrantedBy: sql.NullInt64{Int64: int64(owner.ID), Valid: true},
+		GrantedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "platform_binding", "grant_change").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "binding", event.TargetType)
+	assert.Equal(t, "success", event.Result)
+	assert.Equal(t, int64(binding.ID), event.BindingID.Int64)
+	assert.Contains(t, event.MetadataJSON, ConsumerPaiGramBot)
+	assert.Contains(t, event.MetadataJSON, "grant_enabled")
+}

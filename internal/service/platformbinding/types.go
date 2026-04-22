@@ -40,9 +40,10 @@ type UpsertGrantInput struct {
 }
 
 type RevokeGrantInput struct {
-	BindingID uint64
-	Consumer  string
-	RevokedAt time.Time
+	BindingID   uint64
+	Consumer    string
+	RevokedAt   time.Time
+	ActorUserID sql.NullInt64
 }
 
 type ProfileProjectionInput struct {

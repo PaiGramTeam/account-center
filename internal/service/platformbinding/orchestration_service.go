@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"paigram/internal/model"
+	serviceaudit "paigram/internal/service/audit"
 	serviceplatform "paigram/internal/service/platform"
 )
 
@@ -53,6 +55,11 @@ type OrchestrationService struct {
 	gateway         credentialGateway
 	profileSyncer   orchestrationProfileSyncer
 	grantCleaner    orchestrationGrantCleaner
+	auditWriter     orchestrationAuditWriter
+}
+
+type orchestrationAuditWriter interface {
+	Record(context.Context, serviceaudit.WriteInput) error
 }
 
 func NewOrchestrationService(bindingReader orchestrationBindingReader, platformService orchestrationPlatformService, gateway credentialGateway, dependencies ...any) *OrchestrationService {
@@ -63,6 +70,8 @@ func NewOrchestrationService(bindingReader orchestrationBindingReader, platformS
 			service.profileSyncer = typed
 		case orchestrationGrantCleaner:
 			service.grantCleaner = typed
+		case orchestrationAuditWriter:
+			service.auditWriter = typed
 		}
 	}
 	return service
@@ -84,6 +93,7 @@ func (s *OrchestrationService) CreateBindingForOwner(ctx context.Context, input 
 		DisplayName:        input.DisplayName,
 	})
 	if err != nil {
+		s.recordBindingAudit(ctx, nil, "binding_create", "failure", reasonCode(err), &input.OwnerUserID, input.ActorType, input.ActorID, map[string]any{"platform": input.Platform})
 		return nil, err
 	}
 
@@ -95,6 +105,7 @@ func (s *OrchestrationService) CreateBindingForOwner(ctx context.Context, input 
 		CredentialPayload: input.CredentialPayload,
 	})
 	if err != nil {
+		s.recordBindingAudit(ctx, binding, "binding_create", "failure", reasonCode(err), &input.OwnerUserID, input.ActorType, input.ActorID, map[string]any{"platform": input.Platform})
 		if updatedBinding != nil {
 			if updatedBinding.ID != binding.ID {
 				if _, deleteErr := s.bindingReader.DeleteBinding(binding.ID); deleteErr != nil {
@@ -106,6 +117,7 @@ func (s *OrchestrationService) CreateBindingForOwner(ctx context.Context, input 
 		return nil, err
 	}
 	if updatedBinding != nil {
+		s.recordBindingAudit(ctx, updatedBinding, "binding_create", "success", "", &input.OwnerUserID, input.ActorType, input.ActorID, map[string]any{"platform": input.Platform})
 		if updatedBinding.ID != binding.ID {
 			if _, deleteErr := s.bindingReader.DeleteBinding(binding.ID); deleteErr != nil {
 				return nil, deleteErr
@@ -113,8 +125,11 @@ func (s *OrchestrationService) CreateBindingForOwner(ctx context.Context, input 
 		}
 		return updatedBinding, nil
 	}
-
-	return s.bindingReader.GetBindingForOwner(input.OwnerUserID, binding.ID)
+	resolvedBinding, err := s.bindingReader.GetBindingForOwner(input.OwnerUserID, binding.ID)
+	if err == nil {
+		s.recordBindingAudit(ctx, resolvedBinding, "binding_create", "success", "", &input.OwnerUserID, input.ActorType, input.ActorID, map[string]any{"platform": input.Platform})
+	}
+	return resolvedBinding, err
 }
 
 func (s *OrchestrationService) PutCredentialForOwner(ctx context.Context, input PutCredentialInput) (*RuntimeSummary, error) {
@@ -124,6 +139,14 @@ func (s *OrchestrationService) PutCredentialForOwner(ctx context.Context, input 
 	}
 
 	summary, _, err := s.putCredential(ctx, binding, input)
+	if err != nil {
+		s.recordBindingAudit(ctx, binding, "credential_update", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), input.ActorType, input.ActorID, nil)
+		if errors.Is(err, ErrCredentialValidationFailed) {
+			s.recordBindingAudit(ctx, binding, "platform_validation_failure", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), input.ActorType, input.ActorID, nil)
+		}
+		return summary, err
+	}
+	s.recordBindingAudit(ctx, binding, "credential_update", "success", "", uint64Ptr(binding.OwnerUserID), input.ActorType, input.ActorID, nil)
 	return summary, err
 }
 
@@ -134,6 +157,14 @@ func (s *OrchestrationService) PutCredentialAsAdmin(ctx context.Context, input P
 	}
 
 	summary, _, err := s.putCredential(ctx, binding, input)
+	if err != nil {
+		s.recordBindingAudit(ctx, binding, "credential_update", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), input.ActorType, input.ActorID, nil)
+		if errors.Is(err, ErrCredentialValidationFailed) {
+			s.recordBindingAudit(ctx, binding, "platform_validation_failure", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), input.ActorType, input.ActorID, nil)
+		}
+		return summary, err
+	}
+	s.recordBindingAudit(ctx, binding, "credential_update", "success", "", uint64Ptr(binding.OwnerUserID), input.ActorType, input.ActorID, nil)
 	return summary, err
 }
 
@@ -143,7 +174,13 @@ func (s *OrchestrationService) RefreshBindingForOwner(ctx context.Context, owner
 		return nil, err
 	}
 
-	return s.refreshBinding(ctx, binding, "user", "binding-refresh")
+	updated, err := s.refreshBinding(ctx, binding, "user", "binding-refresh")
+	if err != nil {
+		s.recordBindingAudit(ctx, binding, "binding_refresh", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "user", "binding-refresh", nil)
+		return nil, err
+	}
+	s.recordBindingAudit(ctx, updated, "binding_refresh", "success", "", uint64Ptr(binding.OwnerUserID), "user", "binding-refresh", nil)
+	return updated, nil
 }
 
 func (s *OrchestrationService) RefreshBindingAsAdmin(ctx context.Context, bindingID uint64) (*model.PlatformAccountBinding, error) {
@@ -152,7 +189,13 @@ func (s *OrchestrationService) RefreshBindingAsAdmin(ctx context.Context, bindin
 		return nil, err
 	}
 
-	return s.refreshBinding(ctx, binding, "admin", "binding-refresh-admin")
+	updated, err := s.refreshBinding(ctx, binding, "admin", "binding-refresh-admin")
+	if err != nil {
+		s.recordBindingAudit(ctx, binding, "binding_refresh", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "admin", "binding-refresh-admin", nil)
+		return nil, err
+	}
+	s.recordBindingAudit(ctx, updated, "binding_refresh", "success", "", uint64Ptr(binding.OwnerUserID), "admin", "binding-refresh-admin", nil)
+	return updated, nil
 }
 
 func (s *OrchestrationService) DeleteBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) error {
@@ -161,7 +204,13 @@ func (s *OrchestrationService) DeleteBindingForOwner(ctx context.Context, ownerU
 		return err
 	}
 
-	return s.deleteBinding(ctx, binding, "user", "binding-delete")
+	err = s.deleteBinding(ctx, binding, "user", "binding-delete")
+	if err != nil {
+		s.recordBindingAudit(ctx, binding, "binding_delete", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "user", "binding-delete", nil)
+		return err
+	}
+	s.recordBindingAudit(ctx, binding, "binding_delete", "success", "", uint64Ptr(binding.OwnerUserID), "user", "binding-delete", nil)
+	return nil
 }
 
 func (s *OrchestrationService) DeleteBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) error {
@@ -170,7 +219,14 @@ func (s *OrchestrationService) DeleteBindingAsAdmin(ctx context.Context, binding
 		return err
 	}
 
-	return s.deleteBinding(ctx, binding, "admin", "admin:"+strconv.FormatUint(adminUserID, 10))
+	actorID := "admin:" + strconv.FormatUint(adminUserID, 10)
+	err = s.deleteBinding(ctx, binding, "admin", actorID)
+	if err != nil {
+		s.recordBindingAudit(ctx, binding, "binding_delete", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "admin", actorID, nil)
+		return err
+	}
+	s.recordBindingAudit(ctx, binding, "binding_delete", "success", "", uint64Ptr(binding.OwnerUserID), "admin", actorID, nil)
+	return nil
 }
 
 func (s *OrchestrationService) SetPrimaryProfileForOwner(ctx context.Context, ownerUserID, bindingID, profileID uint64, actorID string) (*model.PlatformAccountBinding, error) {
@@ -195,12 +251,21 @@ func (s *OrchestrationService) SetPrimaryProfileForOwner(ctx context.Context, ow
 
 	if err := s.platformService.ConfirmBindingPrimaryProfile(ctx, "user", actorID, binding, profile.PlayerUID); err != nil {
 		if IsCredentialValidationError(err) {
+			s.recordBindingAudit(ctx, binding, "platform_validation_failure", "failure", "credential_validation_failed", uint64Ptr(binding.OwnerUserID), "user", actorID, map[string]any{"profile_id": profile.ID})
+			s.recordBindingAudit(ctx, binding, "primary_profile_change", "failure", "credential_validation_failed", uint64Ptr(binding.OwnerUserID), "user", actorID, map[string]any{"profile_id": profile.ID})
 			return nil, fmt.Errorf("%w: %v", ErrCredentialValidationFailed, err)
 		}
+		s.recordBindingAudit(ctx, binding, "primary_profile_change", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "user", actorID, map[string]any{"profile_id": profile.ID})
 		return nil, err
 	}
 
-	return s.profileSyncer.SetPrimaryProfileForOwner(ownerUserID, binding.ID, &profile.ID)
+	updatedBinding, err := s.profileSyncer.SetPrimaryProfileForOwner(ownerUserID, binding.ID, &profile.ID)
+	if err != nil {
+		s.recordBindingAudit(ctx, binding, "primary_profile_change", "failure", reasonCode(err), uint64Ptr(binding.OwnerUserID), "user", actorID, map[string]any{"profile_id": profile.ID})
+		return nil, err
+	}
+	s.recordBindingAudit(ctx, updatedBinding, "primary_profile_change", "success", "", uint64Ptr(binding.OwnerUserID), "user", actorID, map[string]any{"profile_id": profile.ID})
+	return updatedBinding, nil
 }
 
 func (s *OrchestrationService) refreshBinding(ctx context.Context, binding *model.PlatformAccountBinding, actorType, actorID string) (*model.PlatformAccountBinding, error) {
@@ -485,4 +550,78 @@ func (unavailableCredentialGateway) RefreshCredential(context.Context, string, s
 
 func (unavailableCredentialGateway) DeleteCredential(context.Context, string, string, *model.PlatformAccountBinding) error {
 	return ErrCredentialGatewayUnavailable
+}
+
+func (s *OrchestrationService) recordBindingAudit(ctx context.Context, binding *model.PlatformAccountBinding, action, result, reason string, ownerUserID *uint64, actorType, actorID string, metadata map[string]any) {
+	if s == nil || s.auditWriter == nil {
+		return
+	}
+	var bindingID *uint64
+	targetID := ""
+	if binding != nil {
+		bindingID = &binding.ID
+		targetID = strconv.FormatUint(binding.ID, 10)
+		if ownerUserID == nil && binding.OwnerUserID != 0 {
+			ownerUserID = uint64Ptr(binding.OwnerUserID)
+		}
+	}
+	payload := map[string]any{"actor_id": actorID}
+	for key, value := range metadata {
+		payload[key] = value
+	}
+	_ = s.auditWriter.Record(ctx, serviceaudit.WriteInput{
+		Category:    "platform_binding",
+		ActorType:   actorType,
+		ActorUserID: actorUserIDFromAuditContext(actorType, actorID, ownerUserID),
+		Action:      action,
+		TargetType:  "binding",
+		TargetID:    targetID,
+		BindingID:   bindingID,
+		OwnerUserID: ownerUserID,
+		Result:      result,
+		ReasonCode:  reason,
+		Metadata:    payload,
+	})
+}
+
+func actorUserIDFromAuditContext(actorType, actorID string, ownerUserID *uint64) *uint64 {
+	switch actorType {
+	case "user":
+		if ownerUserID != nil {
+			return ownerUserID
+		}
+	case "admin":
+		const prefix = "admin:"
+		if strings.HasPrefix(actorID, prefix) {
+			if value, err := strconv.ParseUint(strings.TrimPrefix(actorID, prefix), 10, 64); err == nil && value != 0 {
+				return &value
+			}
+		}
+	}
+	return nil
+}
+
+func reasonCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, ErrCredentialValidationFailed):
+		return "credential_validation_failed"
+	case errors.Is(err, ErrCredentialGatewayUnavailable):
+		return "credential_gateway_unavailable"
+	case errors.Is(err, serviceplatform.ErrPlatformServiceUnavailable):
+		return "platform_service_unavailable"
+	case errors.Is(err, ErrBindingNotFound):
+		return "binding_not_found"
+	default:
+		return "operation_failed"
+	}
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
 }

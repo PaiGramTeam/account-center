@@ -1,6 +1,7 @@
 package platformbinding
 
 import (
+	serviceaudit "paigram/internal/service/audit"
 	serviceplatform "paigram/internal/service/platform"
 
 	"gorm.io/gorm"
@@ -18,11 +19,12 @@ func NewServiceGroup(db *gorm.DB, platformService *serviceplatform.PlatformServi
 	bindingService := NewBindingService(db)
 	profileProjectionService := NewProfileProjectionService(db)
 	grantService := NewGrantService(db)
+	auditService := serviceaudit.NewAuditService(db)
 	return &ServiceGroup{
 		BindingService:           *bindingService,
 		GrantService:             *grantService,
 		ProfileProjectionService: *profileProjectionService,
-		OrchestrationService:     *NewOrchestrationService(bindingService, platformService, serviceplatform.NewGRPCGenericCredentialGateway(nil), profileProjectionService, grantService),
+		OrchestrationService:     *NewOrchestrationService(bindingService, platformService, serviceplatform.NewGRPCGenericCredentialGateway(nil), profileProjectionService, grantService, auditService),
 		RuntimeSummaryService:    *NewRuntimeSummaryService(platformService, bindingService),
 	}
 }

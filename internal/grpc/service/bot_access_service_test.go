@@ -44,6 +44,7 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
+		&model.AuditEvent{},
 	)
 
 	bot, identityUser, ref := seedBotAccessGRPCTestData(t, db)
@@ -98,6 +99,12 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 	assert.Equal(t, []string{"daily.sign"}, parsedClaims.Scopes)
 	assert.ElementsMatch(t, []string{"platform-hoyoverse-service"}, []string(parsedClaims.Audience))
 	assert.WithinDuration(t, ticketResp.ExpiresAt.AsTime(), parsedClaims.ExpiresAt.Time, time.Second)
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "ticket_issue").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "consumer", event.ActorType)
+	assert.Equal(t, "success", event.Result)
+	assert.Equal(t, "binding", event.TargetType)
 }
 
 func TestBotAccessServiceRejectsRequestedScopesOutsideGrantedSet(t *testing.T) {
@@ -112,6 +119,7 @@ func TestBotAccessServiceRejectsRequestedScopesOutsideGrantedSet(t *testing.T) {
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
+		&model.AuditEvent{},
 	)
 
 	bot, _, ref := seedBotAccessGRPCTestData(t, db)
@@ -133,6 +141,11 @@ func TestBotAccessServiceRejectsRequestedScopesOutsideGrantedSet(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "ticket_reject").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "failure", event.Result)
+	assert.NotEmpty(t, event.ReasonCode)
 }
 
 func TestBotAccessServiceRejectsRevokedConsumerGrantOnTicketIssue(t *testing.T) {
@@ -292,7 +305,7 @@ func newBotAccessBufconnClient(t *testing.T, db *gorm.DB) *grpc.ClientConn {
 		ServiceTicketSigningKey: botAccessServiceTestSigningKey,
 	})
 	require.NoError(t, err)
-	pb.RegisterBotAccessServiceServer(grpcServer, grpcservice.NewBotAccessService(&group.AccountRefService, &group.TicketService))
+	pb.RegisterBotAccessServiceServer(grpcServer, grpcservice.NewBotAccessService(&group.AccountRefService, &group.TicketService, db))
 
 	serveErrCh := make(chan error, 1)
 	go func() {

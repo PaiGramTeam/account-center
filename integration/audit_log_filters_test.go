@@ -68,7 +68,7 @@ func TestAuditLogFiltersByCategory(t *testing.T) {
 		RequestID:    "req-binding",
 		IP:           "192.0.2.20",
 		UserAgent:    "AuditTest/1.0",
-		MetadataJSON: `{"platform":"mihomo"}`,
+		MetadataJSON: `{"platform":"mihomo","owner":{"user_id":` + strconv.FormatUint(userID, 10) + `}}`,
 		CreatedAt:    time.Now().UTC().Add(-1 * time.Minute),
 	})
 
@@ -108,6 +108,12 @@ func TestAuditLogFiltersByCategory(t *testing.T) {
 	loginMetadata, ok := detailData["metadata"].(map[string]any)
 	require.True(t, ok, "expected metadata object, got %T", detailData["metadata"])
 	require.Equal(t, "email", loginMetadata["provider"])
+
+	bindingMetadata, ok := failureItem["metadata"].(map[string]any)
+	require.True(t, ok, "expected metadata object, got %T", failureItem["metadata"])
+	owner, ok := bindingMetadata["owner"].(map[string]any)
+	require.True(t, ok, "expected owner object, got %T", bindingMetadata["owner"])
+	require.Equal(t, float64(userID), owner["user_id"])
 }
 
 func seedAuditEvent(t *testing.T, stack *integrationStack, event model.AuditEvent) model.AuditEvent {

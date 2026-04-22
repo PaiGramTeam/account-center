@@ -4,13 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strconv"
 
 	"google.golang.org/grpc/codes"
+	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 
 	pb "paigram/internal/grpc/pb/v1"
 	"paigram/internal/model"
+	serviceaudit "paigram/internal/service/audit"
 	"paigram/internal/service/botaccess"
 )
 
@@ -20,12 +24,14 @@ type BotAccessService struct {
 
 	accountRefService *botaccess.AccountRefService
 	ticketService     *botaccess.TicketService
+	db                *gorm.DB
 }
 
-func NewBotAccessService(accountRefService *botaccess.AccountRefService, ticketService *botaccess.TicketService) *BotAccessService {
+func NewBotAccessService(accountRefService *botaccess.AccountRefService, ticketService *botaccess.TicketService, db *gorm.DB) *BotAccessService {
 	return &BotAccessService{
 		accountRefService: accountRefService,
 		ticketService:     ticketService,
+		db:                db,
 	}
 }
 
@@ -110,24 +116,30 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 
 	_, binding, grant, err := s.accountRefService.GetGrantedBinding(bot.Id, req.GetExternalUserId(), req.GetBindingId(), req.GetProfileId())
 	if err != nil {
+		s.recordTicketAudit(ctx, bot, nil, req, "ticket_reject", "failure", reasonCodeFromBotAccessErr(err), nil)
 		return nil, mapBotAccessError("get granted binding", err)
 	}
 	if req.GetAudience() != binding.PlatformServiceKey {
+		s.recordTicketAudit(ctx, bot, binding, req, "ticket_reject", "failure", "audience_mismatch", nil)
 		return nil, status.Error(codes.InvalidArgument, "audience does not match binding platform service key")
 	}
 	grantedScopes, err := s.accountRefService.GetGrantedScopes(bot.Id, binding.ID)
 	if err != nil {
+		s.recordTicketAudit(ctx, bot, binding, req, "ticket_reject", "failure", reasonCodeFromBotAccessErr(err), nil)
 		return nil, mapBotAccessError("get granted scopes", err)
 	}
 	scopes, err := selectTicketScopes(grantedScopes, req.GetRequestedScopes())
 	if err != nil {
+		s.recordTicketAudit(ctx, bot, binding, req, "ticket_reject", "failure", reasonCodeFromBotAccessErr(err), nil)
 		return nil, mapBotAccessError("validate requested scopes", err)
 	}
 
 	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, scopes, req.GetAudience())
 	if err != nil {
+		s.recordTicketAudit(ctx, bot, binding, req, "ticket_reject", "failure", reasonCodeFromBotAccessErr(err), map[string]any{"consumer": grant.Consumer})
 		return nil, mapBotAccessError("issue service ticket", err)
 	}
+	s.recordTicketAudit(ctx, bot, binding, req, "ticket_issue", "success", "", map[string]any{"consumer": grant.Consumer, "scopes": scopes})
 
 	return &pb.IssueServiceTicketResponse{
 		Ticket:    ticket,
@@ -244,5 +256,70 @@ func mapBotAccessError(operation string, err error) error {
 		return status.Error(codes.FailedPrecondition, "invalid service ticket config")
 	default:
 		return status.Errorf(codes.Internal, "%s: %v", operation, err)
+	}
+}
+
+func (s *BotAccessService) recordTicketAudit(ctx context.Context, bot *Bot, binding *model.PlatformAccountBinding, req *pb.IssueServiceTicketRequest, action, result, reasonCode string, metadata map[string]any) {
+	if s == nil || s.db == nil || bot == nil || req == nil {
+		return
+	}
+	var bindingID *uint64
+	var ownerUserID *uint64
+	targetID := strconv.FormatUint(req.GetBindingId(), 10)
+	if binding != nil {
+		bindingID = &binding.ID
+		targetID = strconv.FormatUint(binding.ID, 10)
+		ownerUserID = &binding.OwnerUserID
+	}
+	writeMetadata := map[string]any{"bot_id": bot.Id, "external_user_id": req.GetExternalUserId(), "audience": req.GetAudience()}
+	for key, value := range metadata {
+		writeMetadata[key] = value
+	}
+	_ = serviceaudit.Record(ctx, s.db, serviceaudit.WriteInput{
+		Category:    "bot_access",
+		ActorType:   "consumer",
+		Action:      action,
+		TargetType:  "binding",
+		TargetID:    targetID,
+		BindingID:   bindingID,
+		OwnerUserID: ownerUserID,
+		Result:      result,
+		ReasonCode:  reasonCode,
+		RequestID:   requestIDFromGRPCContext(ctx),
+		Metadata:    writeMetadata,
+	})
+}
+
+func requestIDFromGRPCContext(ctx context.Context) string {
+	if md, ok := grpcmetadata.FromIncomingContext(ctx); ok {
+		if values := md.Get("x-request-id"); len(values) > 0 {
+			return values[0]
+		}
+	}
+	return ""
+}
+
+func reasonCodeFromBotAccessErr(err error) string {
+	switch {
+	case errors.Is(err, botaccess.ErrBotIdentityNotFound):
+		return "bot_identity_not_found"
+	case errors.Is(err, botaccess.ErrPlatformAccountMissing):
+		return "platform_account_missing"
+	case errors.Is(err, botaccess.ErrBotGrantNotFound):
+		return "bot_grant_not_found"
+	case errors.Is(err, botaccess.ErrBotGrantRevoked):
+		return "bot_grant_revoked"
+	case errors.Is(err, botaccess.ErrConsumerNotSupported):
+		return "consumer_not_supported"
+	case errors.Is(err, botaccess.ErrScopeNotGranted):
+		return "scope_not_granted"
+	case errors.Is(err, botaccess.ErrPlatformAccountOwnedByOtherUser):
+		return "binding_owned_by_other_user"
+	case errors.Is(err, botaccess.ErrInactiveAccountRef):
+		return "inactive_account_ref"
+	case errors.Is(err, botaccess.ErrInvalidTicketConfig):
+		return "invalid_ticket_config"
+	default:
+		return "internal_error"
 	}
 }

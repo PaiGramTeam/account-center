@@ -10,6 +10,7 @@ import (
 	"paigram/internal/model"
 	"paigram/internal/response"
 	"paigram/internal/service"
+	pkgerrors "paigram/pkg/errors"
 )
 
 const (
@@ -234,7 +235,7 @@ func RequireRoleMiddleware(roleNames ...string) gin.HandlerFunc {
 
 		if !has {
 			if len(roleNames) == 1 && roleNames[0] == model.RoleAdmin {
-				response.ForbiddenWithCode(c, "ADMIN_REQUIRED", "admin role required", nil)
+				response.ForbiddenWithCode(c, pkgerrors.ErrorCodeAdminRequired, "admin role required", nil)
 			} else {
 				response.ForbiddenWithCode(c, "FORBIDDEN", "insufficient role permissions", nil)
 			}

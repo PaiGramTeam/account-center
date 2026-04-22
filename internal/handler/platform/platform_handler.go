@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -15,6 +16,7 @@ import (
 	"paigram/internal/middleware"
 	"paigram/internal/response"
 	serviceplatform "paigram/internal/service/platform"
+	pkgerrors "paigram/pkg/errors"
 )
 
 type platformReader interface {
@@ -112,23 +114,23 @@ func (h *Handler) GetPlatformAccountSummary(c *gin.Context) {
 	summary, err := h.platformService.GetPlatformAccountSummary(c.Request.Context(), "user", fmt.Sprintf("session:%d", sessionID), userID, bindingID, []string{"mihomo.credential.read_meta"})
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			response.NotFound(c, "platform account not found")
+			response.NotFoundWithCode(c, pkgerrors.ErrorCodePlatformBindingNotFound, "platform account not found", nil)
 			return
 		}
 		if errors.Is(err, serviceplatform.ErrPlatformServiceUnavailable) || errors.Is(err, serviceplatform.ErrPlatformSummaryProxyUnavailable) {
-			response.InternalServerError(c, "platform service unavailable")
+			response.ErrorWithCode(c, http.StatusServiceUnavailable, pkgerrors.ErrorCodePlatformServiceUnavailable, "platform service unavailable", nil)
 			return
 		}
 		if st, ok := grpcstatus.FromError(err); ok {
 			switch st.Code() {
 			case codes.NotFound:
-				response.NotFound(c, "platform account not found")
+				response.NotFoundWithCode(c, pkgerrors.ErrorCodePlatformBindingNotFound, "platform account not found", nil)
 				return
 			case codes.PermissionDenied:
 				response.Forbidden(c, "platform scope denied")
 				return
 			case codes.Unavailable, codes.DeadlineExceeded:
-				response.InternalServerError(c, "platform service unavailable")
+				response.ErrorWithCode(c, http.StatusServiceUnavailable, pkgerrors.ErrorCodePlatformServiceUnavailable, "platform service unavailable", nil)
 				return
 			}
 		}

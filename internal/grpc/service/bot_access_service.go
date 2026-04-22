@@ -229,15 +229,15 @@ func mapBotAccessError(operation string, err error) error {
 	case errors.Is(err, botaccess.ErrPlatformAccountMissing):
 		return status.Error(codes.NotFound, "platform account ref not found")
 	case errors.Is(err, botaccess.ErrBotGrantNotFound):
-		return status.Error(codes.NotFound, "bot account grant not found")
+		return status.Error(codes.PermissionDenied, "consumer grant required for binding")
 	case errors.Is(err, botaccess.ErrBotGrantRevoked):
-		return status.Error(codes.PermissionDenied, "bot account grant revoked")
+		return status.Error(codes.PermissionDenied, "consumer grant revoked for binding")
 	case errors.Is(err, botaccess.ErrConsumerNotSupported):
 		return status.Error(codes.InvalidArgument, "consumer is not supported")
 	case errors.Is(err, botaccess.ErrScopeNotGranted):
 		return status.Error(codes.PermissionDenied, "requested scope is not granted")
 	case errors.Is(err, botaccess.ErrPlatformAccountOwnedByOtherUser):
-		return status.Error(codes.AlreadyExists, "platform account ref is owned by another user")
+		return status.Error(codes.AlreadyExists, "platform account already bound")
 	case errors.Is(err, botaccess.ErrInactiveAccountRef):
 		return status.Error(codes.FailedPrecondition, "platform account ref is not active")
 	case errors.Is(err, botaccess.ErrInvalidTicketConfig):

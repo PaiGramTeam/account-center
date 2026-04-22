@@ -16,6 +16,7 @@ import (
 	"paigram/internal/model"
 	"paigram/internal/response"
 	serviceplatformbinding "paigram/internal/service/platformbinding"
+	pkgerrors "paigram/pkg/errors"
 )
 
 type bindingService interface {
@@ -564,11 +565,11 @@ func readPutConsumerGrantRequest(c *gin.Context) (*PutConsumerGrantRequest, bool
 func writeBindingError(c *gin.Context, err error, fallback string) {
 	switch {
 	case errors.Is(err, serviceplatformbinding.ErrBindingNotFound):
-		response.NotFound(c, "platform binding not found")
+		response.NotFoundWithCode(c, pkgerrors.ErrorCodePlatformBindingNotFound, "platform binding not found", nil)
 	case errors.Is(err, serviceplatformbinding.ErrGrantNotFound):
-		response.NotFound(c, "consumer grant not found")
+		response.NotFoundWithCode(c, pkgerrors.ErrorCodeConsumerGrantRequired, "consumer grant required", nil)
 	case errors.Is(err, serviceplatformbinding.ErrBindingAlreadyOwned):
-		response.Conflict(c, "platform binding already owned by another user")
+		response.ConflictWithCode(c, pkgerrors.ErrorCodePlatformAccountAlreadyBound, "platform account already bound", nil)
 	case errors.Is(err, serviceplatformbinding.ErrCredentialValidationFailed):
 		response.Error(c, http.StatusUnprocessableEntity, "platform credential validation failed")
 	case errors.Is(err, serviceplatformbinding.ErrConsumerNotSupported):
@@ -576,10 +577,10 @@ func writeBindingError(c *gin.Context, err error, fallback string) {
 	case errors.Is(err, serviceplatformbinding.ErrBindingRuntimeSummaryNotReady):
 		response.Conflict(c, "platform binding runtime summary is not ready")
 	case errors.Is(err, serviceplatformbinding.ErrPrimaryProfileNotOwned):
-		response.Error(c, http.StatusUnprocessableEntity, "primary profile must belong to platform binding")
+		response.ErrorWithCode(c, http.StatusUnprocessableEntity, pkgerrors.ErrorCodePrimaryProfileInvalid, "primary profile must belong to platform binding", nil)
 	default:
 		if serviceplatformbinding.IsExecutionPlaneUnavailableError(err) {
-			response.Error(c, http.StatusServiceUnavailable, "platform service unavailable")
+			response.ErrorWithCode(c, http.StatusServiceUnavailable, pkgerrors.ErrorCodePlatformServiceUnavailable, "platform service unavailable", nil)
 			return
 		}
 		response.InternalServerError(c, fallback)

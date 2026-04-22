@@ -55,7 +55,10 @@ func TestMeHandlerGetRuntimeSummaryReturnsServiceUnavailableForProxyOutage(t *te
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "platform service unavailable", body["message"])
+	errorBody, ok := body["error"].(map[string]any)
+	require.True(t, ok, "expected error body, got %T", body["error"])
+	require.Equal(t, "PLATFORM_SERVICE_UNAVAILABLE", errorBody["code"])
+	require.Equal(t, "platform service unavailable", errorBody["message"])
 }
 
 func TestAdminHandlerGetRuntimeSummaryReturnsServiceUnavailableForProxyOutage(t *testing.T) {
@@ -74,7 +77,10 @@ func TestAdminHandlerGetRuntimeSummaryReturnsServiceUnavailableForProxyOutage(t 
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "platform service unavailable", body["message"])
+	errorBody, ok := body["error"].(map[string]any)
+	require.True(t, ok, "expected error body, got %T", body["error"])
+	require.Equal(t, "PLATFORM_SERVICE_UNAVAILABLE", errorBody["code"])
+	require.Equal(t, "platform service unavailable", errorBody["message"])
 }
 
 func TestMeHandlerGetRuntimeSummaryReturnsConflictForBindingNotReady(t *testing.T) {
@@ -131,5 +137,8 @@ func TestMeHandlerGetRuntimeSummaryReturnsServiceUnavailableForRealGRPCOutage(t 
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "platform service unavailable", body["message"])
+	errorBody, ok := body["error"].(map[string]any)
+	require.True(t, ok, "expected error body, got %T", body["error"])
+	require.Equal(t, "PLATFORM_SERVICE_UNAVAILABLE", errorBody["code"])
+	require.Equal(t, "platform service unavailable", errorBody["message"])
 }

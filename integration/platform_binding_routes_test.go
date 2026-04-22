@@ -96,6 +96,7 @@ func TestMePlatformAccountRoutesEnforceOwnership(t *testing.T) {
 		} {
 			resp := performJSONRequest(t, stack.Router, tc.method, tc.path, tc.body, authHeaders(otherAccessToken))
 			require.Equal(t, http.StatusNotFound, resp.Code, "%s %s should be hidden from non-owners: %s", tc.method, tc.path, resp.Body.String())
+			assert.Equal(t, "PLATFORM_BINDING_NOT_FOUND", decodeErrorCode(t, resp))
 		}
 	})
 }
@@ -213,6 +214,7 @@ func TestPlatformBindingRoutes(t *testing.T) {
 			"profile_id": uint64(99999999),
 		}, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusUnprocessableEntity, invalidPrimaryResp.Code, invalidPrimaryResp.Body.String())
+		assert.Equal(t, "PRIMARY_PROFILE_INVALID", decodeErrorCode(t, invalidPrimaryResp))
 
 		summaryResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/me/platform-accounts/%d/summary", binding.ID), nil, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusOK, summaryResp.Code, summaryResp.Body.String())
@@ -391,6 +393,37 @@ func TestPlatformBindingConsumerGrantRoutesSupportRegistryConsumersAndIdempotent
 	assert.Equal(t, model.ConsumerGrantStatusActive, grants[1].Status)
 }
 
+func TestPlatformBindingConsumerGrantDisableRequiresExistingGrant(t *testing.T) {
+	stack := newIntegrationStack(t)
+
+	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-grant-missing-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
+	adminID, adminAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-grant-missing-admin-%d@example.com", time.Now().UnixNano()), "AdminPass123!")
+	grantAdminRoleToUser(t, stack, adminID)
+
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        ownerID,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: fmt.Sprintf("cn:grant-missing-%d", time.Now().UnixNano()), Valid: true},
+		PlatformServiceKey: "platform-mihomo-service",
+		DisplayName:        "Grant Missing",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, stack.DB.Create(&binding).Error)
+
+	for _, tc := range []struct {
+		name    string
+		path    string
+		headers map[string]string
+	}{
+		{name: "owner", path: fmt.Sprintf("/api/v1/me/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot), headers: authHeaders(ownerAccessToken)},
+		{name: "admin", path: fmt.Sprintf("/api/v1/admin/platform-accounts/%d/consumer-grants/%s", binding.ID, serviceplatformbinding.ConsumerPaiGramBot), headers: authHeaders(adminAccessToken)},
+	} {
+		resp := performJSONRequest(t, stack.Router, http.MethodPut, tc.path, map[string]any{"enabled": false}, tc.headers)
+		require.Equal(t, http.StatusNotFound, resp.Code, "%s => %s", tc.name, resp.Body.String())
+		assert.Equal(t, "CONSUMER_GRANT_REQUIRED", decodeErrorCode(t, resp))
+	}
+}
+
 func TestCreatePlatformBindingRouteBindsImmediately(t *testing.T) {
 	stack := newIntegrationStack(t)
 	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-create-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
@@ -475,6 +508,7 @@ func TestCreatePlatformBindingRouteHandlesDuplicateOwnerConflict(t *testing.T) {
 		"credential_payload": map[string]any{"cookie_bundle": "abc"},
 	}, authHeaders(ownerAccessToken))
 	require.Equal(t, http.StatusConflict, resp.Code, resp.Body.String())
+	assert.Equal(t, "PLATFORM_ACCOUNT_ALREADY_BOUND", decodeErrorCode(t, resp))
 
 	var binding model.PlatformAccountBinding
 	require.NoError(t, stack.DB.Where("owner_user_id = ? AND display_name = ?", ownerID, "Conflict Draft").First(&binding).Error)
@@ -718,6 +752,7 @@ func TestDeletePlatformBindingRouteMarksDeleteFailedWhenProviderDeleteFails(t *t
 
 	resp := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), nil, authHeaders(ownerAccessToken))
 	require.Equal(t, http.StatusServiceUnavailable, resp.Code, resp.Body.String())
+	assert.Equal(t, "PLATFORM_SERVICE_UNAVAILABLE", decodeErrorCode(t, resp))
 
 	var persisted model.PlatformAccountBinding
 	require.NoError(t, stack.DB.First(&persisted, binding.ID).Error)

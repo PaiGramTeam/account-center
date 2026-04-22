@@ -2,6 +2,15 @@ package errors
 
 import "errors"
 
+const (
+	ErrorCodeAdminRequired               = "ADMIN_REQUIRED"
+	ErrorCodeConsumerGrantRequired       = "CONSUMER_GRANT_REQUIRED"
+	ErrorCodePlatformAccountAlreadyBound = "PLATFORM_ACCOUNT_ALREADY_BOUND"
+	ErrorCodePlatformBindingNotFound     = "PLATFORM_BINDING_NOT_FOUND"
+	ErrorCodePlatformServiceUnavailable  = "PLATFORM_SERVICE_UNAVAILABLE"
+	ErrorCodePrimaryProfileInvalid       = "PRIMARY_PROFILE_INVALID"
+)
+
 var (
 	// 角色相关错误
 	ErrRoleNotFound      = errors.New("角色不存在")

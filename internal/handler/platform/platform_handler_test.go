@@ -289,7 +289,10 @@ func TestGetPlatformAccountSummaryNotFound(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "platform account not found", body["message"])
+	errorBody, ok := body["error"].(map[string]any)
+	require.True(t, ok, "expected error body, got %T", body["error"])
+	require.Equal(t, "PLATFORM_BINDING_NOT_FOUND", errorBody["code"])
+	require.Equal(t, "platform account not found", errorBody["message"])
 }
 
 func TestGetPlatformAccountSummaryPlatformServiceUnavailable(t *testing.T) {
@@ -307,10 +310,13 @@ func TestGetPlatformAccountSummaryPlatformServiceUnavailable(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodGet, "/api/v1/me/platform-accounts/11/summary", nil)
 	g.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Equal(t, "platform service unavailable", body["message"])
+	errorBody, ok := body["error"].(map[string]any)
+	require.True(t, ok, "expected error body, got %T", body["error"])
+	require.Equal(t, "PLATFORM_SERVICE_UNAVAILABLE", errorBody["code"])
+	require.Equal(t, "platform service unavailable", errorBody["message"])
 }
 
 func TestGetPlatformAccountSummaryInvalidRefID(t *testing.T) {

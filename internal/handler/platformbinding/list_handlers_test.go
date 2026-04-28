@@ -397,6 +397,7 @@ func setupPlatformBindingHandlerTestDB(t *testing.T) *gorm.DB {
 		"000036_create_platform_account_profiles_table.up.sql",
 		"000037_create_consumer_grants_table.up.sql",
 		"000038_alter_platform_account_bindings_for_phase_two.up.sql",
+		"000044_add_scopes_json_to_consumer_grants.up.sql",
 	} {
 		require.NoError(t, db.Exec(readPlatformBindingHandlerMigration(t, fileName)).Error)
 	}

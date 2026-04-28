@@ -60,7 +60,7 @@ func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
-	identity := seedBotIdentity(t, db, "bot-link", "external-link", 1)
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-link", 1)
 
 	binding, created, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
 		BotID:              identity.BotID,
@@ -106,8 +106,8 @@ func TestAccountRefService_UpsertPlatformBindingRejectsOtherUserOwnership(t *tes
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
-	identityA := seedBotIdentity(t, db, "bot-owner-a", "external-owner-a", 21)
-	identityB := seedBotIdentity(t, db, "bot-owner-b", "external-owner-b", 22)
+	identityA := seedBotIdentity(t, db, "bot-paigram", "external-owner-a", 21)
+	identityB := seedBotIdentity(t, db, "bot-pamgram", "external-owner-b", 22)
 
 	_, _, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
 		BotID:              identityA.BotID,
@@ -137,8 +137,8 @@ func TestAccountRefService_ListAccessibleBindingsFiltersByConsumerGrant(t *testi
 	service := &AccountRefService{db: db}
 
 	identity := seedBotIdentity(t, db, "bot-paigram", "external-list", 11)
-	otherIdentity := seedBotIdentity(t, db, "bot-other", "external-other", 12)
-	otherBot := model.Bot{ID: "bot-other-same-user", Name: "Other Same User", Type: "OTHER", Status: "ACTIVE", OwnerUserID: identity.UserID, APIKey: "other-same-user-key", APISecret: "other-same-user-secret", Scopes: "[]", Metadata: "{}"}
+	otherIdentity := seedBotIdentity(t, db, "bot-pamgram", "external-other", 12)
+	otherBot := model.Bot{ID: model.ConsumerPamgram, Name: "Other Same User", Type: "OTHER", Status: "ACTIVE", OwnerUserID: identity.UserID, APIKey: "other-same-user-key", APISecret: "other-same-user-secret", Scopes: "[]", Metadata: "{}"}
 	require.NoError(t, db.Create(&otherBot).Error)
 	require.NoError(t, db.Create(&model.BotIdentity{UserID: identity.UserID, BotID: otherBot.ID, ExternalUserID: "external-list-other-bot", LinkedAt: time.Now().UTC()}).Error)
 

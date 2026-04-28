@@ -3,6 +3,7 @@ package audit
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -63,9 +64,11 @@ func TestRecordStoresCanonicalAuditMetadata(t *testing.T) {
 
 	var event model.AuditEvent
 	require.NoError(t, db.First(&event).Error)
-	require.Contains(t, event.MetadataJSON, `"actor"`)
-	require.Contains(t, event.MetadataJSON, `"target"`)
-	require.Contains(t, event.MetadataJSON, `"owner"`)
-	require.Contains(t, event.MetadataJSON, `"request_id":"req-audit-1"`)
-	require.Contains(t, event.MetadataJSON, `"reason":"upstream_unavailable"`)
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(event.MetadataJSON), &metadata))
+	require.Contains(t, metadata, "actor")
+	require.Contains(t, metadata, "target")
+	require.Contains(t, metadata, "owner")
+	require.Equal(t, "req-audit-1", metadata["request_id"])
+	require.Equal(t, "upstream_unavailable", metadata["reason"])
 }

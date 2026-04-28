@@ -503,6 +503,7 @@ func putConsumerGrant(c *gin.Context, grantService grantService, bindingID, acto
 	}
 
 	grant, err := grantService.RevokeGrant(serviceplatformbinding.RevokeGrantInput{
+		Context:     c.Request.Context(),
 		BindingID:   bindingID,
 		Consumer:    consumer,
 		RevokedAt:   time.Now().UTC(),
@@ -554,6 +555,7 @@ func putConsumerGrantForOwner(c *gin.Context, grantService grantService, ownerUs
 	}
 
 	grant, err := grantService.RevokeGrantForOwner(ownerUserID, serviceplatformbinding.RevokeGrantInput{
+		Context:     c.Request.Context(),
 		BindingID:   bindingID,
 		Consumer:    consumer,
 		RevokedAt:   time.Now().UTC(),

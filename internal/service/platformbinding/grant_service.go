@@ -117,14 +117,16 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 					RevokedAt:         sql.NullTime{Time: revokedAt, Valid: true},
 					LastInvalidatedAt: sql.NullTime{Time: revokedAt, Valid: true},
 				}
-				return writeGrantAudit(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+				writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+				return nil
 			}
 
 			return err
 		}
 
 		if grant.Status == model.ConsumerGrantStatusRevoked && grant.RevokedAt.Valid {
-			return writeGrantAudit(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+			writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+			return nil
 		}
 
 		nextVersion := grant.TicketVersion
@@ -143,7 +145,8 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 		if err := tx.Save(&grant).Error; err != nil {
 			return err
 		}
-		return writeGrantAudit(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, false)
+		writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, false)
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -295,6 +298,10 @@ func writeGrantAudit(tx *gorm.DB, binding *model.PlatformAccountBinding, binding
 			"idempotent":    idempotent,
 		},
 	})
+}
+
+func writeGrantAuditBestEffort(tx *gorm.DB, binding *model.PlatformAccountBinding, bindingID uint64, consumer string, actorUserID *uint64, enabled bool, idempotent bool) {
+	_ = writeGrantAudit(tx, binding, bindingID, consumer, actorUserID, enabled, idempotent)
 }
 
 func auditActorUserID(value sql.NullInt64) *uint64 {

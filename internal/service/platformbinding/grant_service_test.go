@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -257,6 +258,74 @@ func TestGrantServiceRevokeGrantInvalidatorFailureLeavesGrantUnchanged(t *testin
 	assert.Equal(t, uint64(2), stored.TicketVersion)
 }
 
+func TestGrantServiceRevokeGrantCallsInvalidatorWithExpectedInput(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	invalidator := &capturingGrantInvalidator{}
+	service := NewGrantService(db, invalidator)
+	binding := seedGrantServiceBinding(t, db, "cn:grant-invalid-input")
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:     binding.ID,
+		Consumer:      ConsumerPaiGramBot,
+		Status:        model.ConsumerGrantStatusActive,
+		ScopesJSON:    "[]",
+		TicketVersion: 7,
+		GrantedAt:     time.Now().UTC(),
+	}).Error)
+	ctx := context.WithValue(context.Background(), grantInvalidatorContextKey{}, "request-context")
+
+	_, err := service.RevokeGrant(RevokeGrantInput{
+		Context:     ctx,
+		BindingID:   binding.ID,
+		Consumer:    ConsumerPaiGramBot,
+		RevokedAt:   time.Now().UTC(),
+		ActorUserID: sql.NullInt64{Int64: int64(binding.OwnerUserID), Valid: true},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, invalidator.calls)
+	assert.Same(t, ctx, invalidator.ctx)
+	assert.Equal(t, GrantInvalidationInput{
+		BindingID:           binding.ID,
+		Platform:            "mihomo",
+		PlatformServiceKey:  "mihomo",
+		Consumer:            ConsumerPaiGramBot,
+		MinimumGrantVersion: 8,
+		ActorType:           "user",
+		ActorID:             strconv.FormatUint(binding.OwnerUserID, 10),
+	}, invalidator.input)
+}
+
+func TestGrantServiceRevokeGrantAuditFailureIsBestEffort(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewGrantService(db)
+	binding := seedGrantServiceBinding(t, db, "cn:grant-audit-best-effort")
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:     binding.ID,
+		Consumer:      ConsumerPaiGramBot,
+		Status:        model.ConsumerGrantStatusActive,
+		ScopesJSON:    "[]",
+		TicketVersion: 1,
+		GrantedAt:     time.Now().UTC(),
+	}).Error)
+	require.NoError(t, db.Exec("CREATE TRIGGER audit_events_fail_before_insert BEFORE INSERT ON audit_events FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'audit disabled'").Error)
+
+	grant, err := service.RevokeGrant(RevokeGrantInput{
+		BindingID: binding.ID,
+		Consumer:  ConsumerPaiGramBot,
+		RevokedAt: time.Now().UTC(),
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, grant)
+	assert.Equal(t, model.ConsumerGrantStatusRevoked, grant.Status)
+	assert.Equal(t, uint64(2), grant.TicketVersion)
+
+	var stored model.ConsumerGrant
+	require.NoError(t, db.Where("binding_id = ? AND consumer = ?", binding.ID, ConsumerPaiGramBot).First(&stored).Error)
+	assert.Equal(t, model.ConsumerGrantStatusRevoked, stored.Status)
+	assert.Equal(t, uint64(2), stored.TicketVersion)
+}
+
 func TestGrantServiceUpsertWritesUnifiedAuditEvent(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	service := NewGrantService(db)
@@ -364,4 +433,19 @@ type failingGrantInvalidator struct {
 
 func (f failingGrantInvalidator) InvalidateConsumerGrant(context.Context, GrantInvalidationInput) error {
 	return f.err
+}
+
+type grantInvalidatorContextKey struct{}
+
+type capturingGrantInvalidator struct {
+	calls int
+	ctx   context.Context
+	input GrantInvalidationInput
+}
+
+func (c *capturingGrantInvalidator) InvalidateConsumerGrant(ctx context.Context, input GrantInvalidationInput) error {
+	c.calls++
+	c.ctx = ctx
+	c.input = input
+	return nil
 }

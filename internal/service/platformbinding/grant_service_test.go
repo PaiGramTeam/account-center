@@ -1,13 +1,16 @@
 package platformbinding
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"paigram/internal/model"
 )
@@ -125,12 +128,133 @@ func TestGrantServiceRevokeGrantIsIdempotentWhenGrantDoesNotExist(t *testing.T) 
 	assert.Equal(t, binding.ID, grant.BindingID)
 	assert.Equal(t, ConsumerPaiGramBot, grant.Consumer)
 	assert.Equal(t, model.ConsumerGrantStatusRevoked, grant.Status)
+	assert.Equal(t, uint64(1), grant.TicketVersion)
 	assert.True(t, grant.RevokedAt.Valid)
 	assert.True(t, grant.RevokedAt.Time.Equal(revokedAt))
+	assert.True(t, grant.LastInvalidatedAt.Valid)
+	assert.True(t, grant.LastInvalidatedAt.Time.Equal(revokedAt))
 
 	var count int64
 	require.NoError(t, db.Model(&model.ConsumerGrant{}).Where("binding_id = ? AND consumer = ?", binding.ID, ConsumerPaiGramBot).Count(&count).Error)
 	assert.Zero(t, count)
+}
+
+func TestGrantServiceRevokeGrantIncrementsTicketVersion(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewGrantService(db)
+	binding := seedGrantServiceBinding(t, db, "cn:grant-version")
+	revokedAt := time.Now().UTC()
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:     binding.ID,
+		Consumer:      ConsumerPaiGramBot,
+		Status:        model.ConsumerGrantStatusActive,
+		ScopesJSON:    "[]",
+		TicketVersion: 1,
+		GrantedAt:     time.Now().UTC(),
+	}).Error)
+
+	revoked, err := service.RevokeGrant(RevokeGrantInput{
+		BindingID: binding.ID,
+		Consumer:  ConsumerPaiGramBot,
+		RevokedAt: revokedAt,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.ConsumerGrantStatusRevoked, revoked.Status)
+	assert.Equal(t, uint64(2), revoked.TicketVersion)
+	assert.True(t, revoked.RevokedAt.Valid)
+	assert.True(t, revoked.LastInvalidatedAt.Valid)
+	assert.True(t, revoked.LastInvalidatedAt.Time.Equal(revokedAt))
+}
+
+func TestGrantServiceRevokeGrantAlreadyRevokedDoesNotIncrementTicketVersion(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewGrantService(db)
+	binding := seedGrantServiceBinding(t, db, "cn:grant-already-revoked")
+	revokedAt := time.Now().UTC().Add(-time.Hour)
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:         binding.ID,
+		Consumer:          ConsumerPaiGramBot,
+		Status:            model.ConsumerGrantStatusRevoked,
+		ScopesJSON:        "[]",
+		TicketVersion:     3,
+		GrantedAt:         time.Now().UTC(),
+		RevokedAt:         sql.NullTime{Time: revokedAt, Valid: true},
+		LastInvalidatedAt: sql.NullTime{Time: revokedAt, Valid: true},
+	}).Error)
+
+	revoked, err := service.RevokeGrant(RevokeGrantInput{
+		BindingID: binding.ID,
+		Consumer:  ConsumerPaiGramBot,
+		RevokedAt: time.Now().UTC(),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, model.ConsumerGrantStatusRevoked, revoked.Status)
+	assert.Equal(t, uint64(3), revoked.TicketVersion)
+	assert.True(t, revoked.LastInvalidatedAt.Valid)
+	assert.True(t, revoked.LastInvalidatedAt.Time.Equal(revokedAt))
+}
+
+func TestGrantServiceUpsertGrantReactivationPreservesTicketVersion(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewGrantService(db)
+	binding := seedGrantServiceBinding(t, db, "cn:grant-reactivate")
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:         binding.ID,
+		Consumer:          ConsumerPaiGramBot,
+		Status:            model.ConsumerGrantStatusRevoked,
+		ScopesJSON:        "[]",
+		TicketVersion:     4,
+		GrantedAt:         time.Now().UTC(),
+		RevokedAt:         sql.NullTime{Time: time.Now().UTC(), Valid: true},
+		LastInvalidatedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true},
+	}).Error)
+
+	grant, created, err := service.UpsertGrant(UpsertGrantInput{
+		BindingID: binding.ID,
+		Consumer:  ConsumerPaiGramBot,
+		GrantedBy: sql.NullInt64{Int64: int64(binding.OwnerUserID), Valid: true},
+		GrantedAt: time.Now().UTC(),
+	})
+
+	require.NoError(t, err)
+	assert.False(t, created)
+	assert.Equal(t, model.ConsumerGrantStatusActive, grant.Status)
+	assert.False(t, grant.RevokedAt.Valid)
+	assert.Equal(t, uint64(4), grant.TicketVersion)
+}
+
+func TestGrantServiceRevokeGrantInvalidatorFailureLeavesGrantUnchanged(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	invalidationErr := errors.New("platform down")
+	service := NewGrantService(db, failingGrantInvalidator{err: invalidationErr})
+	binding := seedGrantServiceBinding(t, db, "cn:grant-invalid-failure")
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:     binding.ID,
+		Consumer:      ConsumerPaiGramBot,
+		Status:        model.ConsumerGrantStatusActive,
+		ScopesJSON:    "[]",
+		TicketVersion: 2,
+		GrantedAt:     time.Now().UTC(),
+	}).Error)
+
+	grant, err := service.RevokeGrant(RevokeGrantInput{
+		Context:     context.Background(),
+		BindingID:   binding.ID,
+		Consumer:    ConsumerPaiGramBot,
+		RevokedAt:   time.Now().UTC(),
+		ActorUserID: sql.NullInt64{Int64: int64(binding.OwnerUserID), Valid: true},
+	})
+
+	require.ErrorIs(t, err, invalidationErr)
+	assert.Nil(t, grant)
+
+	var stored model.ConsumerGrant
+	require.NoError(t, db.Where("binding_id = ? AND consumer = ?", binding.ID, ConsumerPaiGramBot).First(&stored).Error)
+	assert.Equal(t, model.ConsumerGrantStatusActive, stored.Status)
+	assert.False(t, stored.RevokedAt.Valid)
+	assert.Equal(t, uint64(2), stored.TicketVersion)
 }
 
 func TestGrantServiceUpsertWritesUnifiedAuditEvent(t *testing.T) {
@@ -216,4 +340,28 @@ func requireGrantAuditMetadata(t *testing.T, metadataJSON string) map[string]any
 	var metadata map[string]any
 	require.NoError(t, json.Unmarshal([]byte(metadataJSON), &metadata))
 	return metadata
+}
+
+func seedGrantServiceBinding(t *testing.T, db *gorm.DB, externalAccountKey string) model.PlatformAccountBinding {
+	t.Helper()
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        owner.ID,
+		Platform:           "mihomo",
+		ExternalAccountKey: ns(externalAccountKey),
+		PlatformServiceKey: "mihomo",
+		DisplayName:        "Grant Service",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+	return binding
+}
+
+type failingGrantInvalidator struct {
+	err error
+}
+
+func (f failingGrantInvalidator) InvalidateConsumerGrant(context.Context, GrantInvalidationInput) error {
+	return f.err
 }

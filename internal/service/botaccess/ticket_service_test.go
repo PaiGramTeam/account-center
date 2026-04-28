@@ -40,7 +40,7 @@ func TestTicketServiceIssueIncludesAudienceAndScopes(t *testing.T) {
 		Status:             model.PlatformAccountBindingStatusActive,
 	}
 
-	tokenString, expiresAt, err := service.Issue("bot-ticket", "paigram-bot", binding, []string{"profile:read", "messages:send"}, "platform-service")
+	tokenString, expiresAt, err := service.Issue("bot-ticket", "paigram-bot", binding, []string{"profile:read", "messages:send"}, "platform-service", 0, 1)
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now().UTC().Add(5*time.Minute), expiresAt, 3*time.Second)
 
@@ -66,4 +66,55 @@ func TestTicketServiceIssueIncludesAudienceAndScopes(t *testing.T) {
 	assert.Equal(t, []string{"platform-service"}, []string(parsed.Audience))
 	assert.WithinDuration(t, expiresAt, parsed.ExpiresAt.Time, time.Second)
 	assert.NotEmpty(t, parsed.ID)
+}
+
+func TestTicketServiceIssueIncludesProfileAndGrantVersion(t *testing.T) {
+	service, err := NewTicketService(config.AuthConfig{
+		ServiceTicketIssuer:     "issuer",
+		ServiceTicketSigningKey: "12345678901234567890123456789012",
+		ServiceTicketTTLSeconds: 60,
+	})
+	require.NoError(t, err)
+
+	binding := &model.PlatformAccountBinding{
+		ID:                 42,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+
+	tokenString, _, err := service.Issue("bot-paigram", "paigram-bot", binding, []string{"mihomo.profile.read"}, "platform-mihomo-service", 99, 3)
+	require.NoError(t, err)
+
+	parsed := &ServiceTicketClaims{}
+	token, err := jwt.ParseWithClaims(tokenString, parsed, func(token *jwt.Token) (any, error) {
+		return []byte("12345678901234567890123456789012"), nil
+	}, jwt.WithAudience("platform-mihomo-service"), jwt.WithIssuer("issuer"))
+	require.NoError(t, err)
+	require.True(t, token.Valid)
+	assert.Equal(t, uint64(99), parsed.ProfileID)
+	assert.Equal(t, uint64(3), parsed.GrantVersion)
+}
+
+func TestTicketServiceIssueRejectsZeroGrantVersion(t *testing.T) {
+	service, err := NewTicketService(config.AuthConfig{
+		ServiceTicketIssuer:     "issuer",
+		ServiceTicketSigningKey: "12345678901234567890123456789012",
+		ServiceTicketTTLSeconds: 60,
+	})
+	require.NoError(t, err)
+
+	binding := &model.PlatformAccountBinding{
+		ID:                 42,
+		OwnerUserID:        7,
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+
+	tokenString, expiresAt, err := service.Issue("bot-paigram", "paigram-bot", binding, []string{"mihomo.profile.read"}, "platform-mihomo-service", 99, 0)
+	require.ErrorIs(t, err, ErrInvalidTicketConfig)
+	assert.Empty(t, tokenString)
+	assert.True(t, expiresAt.IsZero())
 }

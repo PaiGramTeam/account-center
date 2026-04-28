@@ -13,7 +13,6 @@ import (
 	"gorm.io/gorm"
 	"paigram/internal/model"
 	serviceaudit "paigram/internal/service/audit"
-	serviceplatform "paigram/internal/service/platform"
 )
 
 type orchestrationBindingReader interface {
@@ -81,7 +80,7 @@ func (s *OrchestrationService) CreateBindingForOwner(ctx context.Context, input 
 	platformRow, err := s.platformService.GetEnabledPlatform(input.Platform)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, serviceplatform.ErrPlatformServiceUnavailable
+			return nil, ErrPlatformServiceUnavailable
 		}
 		return nil, err
 	}
@@ -288,7 +287,7 @@ func (s *OrchestrationService) refreshBinding(ctx context.Context, binding *mode
 	platformRow, err := s.platformService.GetEnabledPlatform(binding.Platform)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, serviceplatform.ErrPlatformServiceUnavailable
+			return nil, ErrPlatformServiceUnavailable
 		}
 		return nil, err
 	}
@@ -335,7 +334,7 @@ func (s *OrchestrationService) deleteBinding(ctx context.Context, binding *model
 	platformRow, err := s.platformService.GetEnabledPlatform(binding.Platform)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			err = serviceplatform.ErrPlatformServiceUnavailable
+			err = ErrPlatformServiceUnavailable
 		}
 		return s.markDeleteFailed(binding.ID, err, "credential_delete_failed")
 	}
@@ -372,7 +371,7 @@ func (s *OrchestrationService) putCredential(ctx context.Context, binding *model
 	platformRow, err := s.platformService.GetEnabledPlatform(binding.Platform)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, serviceplatform.ErrPlatformServiceUnavailable
+			return nil, nil, ErrPlatformServiceUnavailable
 		}
 		return nil, nil, err
 	}
@@ -641,7 +640,7 @@ func reasonCode(err error) string {
 		return "credential_validation_failed"
 	case errors.Is(err, ErrCredentialGatewayUnavailable):
 		return "credential_gateway_unavailable"
-	case errors.Is(err, serviceplatform.ErrPlatformServiceUnavailable):
+	case errors.Is(err, ErrPlatformServiceUnavailable):
 		return "platform_service_unavailable"
 	case errors.Is(err, ErrBindingNotFound):
 		return "binding_not_found"

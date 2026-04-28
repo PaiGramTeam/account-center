@@ -20,6 +20,7 @@ func setupBotAccessServiceTestDB(t *testing.T) *gorm.DB {
 		&model.User{},
 		&model.Bot{},
 		&model.BotIdentity{},
+		&model.PlatformService{},
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
@@ -56,9 +57,33 @@ func TestAccountRefService_ResolveBotUser(t *testing.T) {
 	assert.Nil(t, missing)
 }
 
+func TestAccountRefService_UpsertPlatformBindingRejectsStalePlatformServiceKey(t *testing.T) {
+	db := setupBotAccessServiceTestDB(t)
+	service := &AccountRefService{db: db}
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-stale-service", 41)
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
+	seedEnabledPlatformService(t, db, "discord", "dc-main")
+
+	binding, created, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
+		BotID:              identity.BotID,
+		ExternalUserID:     identity.ExternalUserID,
+		Platform:           "telegram",
+		PlatformServiceKey: "dc-main",
+		PlatformAccountID:  "acct-stale-service",
+		DisplayName:        "Stale Service",
+		GrantScopes:        []string{"messages:read"},
+		GrantMode:          PlatformBindingGrantModeLegacyMigration,
+	})
+
+	require.ErrorIs(t, err, ErrPlatformServiceNotEnabled)
+	assert.Nil(t, binding)
+	assert.False(t, created)
+}
+
 func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
 
 	identity := seedBotIdentity(t, db, "bot-paigram", "external-link", 1)
 
@@ -71,6 +96,7 @@ func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(
 		DisplayName:        "Primary Telegram",
 		MetaJSON:           `{"lang":"en"}`,
 		GrantScopes:        []string{"messages:read", "messages:write"},
+		GrantMode:          PlatformBindingGrantModeLegacyMigration,
 	})
 	require.NoError(t, err)
 	assert.True(t, created)
@@ -102,9 +128,38 @@ func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(
 	assert.False(t, db.Migrator().HasTable("bot_account_grants"))
 }
 
+func TestAccountRefService_UpsertPlatformBindingCanSkipConsumerGrant(t *testing.T) {
+	db := setupBotAccessServiceTestDB(t)
+	service := &AccountRefService{db: db}
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
+
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-link-no-grant", 2)
+
+	binding, created, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
+		BotID:              identity.BotID,
+		ExternalUserID:     identity.ExternalUserID,
+		Platform:           "telegram",
+		PlatformServiceKey: "tg-main",
+		PlatformAccountID:  "acct-1002",
+		DisplayName:        "Primary Telegram",
+		MetaJSON:           `{"lang":"en"}`,
+		GrantScopes:        []string{"messages:read"},
+	})
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, identity.UserID, binding.OwnerUserID)
+
+	consumer, err := consumerName(identity.BotID)
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, db.Model(&model.ConsumerGrant{}).Where("binding_id = ? AND consumer = ?", binding.ID, consumer).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestAccountRefService_UpsertPlatformBindingRejectsOtherUserOwnership(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
 
 	identityA := seedBotIdentity(t, db, "bot-paigram", "external-owner-a", 21)
 	identityB := seedBotIdentity(t, db, "bot-pamgram", "external-owner-b", 22)
@@ -117,6 +172,7 @@ func TestAccountRefService_UpsertPlatformBindingRejectsOtherUserOwnership(t *tes
 		PlatformAccountID:  "acct-shared",
 		DisplayName:        "Shared",
 		GrantScopes:        []string{"messages:read"},
+		GrantMode:          PlatformBindingGrantModeLegacyMigration,
 	})
 	require.NoError(t, err)
 
@@ -355,4 +411,21 @@ func seedBotIdentity(t *testing.T, db *gorm.DB, botID, externalUserID string, su
 	require.NoError(t, db.Create(&identity).Error)
 
 	return identity
+}
+
+func seedEnabledPlatformService(t *testing.T, db *gorm.DB, platformKey, serviceKey string) {
+	t.Helper()
+
+	service := model.PlatformService{
+		PlatformKey:          platformKey,
+		DisplayName:          serviceKey,
+		ServiceKey:           serviceKey,
+		ServiceAudience:      serviceKey,
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:9000",
+		Enabled:              true,
+		SupportedActionsJSON: "[]",
+		CredentialSchemaJSON: "{}",
+	}
+	require.NoError(t, db.Create(&service).Error)
 }

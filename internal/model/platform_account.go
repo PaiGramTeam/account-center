@@ -37,6 +37,7 @@ func (BotIdentity) TableName() string {
 }
 
 // PlatformAccountRef is a legacy compatibility model retained only for migration read paths.
+// Migration-only: do not use for new runtime platform binding flows.
 // New bot and consumer integrations must use PlatformAccountBinding instead.
 type PlatformAccountRef struct {
 	ID                 uint64                   `gorm:"primaryKey"`
@@ -59,6 +60,7 @@ func (PlatformAccountRef) TableName() string {
 }
 
 // BotAccountGrant is a legacy compatibility model retained only for migration read paths.
+// Migration-only: do not use for new runtime platform binding flows.
 // New bot and consumer integrations must use ConsumerGrant with binding_id semantics instead.
 type BotAccountGrant struct {
 	ID                   uint64         `gorm:"primaryKey"`

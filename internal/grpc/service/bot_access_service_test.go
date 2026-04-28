@@ -178,6 +178,91 @@ func TestBotAccessServiceRejectsRevokedConsumerGrantOnTicketIssue(t *testing.T) 
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
+func TestBotAccessServiceRejectsLegacyBindingWriteWithoutCapability(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_legacy_gate",
+		&model.User{},
+		&model.UserEmail{},
+		&model.Bot{},
+		&model.BotToken{},
+		&model.BotIdentity{},
+		&model.PlatformService{},
+		&model.PlatformAccountBinding{},
+		&model.ConsumerGrant{},
+		&model.AuditEvent{},
+	)
+
+	bot, _, _ := seedBotAccessGRPCTestData(t, db)
+	require.NoError(t, db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("allow_legacy_binding_write", false).Error)
+
+	conn := newBotAccessBufconnClient(t, db)
+	defer conn.Close()
+	accessToken := seedBotAccessToken(t, db, bot.ID)
+	client := pb.NewBotAccessServiceClient(conn)
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+accessToken)
+
+	_, err := client.UpsertPlatformBinding(ctx, &pb.UpsertPlatformBindingRequest{
+		ExternalUserId:     "tg-123",
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountId:  "binding_100_123456789",
+		DisplayName:        "Migrated account",
+		GrantScopes:        []string{"mihomo.status.read"},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "legacy_binding_write_reject").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "failure", event.Result)
+	assert.Equal(t, "legacy_binding_write_not_allowed", event.ReasonCode)
+	metadata := requireBotAccessMetadata(t, event.MetadataJSON)
+	assert.Equal(t, true, metadata["legacy_migration"])
+}
+
+func TestBotAccessServiceAllowsLegacyBindingWriteWithCapability(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_legacy_allowed",
+		&model.User{},
+		&model.UserEmail{},
+		&model.Bot{},
+		&model.BotToken{},
+		&model.BotIdentity{},
+		&model.PlatformService{},
+		&model.PlatformAccountBinding{},
+		&model.ConsumerGrant{},
+		&model.AuditEvent{},
+	)
+
+	seedBotAccessPlatformService(t, db)
+	bot, _, _ := seedBotAccessGRPCTestData(t, db)
+	require.NoError(t, db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("allow_legacy_binding_write", true).Error)
+
+	conn := newBotAccessBufconnClient(t, db)
+	defer conn.Close()
+	accessToken := seedBotAccessToken(t, db, bot.ID)
+	client := pb.NewBotAccessServiceClient(conn)
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+accessToken)
+
+	resp, err := client.UpsertPlatformBinding(ctx, &pb.UpsertPlatformBindingRequest{
+		ExternalUserId:     "tg-123",
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountId:  "binding_100_123456789",
+		DisplayName:        "Migrated account",
+		GrantScopes:        []string{"mihomo.status.read"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetBinding())
+	assert.Equal(t, "binding_100_123456789", resp.GetBinding().GetPlatformAccountId())
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "legacy_binding_write").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "success", event.Result)
+	metadata := requireBotAccessMetadata(t, event.MetadataJSON)
+	assert.Equal(t, true, metadata["legacy_migration"])
+}
+
 func TestBotAccessServiceRejectsMissingAuthorization(t *testing.T) {
 	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_noauth",
 		&model.User{},
@@ -249,6 +334,28 @@ func seedBotAccessGRPCTestData(t *testing.T, db *gorm.DB) (model.Bot, model.User
 	}).Error)
 
 	return bot, identityUser, ref
+}
+
+func seedBotAccessPlatformService(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:1",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{"type":"object"}`,
+	}).Error)
+}
+
+func requireBotAccessMetadata(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &metadata))
+	return metadata
 }
 
 func seedBotAccessToken(t *testing.T, db *gorm.DB, botID string) string {

@@ -24,7 +24,15 @@ type UpsertPlatformBindingParams struct {
 	DisplayName        string
 	MetaJSON           string
 	GrantScopes        []string
+	GrantMode          PlatformBindingGrantMode
 }
+
+type PlatformBindingGrantMode int
+
+const (
+	PlatformBindingGrantModeNone PlatformBindingGrantMode = iota
+	PlatformBindingGrantModeLegacyMigration
+)
 
 func (s *AccountRefService) ResolveBotUser(botID, externalUserID string) (*model.BotIdentity, error) {
 	var identity model.BotIdentity
@@ -38,19 +46,35 @@ func (s *AccountRefService) ResolveBotUser(botID, externalUserID string) (*model
 	return &identity, nil
 }
 
+func (s *AccountRefService) BotAllowsLegacyBindingWrite(botID string) (bool, error) {
+	var bot model.Bot
+	if err := s.db.Select("id", "allow_legacy_binding_write").Where("id = ?", botID).First(&bot).Error; err != nil {
+		return false, fmt.Errorf("load bot legacy binding write capability: %w", err)
+	}
+
+	return bot.AllowLegacyBindingWrite, nil
+}
+
 func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingParams) (*model.PlatformAccountBinding, bool, error) {
 	identity, err := s.ResolveBotUser(params.BotID, params.ExternalUserID)
 	if err != nil {
 		return nil, false, err
 	}
-	consumer, err := consumerName(params.BotID)
-	if err != nil {
+	if err := s.validateEnabledPlatformService(params.Platform, params.PlatformServiceKey); err != nil {
 		return nil, false, err
 	}
+	consumer := ""
+	scopeJSON := []byte("[]")
+	if params.GrantMode == PlatformBindingGrantModeLegacyMigration {
+		consumer, err = consumerName(params.BotID)
+		if err != nil {
+			return nil, false, err
+		}
 
-	scopeJSON, err := json.Marshal(params.GrantScopes)
-	if err != nil {
-		return nil, false, fmt.Errorf("upsert platform binding: marshal scopes: %w", err)
+		scopeJSON, err = json.Marshal(params.GrantScopes)
+		if err != nil {
+			return nil, false, fmt.Errorf("upsert platform binding: marshal scopes: %w", err)
+		}
 	}
 
 	created := false
@@ -87,6 +111,10 @@ func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingPa
 			}
 		}
 
+		if params.GrantMode != PlatformBindingGrantModeLegacyMigration {
+			return nil
+		}
+
 		var grant model.ConsumerGrant
 		grantLookup := tx.Where("binding_id = ? AND consumer = ?", binding.ID, consumer).First(&grant)
 		if grantLookup.Error != nil {
@@ -115,6 +143,20 @@ func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingPa
 	}
 
 	return &binding, created, nil
+}
+
+func (s *AccountRefService) validateEnabledPlatformService(platform, serviceKey string) error {
+	var count int64
+	if err := s.db.Model(&model.PlatformService{}).
+		Where("platform_key = ? AND service_key = ? AND enabled = ?", platform, serviceKey, true).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("validate platform service: %w", err)
+	}
+	if count == 0 {
+		return ErrPlatformServiceNotEnabled
+	}
+
+	return nil
 }
 
 func (s *AccountRefService) ListAccessibleBindings(botID, externalUserID, platform string) ([]model.PlatformAccountBinding, error) {

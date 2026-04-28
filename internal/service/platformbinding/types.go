@@ -1,6 +1,7 @@
 package platformbinding
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"time"
@@ -40,6 +41,7 @@ type UpsertGrantInput struct {
 }
 
 type RevokeGrantInput struct {
+	Context     context.Context
 	BindingID   uint64
 	Consumer    string
 	RevokedAt   time.Time

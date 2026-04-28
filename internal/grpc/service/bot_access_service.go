@@ -62,6 +62,14 @@ func (s *BotAccessService) UpsertPlatformBinding(ctx context.Context, req *pb.Up
 	if err != nil {
 		return nil, err
 	}
+	allowed, err := s.accountRefService.BotAllowsLegacyBindingWrite(bot.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load bot capability: %v", err)
+	}
+	if !allowed {
+		s.recordLegacyBindingAudit(ctx, bot, req, "legacy_binding_write_reject", "failure", "legacy_binding_write_not_allowed")
+		return nil, status.Error(codes.PermissionDenied, "legacy platform binding write is migration-only")
+	}
 	if req.GetExternalUserId() == "" || req.GetPlatform() == "" || req.GetPlatformServiceKey() == "" || req.GetPlatformAccountId() == "" || req.GetDisplayName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "external_user_id, platform, platform_service_key, platform_account_id, and display_name are required")
 	}
@@ -75,10 +83,12 @@ func (s *BotAccessService) UpsertPlatformBinding(ctx context.Context, req *pb.Up
 		DisplayName:        req.GetDisplayName(),
 		MetaJSON:           req.GetMetaJson(),
 		GrantScopes:        req.GetGrantScopes(),
+		GrantMode:          botaccess.PlatformBindingGrantModeLegacyMigration,
 	})
 	if err != nil {
 		return nil, mapBotAccessError("upsert platform binding", err)
 	}
+	s.recordLegacyBindingAudit(ctx, bot, req, "legacy_binding_write", "success", "")
 
 	return &pb.UpsertPlatformBindingResponse{Binding: platformBindingToProto(*binding), Created: created}, nil
 }
@@ -134,7 +144,7 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 		return nil, mapBotAccessError("validate requested scopes", err)
 	}
 
-	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, scopes, req.GetAudience())
+	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, scopes, req.GetAudience(), req.GetProfileId(), grant.TicketVersion)
 	if err != nil {
 		s.recordTicketAudit(ctx, bot, binding, req, "ticket_reject", "failure", reasonCodeFromBotAccessErr(err), map[string]any{"consumer": grant.Consumer})
 		return nil, mapBotAccessError("issue service ticket", err)
@@ -225,6 +235,8 @@ func mapBotAccessError(operation string, err error) error {
 		return status.Error(codes.PermissionDenied, "requested scope is not granted")
 	case errors.Is(err, botaccess.ErrPlatformAccountOwnedByOtherUser):
 		return status.Error(codes.AlreadyExists, "platform account already bound")
+	case errors.Is(err, botaccess.ErrPlatformServiceNotEnabled):
+		return status.Error(codes.InvalidArgument, "platform service is not enabled for platform")
 	case errors.Is(err, botaccess.ErrInactiveAccountRef):
 		return status.Error(codes.FailedPrecondition, "platform account binding is not active")
 	case errors.Is(err, botaccess.ErrInvalidTicketConfig):
@@ -262,6 +274,30 @@ func (s *BotAccessService) recordTicketAudit(ctx context.Context, bot *Bot, bind
 		ReasonCode:  reasonCode,
 		RequestID:   requestIDFromGRPCContext(ctx),
 		Metadata:    writeMetadata,
+	})
+}
+
+func (s *BotAccessService) recordLegacyBindingAudit(ctx context.Context, bot *Bot, req *pb.UpsertPlatformBindingRequest, action, result, reasonCode string) {
+	if s == nil || s.db == nil || bot == nil || req == nil {
+		return
+	}
+
+	_ = serviceaudit.Record(ctx, s.db, serviceaudit.WriteInput{
+		Category:   "bot_access",
+		ActorType:  "consumer",
+		Action:     action,
+		TargetType: "platform_binding",
+		TargetID:   req.GetPlatformAccountId(),
+		Result:     result,
+		ReasonCode: reasonCode,
+		RequestID:  requestIDFromGRPCContext(ctx),
+		Metadata: map[string]any{
+			"bot_id":               bot.Id,
+			"external_user_id":     req.GetExternalUserId(),
+			"platform":             req.GetPlatform(),
+			"platform_service_key": req.GetPlatformServiceKey(),
+			"legacy_migration":     true,
+		},
 	})
 }
 

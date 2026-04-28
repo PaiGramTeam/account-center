@@ -119,7 +119,7 @@ func TestPlatformServiceBuildsBindingActorTicketClaims(t *testing.T) {
 	require.Equal(t, []string{"mihomo.credential.read_meta"}, claims.Scopes)
 }
 
-func TestIssueActorScopedTicketSupportsUserAdminAndConsumer(t *testing.T) {
+func TestIssueLegacyRefScopedTicketSupportsUserAdminAndConsumer(t *testing.T) {
 	svc := PlatformService{}
 	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
 		ServiceTicketTTLSeconds: 300,
@@ -146,7 +146,7 @@ func TestIssueActorScopedTicketSupportsUserAdminAndConsumer(t *testing.T) {
 		{name: "consumer", actor: "consumer", actorID: "paigram-bot", scopes: []string{"profile:read"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tokenString, expiresAt, err := svc.IssueActorScopedTicket(tc.actor, tc.actorID, ref.UserID, ref, tc.scopes, "platform-mihomo-service")
+			tokenString, expiresAt, err := svc.IssueLegacyRefScopedTicket(tc.actor, tc.actorID, ref.UserID, ref, tc.scopes, "platform-mihomo-service")
 			require.NoError(t, err)
 			require.WithinDuration(t, time.Now().UTC().Add(5*time.Minute), expiresAt, 3*time.Second)
 
@@ -172,7 +172,7 @@ func TestIssueActorScopedTicketSupportsUserAdminAndConsumer(t *testing.T) {
 	}
 }
 
-func TestIssueActorScopedTicketRejectsLegacyWebUserActor(t *testing.T) {
+func TestIssueLegacyRefScopedTicketRejectsLegacyWebUserActor(t *testing.T) {
 	svc := PlatformService{}
 	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
 		ServiceTicketTTLSeconds: 300,
@@ -188,7 +188,7 @@ func TestIssueActorScopedTicketRejectsLegacyWebUserActor(t *testing.T) {
 		Status:            model.PlatformAccountRefStatusActive,
 	}
 
-	_, _, err := svc.IssueActorScopedTicket("web_user", "session:1", ref.UserID, ref, []string{"binding:write"}, "platform-mihomo-service")
+	_, _, err := svc.IssueLegacyRefScopedTicket("web_user", "session:1", ref.UserID, ref, []string{"binding:write"}, "platform-mihomo-service")
 	require.ErrorIs(t, err, ErrInvalidTicketConfig)
 }
 

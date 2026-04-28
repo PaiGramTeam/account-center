@@ -187,8 +187,9 @@ func (s *PlatformService) GetPlatformSchemaView(platformKey string) (*PlatformSc
 	}, nil
 }
 
-// IssueActorScopedTicket signs a short-lived service ticket for a platform account ref.
-func (s *PlatformService) IssueActorScopedTicket(actorType, actorID string, ownerUserID uint64, ref *model.PlatformAccountRef, scopes []string, audience string) (string, time.Time, error) {
+// IssueLegacyRefScopedTicket signs a short-lived service ticket for a legacy platform account ref.
+// Migration-only: do not use for new runtime platform binding flows.
+func (s *PlatformService) IssueLegacyRefScopedTicket(actorType, actorID string, ownerUserID uint64, ref *model.PlatformAccountRef, scopes []string, audience string) (string, time.Time, error) {
 	if len(s.signingKey) == 0 || s.ttl <= 0 {
 		return "", time.Time{}, ErrInvalidTicketConfig
 	}
@@ -390,7 +391,7 @@ func (s *PlatformService) GetPlatformAccountSummary(ctx context.Context, actorTy
 		return nil, err
 	}
 
-	ticket, _, err := s.IssueActorScopedTicket(actorType, actorID, ownerUserID, &ref, scopes, platform.ServiceAudience)
+	ticket, _, err := s.IssueLegacyRefScopedTicket(actorType, actorID, ownerUserID, &ref, scopes, platform.ServiceAudience)
 	if err != nil {
 		return nil, err
 	}

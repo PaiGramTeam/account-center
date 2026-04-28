@@ -4,11 +4,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"time"
+
+	"paigram/internal/model"
 )
 
-const ConsumerPaiGramBot = "paigram-bot"
+const (
+	ConsumerPaiGramBot = model.ConsumerPaiGramBot
+	ConsumerPamgram    = model.ConsumerPamgram
+)
 
-var SupportedConsumers = []string{ConsumerPaiGramBot}
+var SupportedConsumers = model.SupportedConsumers
 
 type CreateBindingInput struct {
 	OwnerUserID        uint64
@@ -16,6 +21,15 @@ type CreateBindingInput struct {
 	ExternalAccountKey sql.NullString
 	PlatformServiceKey string
 	DisplayName        string
+}
+
+type CreateAndBindInput struct {
+	OwnerUserID       uint64
+	Platform          string
+	DisplayName       string
+	ActorType         string
+	ActorID           string
+	CredentialPayload json.RawMessage
 }
 
 type UpsertGrantInput struct {
@@ -26,9 +40,10 @@ type UpsertGrantInput struct {
 }
 
 type RevokeGrantInput struct {
-	BindingID uint64
-	Consumer  string
-	RevokedAt time.Time
+	BindingID   uint64
+	Consumer    string
+	RevokedAt   time.Time
+	ActorUserID sql.NullInt64
 }
 
 type ProfileProjectionInput struct {

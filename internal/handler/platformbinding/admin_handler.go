@@ -106,7 +106,7 @@ func (h *AdminHandler) ListConsumerGrants(c *gin.Context) {
 }
 
 // swagger:route PUT /api/v1/admin/platform-accounts/{bindingId}/consumer-grants/{consumer} platformbinding-admin putPlatformBindingConsumerGrant
-// Upsert or revoke one platform binding consumer grant across all users.
+// Upsert or idempotently revoke one registry-controlled platform binding consumer grant across all users.
 func (h *AdminHandler) PutConsumerGrant(c *gin.Context) {
 	bindingID, ok := parseBindingID(c)
 	if !ok {
@@ -138,8 +138,12 @@ func (h *AdminHandler) RefreshBinding(c *gin.Context) {
 	if !ok {
 		return
 	}
+	adminUserID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
 
-	binding, err := h.orchestrationService.RefreshBindingAsAdmin(c.Request.Context(), bindingID)
+	binding, err := h.orchestrationService.RefreshBindingAsAdmin(c.Request.Context(), bindingID, adminUserID)
 	if err != nil {
 		writeBindingError(c, err, "failed to refresh platform binding")
 		return
@@ -183,6 +187,23 @@ func (h *AdminHandler) PutCredential(c *gin.Context) {
 
 // swagger:route GET /api/v1/admin/platform-accounts/{bindingId}/runtime-summary platformbinding-admin getPlatformBindingRuntimeSummary
 // Get one platform binding runtime summary across all users.
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - BearerAuth: []
+//
+// Responses:
+//
+//	200: platformBindingRuntimeSummaryEnvelope
+//	400: platformBindingErrorResponse
+//	401: platformBindingErrorResponse
+//	404: platformBindingErrorResponse
+//	409: platformBindingErrorResponse
+//	500: platformBindingErrorResponse
+//
+// Get one platform binding runtime summary across all users.
 func (h *AdminHandler) GetRuntimeSummary(c *gin.Context) {
 	bindingID, ok := parseBindingID(c)
 	if !ok {
@@ -206,7 +227,12 @@ func (h *AdminHandler) DeleteBinding(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.bindingService.DeleteBinding(bindingID); err != nil {
+	adminUserID, ok := currentUserID(c)
+	if !ok {
+		return
+	}
+
+	if err := h.orchestrationService.DeleteBindingAsAdmin(c.Request.Context(), bindingID, adminUserID); err != nil {
 		writeBindingError(c, err, "failed to delete platform binding")
 		return
 	}

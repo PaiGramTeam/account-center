@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v7.34.0
-// source: proto/paigram/v1/bot_access.proto
+// source: bot_access.proto
 
 package pb
 
@@ -20,8 +20,8 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	BotAccessService_ResolveBotUser_FullMethodName         = "/paigram.v1.BotAccessService/ResolveBotUser"
-	BotAccessService_LinkPlatformAccount_FullMethodName    = "/paigram.v1.BotAccessService/LinkPlatformAccount"
-	BotAccessService_ListAccessibleAccounts_FullMethodName = "/paigram.v1.BotAccessService/ListAccessibleAccounts"
+	BotAccessService_UpsertPlatformBinding_FullMethodName  = "/paigram.v1.BotAccessService/UpsertPlatformBinding"
+	BotAccessService_ListAccessibleBindings_FullMethodName = "/paigram.v1.BotAccessService/ListAccessibleBindings"
 	BotAccessService_IssueServiceTicket_FullMethodName     = "/paigram.v1.BotAccessService/IssueServiceTicket"
 )
 
@@ -30,8 +30,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BotAccessServiceClient interface {
 	ResolveBotUser(ctx context.Context, in *ResolveBotUserRequest, opts ...grpc.CallOption) (*ResolveBotUserResponse, error)
-	LinkPlatformAccount(ctx context.Context, in *LinkPlatformAccountRequest, opts ...grpc.CallOption) (*LinkPlatformAccountResponse, error)
-	ListAccessibleAccounts(ctx context.Context, in *ListAccessibleAccountsRequest, opts ...grpc.CallOption) (*ListAccessibleAccountsResponse, error)
+	UpsertPlatformBinding(ctx context.Context, in *UpsertPlatformBindingRequest, opts ...grpc.CallOption) (*UpsertPlatformBindingResponse, error)
+	ListAccessibleBindings(ctx context.Context, in *ListAccessibleBindingsRequest, opts ...grpc.CallOption) (*ListAccessibleBindingsResponse, error)
 	IssueServiceTicket(ctx context.Context, in *IssueServiceTicketRequest, opts ...grpc.CallOption) (*IssueServiceTicketResponse, error)
 }
 
@@ -53,20 +53,20 @@ func (c *botAccessServiceClient) ResolveBotUser(ctx context.Context, in *Resolve
 	return out, nil
 }
 
-func (c *botAccessServiceClient) LinkPlatformAccount(ctx context.Context, in *LinkPlatformAccountRequest, opts ...grpc.CallOption) (*LinkPlatformAccountResponse, error) {
+func (c *botAccessServiceClient) UpsertPlatformBinding(ctx context.Context, in *UpsertPlatformBindingRequest, opts ...grpc.CallOption) (*UpsertPlatformBindingResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(LinkPlatformAccountResponse)
-	err := c.cc.Invoke(ctx, BotAccessService_LinkPlatformAccount_FullMethodName, in, out, cOpts...)
+	out := new(UpsertPlatformBindingResponse)
+	err := c.cc.Invoke(ctx, BotAccessService_UpsertPlatformBinding_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *botAccessServiceClient) ListAccessibleAccounts(ctx context.Context, in *ListAccessibleAccountsRequest, opts ...grpc.CallOption) (*ListAccessibleAccountsResponse, error) {
+func (c *botAccessServiceClient) ListAccessibleBindings(ctx context.Context, in *ListAccessibleBindingsRequest, opts ...grpc.CallOption) (*ListAccessibleBindingsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListAccessibleAccountsResponse)
-	err := c.cc.Invoke(ctx, BotAccessService_ListAccessibleAccounts_FullMethodName, in, out, cOpts...)
+	out := new(ListAccessibleBindingsResponse)
+	err := c.cc.Invoke(ctx, BotAccessService_ListAccessibleBindings_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -88,8 +88,8 @@ func (c *botAccessServiceClient) IssueServiceTicket(ctx context.Context, in *Iss
 // for forward compatibility.
 type BotAccessServiceServer interface {
 	ResolveBotUser(context.Context, *ResolveBotUserRequest) (*ResolveBotUserResponse, error)
-	LinkPlatformAccount(context.Context, *LinkPlatformAccountRequest) (*LinkPlatformAccountResponse, error)
-	ListAccessibleAccounts(context.Context, *ListAccessibleAccountsRequest) (*ListAccessibleAccountsResponse, error)
+	UpsertPlatformBinding(context.Context, *UpsertPlatformBindingRequest) (*UpsertPlatformBindingResponse, error)
+	ListAccessibleBindings(context.Context, *ListAccessibleBindingsRequest) (*ListAccessibleBindingsResponse, error)
 	IssueServiceTicket(context.Context, *IssueServiceTicketRequest) (*IssueServiceTicketResponse, error)
 	mustEmbedUnimplementedBotAccessServiceServer()
 }
@@ -104,11 +104,11 @@ type UnimplementedBotAccessServiceServer struct{}
 func (UnimplementedBotAccessServiceServer) ResolveBotUser(context.Context, *ResolveBotUserRequest) (*ResolveBotUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveBotUser not implemented")
 }
-func (UnimplementedBotAccessServiceServer) LinkPlatformAccount(context.Context, *LinkPlatformAccountRequest) (*LinkPlatformAccountResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method LinkPlatformAccount not implemented")
+func (UnimplementedBotAccessServiceServer) UpsertPlatformBinding(context.Context, *UpsertPlatformBindingRequest) (*UpsertPlatformBindingResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpsertPlatformBinding not implemented")
 }
-func (UnimplementedBotAccessServiceServer) ListAccessibleAccounts(context.Context, *ListAccessibleAccountsRequest) (*ListAccessibleAccountsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListAccessibleAccounts not implemented")
+func (UnimplementedBotAccessServiceServer) ListAccessibleBindings(context.Context, *ListAccessibleBindingsRequest) (*ListAccessibleBindingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAccessibleBindings not implemented")
 }
 func (UnimplementedBotAccessServiceServer) IssueServiceTicket(context.Context, *IssueServiceTicketRequest) (*IssueServiceTicketResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method IssueServiceTicket not implemented")
@@ -152,38 +152,38 @@ func _BotAccessService_ResolveBotUser_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BotAccessService_LinkPlatformAccount_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(LinkPlatformAccountRequest)
+func _BotAccessService_UpsertPlatformBinding_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpsertPlatformBindingRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BotAccessServiceServer).LinkPlatformAccount(ctx, in)
+		return srv.(BotAccessServiceServer).UpsertPlatformBinding(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BotAccessService_LinkPlatformAccount_FullMethodName,
+		FullMethod: BotAccessService_UpsertPlatformBinding_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BotAccessServiceServer).LinkPlatformAccount(ctx, req.(*LinkPlatformAccountRequest))
+		return srv.(BotAccessServiceServer).UpsertPlatformBinding(ctx, req.(*UpsertPlatformBindingRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BotAccessService_ListAccessibleAccounts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListAccessibleAccountsRequest)
+func _BotAccessService_ListAccessibleBindings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAccessibleBindingsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(BotAccessServiceServer).ListAccessibleAccounts(ctx, in)
+		return srv.(BotAccessServiceServer).ListAccessibleBindings(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: BotAccessService_ListAccessibleAccounts_FullMethodName,
+		FullMethod: BotAccessService_ListAccessibleBindings_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BotAccessServiceServer).ListAccessibleAccounts(ctx, req.(*ListAccessibleAccountsRequest))
+		return srv.(BotAccessServiceServer).ListAccessibleBindings(ctx, req.(*ListAccessibleBindingsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -218,12 +218,12 @@ var BotAccessService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _BotAccessService_ResolveBotUser_Handler,
 		},
 		{
-			MethodName: "LinkPlatformAccount",
-			Handler:    _BotAccessService_LinkPlatformAccount_Handler,
+			MethodName: "UpsertPlatformBinding",
+			Handler:    _BotAccessService_UpsertPlatformBinding_Handler,
 		},
 		{
-			MethodName: "ListAccessibleAccounts",
-			Handler:    _BotAccessService_ListAccessibleAccounts_Handler,
+			MethodName: "ListAccessibleBindings",
+			Handler:    _BotAccessService_ListAccessibleBindings_Handler,
 		},
 		{
 			MethodName: "IssueServiceTicket",
@@ -231,5 +231,5 @@ var BotAccessService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/paigram/v1/bot_access.proto",
+	Metadata: "bot_access.proto",
 }

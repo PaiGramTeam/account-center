@@ -9,10 +9,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"paigram/internal/model"
 )
+
+func TestAdminAuditRoutesRequireAdminEvenWithAuditPermission(t *testing.T) {
+	stack := newIntegrationStack(t)
+	userID, accessToken, _, _, _ := registerAndLogin(t, stack, "audit-viewer-"+time.Now().Format("20060102150405.000000")+"@example.com", "ViewerPass123!")
+	grantPermissionsToUser(t, stack, userID, model.PermAuditRead)
+
+	resp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/audit-logs", nil, authHeaders(accessToken))
+	require.Equal(t, http.StatusForbidden, resp.Code, resp.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, resp))
+	assert.Contains(t, resp.Body.String(), "admin role required")
+	_ = userID
+}
 
 func TestAuditLogFiltersByCategory(t *testing.T) {
 	stack := newIntegrationStack(t)
@@ -55,7 +68,7 @@ func TestAuditLogFiltersByCategory(t *testing.T) {
 		RequestID:    "req-binding",
 		IP:           "192.0.2.20",
 		UserAgent:    "AuditTest/1.0",
-		MetadataJSON: `{"platform":"mihomo"}`,
+		MetadataJSON: `{"platform":"mihomo","owner":{"user_id":` + strconv.FormatUint(userID, 10) + `}}`,
 		CreatedAt:    time.Now().UTC().Add(-1 * time.Minute),
 	})
 
@@ -95,6 +108,12 @@ func TestAuditLogFiltersByCategory(t *testing.T) {
 	loginMetadata, ok := detailData["metadata"].(map[string]any)
 	require.True(t, ok, "expected metadata object, got %T", detailData["metadata"])
 	require.Equal(t, "email", loginMetadata["provider"])
+
+	bindingMetadata, ok := failureItem["metadata"].(map[string]any)
+	require.True(t, ok, "expected metadata object, got %T", failureItem["metadata"])
+	owner, ok := bindingMetadata["owner"].(map[string]any)
+	require.True(t, ok, "expected owner object, got %T", bindingMetadata["owner"])
+	require.Equal(t, float64(userID), owner["user_id"])
 }
 
 func seedAuditEvent(t *testing.T, stack *integrationStack, event model.AuditEvent) model.AuditEvent {

@@ -27,6 +27,10 @@ type fakeCurrentUserService struct {
 	patchPrimaryErr   error
 	verificationEmail *serviceme.VerificationEmailView
 	createdEmail      *serviceme.CreatedEmailView
+	updatedView       *serviceme.CurrentUserView
+	updateErr         error
+	updateInput       serviceme.UpdateCurrentUserInput
+	updateCalled      bool
 	patchedUserID     uint64
 	patchedProvider   string
 }
@@ -45,6 +49,12 @@ func (f *fakeCurrentUserService) ListEmails(context.Context, uint64) ([]servicem
 
 func (f *fakeCurrentUserService) CreateEmail(context.Context, serviceme.CreateEmailInput) (*serviceme.CreatedEmailView, error) {
 	return f.createdEmail, nil
+}
+
+func (f *fakeCurrentUserService) UpdateCurrentUser(_ context.Context, input serviceme.UpdateCurrentUserInput) (*serviceme.CurrentUserView, error) {
+	f.updateInput = input
+	f.updateCalled = true
+	return f.updatedView, f.updateErr
 }
 
 func (f *fakeCurrentUserService) PatchPrimaryEmail(context.Context, uint64, uint64) error {
@@ -145,6 +155,59 @@ func TestCurrentUserHandlerGetDashboardSummaryReturnsSummary(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), `"total_bindings":3`)
 	assert.Contains(t, rec.Body.String(), `"enabled_consumers":2`)
+}
+
+func TestCurrentUserHandlerPatchMeUpdatesAllowedFields(t *testing.T) {
+	service := &fakeCurrentUserService{updatedView: &serviceme.CurrentUserView{
+		ID:          7,
+		DisplayName: "Updated Name",
+		AvatarURL:   "https://example.com/avatar.png",
+		Bio:         "Updated bio",
+		Locale:      "zh_CN",
+	}}
+	handler := NewCurrentUserHandler(service)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	body := bytes.NewBufferString(`{"display_name":"Updated Name","avatar_url":"https://example.com/avatar.png","bio":"Updated bio","locale":"zh_CN"}`)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/me", body)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	middleware.SetUserID(ctx, 7)
+
+	handler.PatchMe(ctx)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.True(t, service.updateCalled)
+	assert.Equal(t, uint64(7), service.updateInput.UserID)
+	require.NotNil(t, service.updateInput.DisplayName)
+	assert.Equal(t, "Updated Name", *service.updateInput.DisplayName)
+	require.NotNil(t, service.updateInput.AvatarURL)
+	assert.Equal(t, "https://example.com/avatar.png", *service.updateInput.AvatarURL)
+	require.NotNil(t, service.updateInput.Bio)
+	assert.Equal(t, "Updated bio", *service.updateInput.Bio)
+	require.NotNil(t, service.updateInput.Locale)
+	assert.Equal(t, "zh_CN", *service.updateInput.Locale)
+	assert.Contains(t, rec.Body.String(), "Updated Name")
+}
+
+func TestCurrentUserHandlerPatchMeRejectsUnsupportedFields(t *testing.T) {
+	service := &fakeCurrentUserService{}
+	handler := NewCurrentUserHandler(service)
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	body := bytes.NewBufferString(`{"display_name":"Updated Name","roles":["admin"]}`)
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/me", body)
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	middleware.SetUserID(ctx, 7)
+
+	handler.PatchMe(ctx)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.False(t, service.updateCalled)
+	assert.Contains(t, rec.Body.String(), "unsupported fields: roles")
 }
 
 func TestSessionHandlerListSessionsUsesMeRoute(t *testing.T) {

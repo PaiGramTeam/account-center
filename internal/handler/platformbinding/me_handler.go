@@ -16,6 +16,7 @@ import (
 	"paigram/internal/model"
 	"paigram/internal/response"
 	serviceplatformbinding "paigram/internal/service/platformbinding"
+	pkgerrors "paigram/pkg/errors"
 )
 
 type bindingService interface {
@@ -32,7 +33,6 @@ type bindingService interface {
 type profileService interface {
 	ListProfiles(bindingID uint64, params serviceplatformbinding.ListParams) ([]model.PlatformAccountProfile, int64, error)
 	ListProfilesForOwner(ownerUserID, bindingID uint64, params serviceplatformbinding.ListParams) ([]model.PlatformAccountProfile, int64, error)
-	SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error)
 }
 
 type grantService interface {
@@ -45,10 +45,14 @@ type grantService interface {
 }
 
 type orchestrationService interface {
+	CreateBindingForOwner(ctx context.Context, input serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error)
 	PutCredentialForOwner(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	PutCredentialAsAdmin(ctx context.Context, input serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error)
 	RefreshBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) (*model.PlatformAccountBinding, error)
-	RefreshBindingAsAdmin(ctx context.Context, bindingID uint64) (*model.PlatformAccountBinding, error)
+	RefreshBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) (*model.PlatformAccountBinding, error)
+	SetPrimaryProfileForOwner(ctx context.Context, ownerUserID, bindingID, profileID uint64, actorID string) (*model.PlatformAccountBinding, error)
+	DeleteBindingForOwner(ctx context.Context, ownerUserID, bindingID uint64) error
+	DeleteBindingAsAdmin(ctx context.Context, bindingID, adminUserID uint64) error
 }
 
 type runtimeSummaryService interface {
@@ -57,10 +61,9 @@ type runtimeSummaryService interface {
 }
 
 type CreateBindingRequest struct {
-	Platform           string  `json:"platform"`
-	ExternalAccountKey *string `json:"external_account_key"`
-	PlatformServiceKey string  `json:"platform_service_key"`
-	DisplayName        string  `json:"display_name"`
+	Platform          string          `json:"platform"`
+	DisplayName       string          `json:"display_name"`
+	CredentialPayload json.RawMessage `json:"credential_payload"`
 }
 
 type PutConsumerGrantRequest struct {
@@ -115,7 +118,7 @@ func (h *MeHandler) ListBindings(c *gin.Context) {
 }
 
 // swagger:route POST /api/v1/me/platform-accounts platformbinding-me createMyPlatformBinding
-// Create a current-user platform binding draft.
+// Create a current-user platform binding draft and bind it immediately.
 func (h *MeHandler) CreateBinding(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
@@ -127,13 +130,19 @@ func (h *MeHandler) CreateBinding(c *gin.Context) {
 		response.BadRequest(c, "invalid request payload")
 		return
 	}
+	if len(req.CredentialPayload) == 0 || string(req.CredentialPayload) == "null" {
+		response.BadRequest(c, "credential_payload is required")
+		return
+	}
 
-	binding, err := h.bindingService.CreateBinding(serviceplatformbinding.CreateBindingInput{
-		OwnerUserID:        userID,
-		Platform:           strings.TrimSpace(req.Platform),
-		ExternalAccountKey: normalizeExternalAccountKey(req.ExternalAccountKey),
-		PlatformServiceKey: strings.TrimSpace(req.PlatformServiceKey),
-		DisplayName:        strings.TrimSpace(req.DisplayName),
+	actorID := actorIDFromSession(c, userID)
+	binding, err := h.orchestrationService.CreateBindingForOwner(c.Request.Context(), serviceplatformbinding.CreateAndBindInput{
+		OwnerUserID:       userID,
+		Platform:          strings.TrimSpace(req.Platform),
+		DisplayName:       strings.TrimSpace(req.DisplayName),
+		ActorType:         "user",
+		ActorID:           actorID,
+		CredentialPayload: req.CredentialPayload,
 	})
 	if err != nil {
 		writeBindingError(c, err, "failed to create platform binding")
@@ -229,7 +238,7 @@ func (h *MeHandler) DeleteBinding(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.bindingService.DeleteBindingForOwner(userID, bindingID); err != nil {
+	if err := h.orchestrationService.DeleteBindingForOwner(c.Request.Context(), userID, bindingID); err != nil {
 		writeBindingError(c, err, "failed to delete platform binding")
 		return
 	}
@@ -295,6 +304,23 @@ func (h *MeHandler) PutCredential(c *gin.Context) {
 
 // swagger:route GET /api/v1/me/platform-accounts/{bindingId}/runtime-summary platformbinding-me getMyPlatformBindingRuntimeSummary
 // Get one current-user platform binding runtime summary.
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - BearerAuth: []
+//
+// Responses:
+//
+//	200: platformBindingRuntimeSummaryEnvelope
+//	400: platformBindingErrorResponse
+//	401: platformBindingErrorResponse
+//	404: platformBindingErrorResponse
+//	409: platformBindingErrorResponse
+//	500: platformBindingErrorResponse
+//
+// Get one current-user platform binding runtime summary.
 func (h *MeHandler) GetRuntimeSummary(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
@@ -338,7 +364,7 @@ func (h *MeHandler) PatchPrimaryProfile(c *gin.Context) {
 		return
 	}
 
-	binding, err := h.profileService.SetPrimaryProfileForOwner(userID, bindingID, req.ProfileID)
+	binding, err := h.orchestrationService.SetPrimaryProfileForOwner(c.Request.Context(), userID, bindingID, *req.ProfileID, actorIDFromSession(c, userID))
 	if err != nil {
 		writeBindingError(c, err, "failed to update primary profile")
 		return
@@ -408,7 +434,7 @@ func parseListParams(c *gin.Context) (int, int) {
 }
 
 // swagger:route PUT /api/v1/me/platform-accounts/{bindingId}/consumer-grants/{consumer} platformbinding-me putMyPlatformBindingConsumerGrant
-// Upsert or revoke one current-user platform binding consumer grant.
+// Upsert or idempotently revoke one registry-controlled current-user platform binding consumer grant.
 func (h *MeHandler) PutConsumerGrant(c *gin.Context) {
 	userID, ok := currentUserID(c)
 	if !ok {
@@ -455,9 +481,8 @@ func putConsumerGrant(c *gin.Context, grantService grantService, bindingID, acto
 		return nil, false
 	}
 
-	consumer := strings.TrimSpace(c.Param("consumer"))
-	if consumer == "" {
-		response.BadRequest(c, "consumer is required")
+	consumer, ok := parseConsumer(c)
+	if !ok {
 		return nil, false
 	}
 
@@ -478,9 +503,10 @@ func putConsumerGrant(c *gin.Context, grantService grantService, bindingID, acto
 	}
 
 	grant, err := grantService.RevokeGrant(serviceplatformbinding.RevokeGrantInput{
-		BindingID: bindingID,
-		Consumer:  consumer,
-		RevokedAt: time.Now().UTC(),
+		BindingID:   bindingID,
+		Consumer:    consumer,
+		RevokedAt:   time.Now().UTC(),
+		ActorUserID: grantedBy,
 	})
 	if err != nil {
 		writeBindingError(c, err, "failed to update consumer grant")
@@ -490,15 +516,24 @@ func putConsumerGrant(c *gin.Context, grantService grantService, bindingID, acto
 	return grant, true
 }
 
+func parseConsumer(c *gin.Context) (string, bool) {
+	consumer := strings.TrimSpace(c.Param("consumer"))
+	if consumer == "" {
+		response.BadRequest(c, "consumer is required")
+		return "", false
+	}
+
+	return consumer, true
+}
+
 func putConsumerGrantForOwner(c *gin.Context, grantService grantService, ownerUserID, bindingID uint64) (*model.ConsumerGrant, bool) {
 	req, ok := readPutConsumerGrantRequest(c)
 	if !ok {
 		return nil, false
 	}
 
-	consumer := strings.TrimSpace(c.Param("consumer"))
-	if consumer == "" {
-		response.BadRequest(c, "consumer is required")
+	consumer, ok := parseConsumer(c)
+	if !ok {
 		return nil, false
 	}
 
@@ -519,9 +554,10 @@ func putConsumerGrantForOwner(c *gin.Context, grantService grantService, ownerUs
 	}
 
 	grant, err := grantService.RevokeGrantForOwner(ownerUserID, serviceplatformbinding.RevokeGrantInput{
-		BindingID: bindingID,
-		Consumer:  consumer,
-		RevokedAt: time.Now().UTC(),
+		BindingID:   bindingID,
+		Consumer:    consumer,
+		RevokedAt:   time.Now().UTC(),
+		ActorUserID: grantedBy,
 	})
 	if err != nil {
 		writeBindingError(c, err, "failed to update consumer grant")
@@ -548,20 +584,20 @@ func readPutConsumerGrantRequest(c *gin.Context) (*PutConsumerGrantRequest, bool
 func writeBindingError(c *gin.Context, err error, fallback string) {
 	switch {
 	case errors.Is(err, serviceplatformbinding.ErrBindingNotFound):
-		response.NotFound(c, "platform binding not found")
-	case errors.Is(err, serviceplatformbinding.ErrGrantNotFound):
-		response.NotFound(c, "consumer grant not found")
+		response.NotFoundWithCode(c, pkgerrors.ErrorCodePlatformBindingNotFound, "platform binding not found", nil)
 	case errors.Is(err, serviceplatformbinding.ErrBindingAlreadyOwned):
-		response.Conflict(c, "platform binding already owned by another user")
+		response.ConflictWithCode(c, pkgerrors.ErrorCodePlatformAccountAlreadyBound, "platform account already bound", nil)
+	case errors.Is(err, serviceplatformbinding.ErrCredentialValidationFailed):
+		response.ErrorWithCode(c, http.StatusUnprocessableEntity, pkgerrors.ErrorCodePlatformCredentialValidationFailed, "platform credential validation failed", nil)
 	case errors.Is(err, serviceplatformbinding.ErrConsumerNotSupported):
-		response.BadRequest(c, "consumer is not supported")
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "consumer is not supported", nil)
 	case errors.Is(err, serviceplatformbinding.ErrBindingRuntimeSummaryNotReady):
 		response.Conflict(c, "platform binding runtime summary is not ready")
 	case errors.Is(err, serviceplatformbinding.ErrPrimaryProfileNotOwned):
-		response.Error(c, http.StatusUnprocessableEntity, "primary profile must belong to platform binding")
+		response.ErrorWithCode(c, http.StatusUnprocessableEntity, pkgerrors.ErrorCodePrimaryProfileInvalid, "primary profile must belong to platform binding", nil)
 	default:
 		if serviceplatformbinding.IsExecutionPlaneUnavailableError(err) {
-			response.Error(c, http.StatusServiceUnavailable, "platform service unavailable")
+			response.ErrorWithCode(c, http.StatusServiceUnavailable, pkgerrors.ErrorCodePlatformServiceUnavailable, "platform service unavailable", nil)
 			return
 		}
 		response.InternalServerError(c, fallback)
@@ -642,17 +678,21 @@ func buildGrantViews(items []model.ConsumerGrant) []gin.H {
 }
 
 func buildGrantView(item *model.ConsumerGrant) gin.H {
-	return gin.H{
-		"id":         item.ID,
+	view := gin.H{
 		"binding_id": item.BindingID,
 		"consumer":   item.Consumer,
 		"status":     item.Status,
-		"granted_by": nullableInt64(item.GrantedBy),
-		"granted_at": item.GrantedAt,
 		"revoked_at": nullableTime(item.RevokedAt),
-		"created_at": item.CreatedAt,
-		"updated_at": item.UpdatedAt,
 	}
+	if item.ID != 0 {
+		view["id"] = item.ID
+		view["granted_by"] = nullableInt64(item.GrantedBy)
+		view["granted_at"] = item.GrantedAt
+		view["created_at"] = item.CreatedAt
+		view["updated_at"] = item.UpdatedAt
+	}
+
+	return view
 }
 
 func nullableInt64(value sql.NullInt64) any {

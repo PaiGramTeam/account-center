@@ -20,6 +20,7 @@ func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
 	me := rg.Group("/me")
 	{
 		me.GET("", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.GetMe)
+		me.PATCH("", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.PatchMe)
 		me.GET("/dashboard-summary", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.GetDashboardSummary)
 		me.GET("/emails", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.ListEmails)
 		me.POST("/emails", handler.ApiGroupApp.MeApiGroup.CurrentUserHandler.CreateEmail)

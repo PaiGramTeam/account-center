@@ -18,6 +18,13 @@ type AuthorityService struct {
 	casbinService authorityCasbinSyncer
 }
 
+func (s *AuthorityService) DB() *gorm.DB {
+	if s == nil {
+		return nil
+	}
+	return s.db
+}
+
 // CreateAuthority 创建角色
 func (s *AuthorityService) CreateAuthority(params CreateAuthorityParams) (*model.Role, error) {
 	var role *model.Role

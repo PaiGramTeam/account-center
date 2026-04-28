@@ -62,7 +62,7 @@ func NewGRPCServer(port int, db *gorm.DB, redisClient *redis.Client, cfg *config
 	if err != nil {
 		return nil, fmt.Errorf("init bot access services: %w", err)
 	}
-	pb.RegisterBotAccessServiceServer(server, grpcservice.NewBotAccessService(&botAccessGroup.AccountRefService, &botAccessGroup.TicketService))
+	pb.RegisterBotAccessServiceServer(server, grpcservice.NewBotAccessService(&botAccessGroup.AccountRefService, &botAccessGroup.TicketService, db))
 
 	// Register reflection service for debugging
 	reflection.Register(server)

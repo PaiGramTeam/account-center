@@ -156,7 +156,7 @@ func TestCrossUserRoutesRequirePermissions(t *testing.T) {
 	} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
 		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
-		assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, res))
+		assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, res))
 	}
 
 	t.Logf("[TEST] Before granting permissions to viewerID=%d", viewerID)
@@ -166,6 +166,7 @@ func TestCrossUserRoutesRequirePermissions(t *testing.T) {
 		model.PermPermissionRead,
 		model.PermAuditRead,
 	)
+	grantAdminRoleToUser(t, stack, viewerID)
 
 	for _, path := range []string{
 		fmt.Sprintf("/api/v1/admin/users/%d", targetID),
@@ -196,6 +197,7 @@ func TestAdminRoutesRequireAdminRole(t *testing.T) {
 	}
 	denied := performJSONRequest(t, stack.Router, http.MethodPost, resetPath, body, authHeaders(actorAccessToken))
 	require.Equal(t, http.StatusForbidden, denied.Code, denied.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, denied))
 
 	grantAdminRoleToUser(t, stack, actorID)
 
@@ -222,26 +224,16 @@ func TestRoleCatalogRoutesRequireExpectedPrivileges(t *testing.T) {
 			expected = http.StatusNotFound
 		}
 		require.Equal(t, expected, res.Code, "%s => %s", path, res.Body.String())
+		if path == "/api/v1/admin/roles" {
+			assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, res))
+		}
 	}
 
 	grantPermissionsToUser(t, stack, actorID, model.PermRoleRead)
+	grantAdminRoleToUser(t, stack, actorID)
 
 	listRolesAllowed := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/admin/roles", nil, headers)
 	require.Equal(t, http.StatusOK, listRolesAllowed.Code, listRolesAllowed.Body.String())
-
-	createRoleDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/roles", map[string]any{
-		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
-		"display_name": "Operations",
-		"description":  "ops role",
-	}, headers)
-	require.Equal(t, http.StatusForbidden, createRoleDenied.Code, createRoleDenied.Body.String())
-
-	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
-		res := performJSONRequest(t, stack.Router, http.MethodPost, path, map[string]any{"name": "legacy"}, headers)
-		require.Equal(t, http.StatusNotFound, res.Code, "%s => %s", path, res.Body.String())
-	}
-
-	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceRole, model.ActionCreate))
 
 	createRoleAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/roles", map[string]any{
 		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
@@ -249,6 +241,18 @@ func TestRoleCatalogRoutesRequireExpectedPrivileges(t *testing.T) {
 		"description":  "ops role",
 	}, headers)
 	require.Equal(t, http.StatusOK, createRoleAllowed.Code, createRoleAllowed.Body.String())
+
+	for _, path := range []string{"/api/v1/roles", "/api/v1/permissions"} {
+		res := performJSONRequest(t, stack.Router, http.MethodPost, path, map[string]any{"name": "legacy"}, headers)
+		require.Equal(t, http.StatusNotFound, res.Code, "%s => %s", path, res.Body.String())
+	}
+
+	createRoleDuplicate := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/roles", map[string]any{
+		"name":         fmt.Sprintf("ops-%d", time.Now().UnixNano()),
+		"display_name": "Operations",
+		"description":  "ops role",
+	}, headers)
+	require.Equal(t, http.StatusOK, createRoleDuplicate.Code, createRoleDuplicate.Body.String())
 }
 
 func TestRoleManagementRoutesRequireRoleManagePermission(t *testing.T) {
@@ -278,6 +282,7 @@ func TestRoleManagementRoutesRequireRoleManagePermission(t *testing.T) {
 			"permission_ids": []uint64{permission.ID},
 		}, headers)
 	require.Equal(t, http.StatusForbidden, assignPermissionRes.Code, assignPermissionRes.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, assignPermissionRes))
 
 	var rolePermissionCount int64
 	require.NoError(t, stack.DB.Model(&model.RolePermission{}).Where("role_id = ? AND permission_id = ?", customRole.ID, permission.ID).Count(&rolePermissionCount).Error)
@@ -291,6 +296,7 @@ func TestRoleManagementRoutesRequireRoleManagePermission(t *testing.T) {
 	require.NoError(t, stack.DB.Create(&privilegedRole).Error)
 
 	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceRole, model.ActionManage))
+	grantAdminRoleToUser(t, stack, actorID)
 
 	assignPermissionAllowed := performJSONRequest(t, stack.Router, http.MethodPut,
 		fmt.Sprintf("/api/v1/admin/roles/%d/permissions", customRole.ID), map[string]any{
@@ -329,12 +335,15 @@ func TestUserSessionAndSecuritySummaryRoutesRequirePermissions(t *testing.T) {
 	} {
 		res := performJSONRequest(t, stack.Router, http.MethodGet, path, nil, headers)
 		require.Equal(t, http.StatusForbidden, res.Code, "%s => %s", path, res.Body.String())
+		assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, res))
 	}
 
 	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d/sessions/%d", targetID, targetSession.ID), nil, headers)
 	require.Equal(t, http.StatusForbidden, deleteDenied.Code, deleteDenied.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, deleteDenied))
 
 	grantPermissionsToUser(t, stack, viewerID, model.PermUserRead, model.BuildPermissionName(model.ResourceSession, model.ActionRead), model.BuildPermissionName(model.ResourceSession, model.ActionDelete))
+	grantAdminRoleToUser(t, stack, viewerID)
 
 	sessionsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/sessions", targetID), nil, headers)
 	require.Equal(t, http.StatusOK, sessionsRes.Code, sessionsRes.Body.String())
@@ -387,9 +396,10 @@ func TestSelfServiceLoginLogsAndSessionRoutes(t *testing.T) {
 	otherUserID, _, _, _, _ := registerVerifyAndLogin(t, stack, "self-service-target")
 	forbiddenLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/login-logs", otherUserID), nil, headers)
 	require.Equal(t, http.StatusForbidden, forbiddenLogsRes.Code, forbiddenLogsRes.Body.String())
-	assert.Equal(t, "FORBIDDEN", decodeErrorCode(t, forbiddenLogsRes))
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, forbiddenLogsRes))
 
 	grantPermissionsToUser(t, stack, userID, model.PermAuditRead)
+	grantAdminRoleToUser(t, stack, userID)
 	authorizedCrossUserLogsRes := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/admin/users/%d/login-logs", otherUserID), nil, headers)
 	require.Equal(t, http.StatusOK, authorizedCrossUserLogsRes.Code, authorizedCrossUserLogsRes.Body.String())
 
@@ -438,8 +448,10 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 
 	createDenied := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", createBody, headers)
 	require.Equal(t, http.StatusForbidden, createDenied.Code, createDenied.Body.String())
+	assert.Equal(t, "ADMIN_REQUIRED", decodeErrorCode(t, createDenied))
 
 	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceUser, model.ActionCreate), model.BuildPermissionName(model.ResourceUser, model.ActionUpdate), model.PermRoleRead, model.PermPermissionRead, model.PermUserRead)
+	grantAdminRoleToUser(t, stack, actorID)
 
 	createAllowed := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/admin/users", createBody, headers)
 	require.Equal(t, http.StatusBadRequest, createAllowed.Code, createAllowed.Body.String())
@@ -481,10 +493,6 @@ func TestUserManagementMutationRoutesRespectPermissionsAndRoles(t *testing.T) {
 	require.True(t, ok, "expected paginated role items, got %T", unchangedRolesData["items"])
 	require.Empty(t, unchangedRoleItems)
 
-	deleteDenied := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d", createdUserID), nil, headers)
-	require.Equal(t, http.StatusForbidden, deleteDenied.Code, deleteDenied.Body.String())
-
-	grantPermissionsToUser(t, stack, actorID, model.BuildPermissionName(model.ResourceUser, model.ActionDelete))
 	deleteAllowed := performJSONRequest(t, stack.Router, http.MethodDelete, fmt.Sprintf("/api/v1/admin/users/%d", createdUserID), nil, headers)
 	require.Equal(t, http.StatusNoContent, deleteAllowed.Code, deleteAllowed.Body.String())
 

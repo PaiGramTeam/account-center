@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 	"paigram/internal/middleware"
 	"paigram/internal/response"
+	serviceaudit "paigram/internal/service/audit"
 	"paigram/internal/service/authority"
 	pkgerrors "paigram/pkg/errors"
 )
@@ -58,6 +59,15 @@ func (h *AuthorityHandler) CreateAuthority(c *gin.Context) {
 	}
 
 	response.Success(c, role)
+	h.recordAudit(c, serviceaudit.WriteInput{
+		Category:    "authority",
+		ActorType:   "admin",
+		ActorUserID: authorityActorUserID(c),
+		Action:      "authority_create",
+		TargetType:  "role",
+		TargetID:    strconv.FormatUint(uint64(role.ID), 10),
+		Result:      "success",
+	})
 }
 
 // GetAuthority 获取角色详情
@@ -190,6 +200,15 @@ func (h *AuthorityHandler) UpdateAuthority(c *gin.Context) {
 	}
 
 	response.SuccessWithMessage(c, nil, "更新成功")
+	h.recordAudit(c, serviceaudit.WriteInput{
+		Category:    "authority",
+		ActorType:   "admin",
+		ActorUserID: authorityActorUserID(c),
+		Action:      "authority_update",
+		TargetType:  "role",
+		TargetID:    strconv.FormatUint(roleID, 10),
+		Result:      "success",
+	})
 }
 
 // DeleteAuthority 删除角色
@@ -233,6 +252,15 @@ func (h *AuthorityHandler) DeleteAuthority(c *gin.Context) {
 	}
 
 	response.SuccessWithMessage(c, nil, "删除成功")
+	h.recordAudit(c, serviceaudit.WriteInput{
+		Category:    "authority",
+		ActorType:   "admin",
+		ActorUserID: authorityActorUserID(c),
+		Action:      "authority_delete",
+		TargetType:  "role",
+		TargetID:    strconv.FormatUint(roleID, 10),
+		Result:      "success",
+	})
 }
 
 // AssignPermissions 为角色分配权限
@@ -274,6 +302,36 @@ func (h *AuthorityHandler) AssignPermissions(c *gin.Context) {
 	}
 
 	response.SuccessWithMessage(c, nil, "分配成功")
+	h.recordAudit(c, serviceaudit.WriteInput{
+		Category:    "authority",
+		ActorType:   "admin",
+		ActorUserID: authorityActorUserID(c),
+		Action:      "authority_assign_permissions",
+		TargetType:  "role",
+		TargetID:    strconv.FormatUint(roleID, 10),
+		Result:      "success",
+		Metadata: map[string]any{
+			"permission_ids": req.PermissionIDs,
+		},
+	})
+}
+
+func (h *AuthorityHandler) recordAudit(c *gin.Context, input serviceaudit.WriteInput) {
+	if h == nil || h.service == nil || h.service.DB() == nil {
+		return
+	}
+	input.RequestID = c.GetHeader("X-Request-ID")
+	input.IP = c.ClientIP()
+	input.UserAgent = c.Request.UserAgent()
+	_ = serviceaudit.Record(c.Request.Context(), h.service.DB(), input)
+}
+
+func authorityActorUserID(c *gin.Context) *uint64 {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == 0 {
+		return nil
+	}
+	return &userID
 }
 
 // GetRolePermissions 获取角色的权限列表

@@ -13,9 +13,11 @@ type RouterGroup struct{}
 
 // Init registers /admin management routes on the provided router group.
 func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
+	adminGate := middleware.RequireRoleMiddleware("admin")
 	permissionCheck := middleware.CasbinMiddleware()
 	userHandler := &handler.ApiGroupApp.UserApiGroup.Handler
 	users := rg.Group("/admin/users")
+	users.Use(adminGate)
 	{
 		users.GET("", permissionCheck, userHandler.ListUsers)
 		users.POST("", permissionCheck, userHandler.CreateUser)
@@ -39,6 +41,7 @@ func (r *RouterGroup) Init(rg *gin.RouterGroup, _ *gorm.DB) {
 
 	authorityHandler := &handler.ApiGroupApp.AuthorityApiGroup.AuthorityHandler
 	roles := rg.Group("/admin/roles")
+	roles.Use(adminGate)
 	{
 		roles.POST("", permissionCheck, authorityHandler.CreateAuthority)
 		roles.GET("", permissionCheck, authorityHandler.ListAuthorities)

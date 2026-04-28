@@ -2,11 +2,15 @@ package me
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"gorm.io/gorm"
 
 	"paigram/internal/middleware"
@@ -17,6 +21,7 @@ import (
 // CurrentUserReader describes the current-user service dependency.
 type CurrentUserReader interface {
 	GetCurrentUserView(context.Context, uint64) (*serviceme.CurrentUserView, error)
+	UpdateCurrentUser(context.Context, serviceme.UpdateCurrentUserInput) (*serviceme.CurrentUserView, error)
 	GetDashboardSummary(context.Context, uint64) (*serviceme.DashboardSummaryView, error)
 	ListEmails(context.Context, uint64) ([]serviceme.EmailView, error)
 	CreateEmail(context.Context, serviceme.CreateEmailInput) (*serviceme.CreatedEmailView, error)
@@ -32,6 +37,20 @@ type createEmailRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }
 
+type patchMeRequest struct {
+	DisplayName *string `json:"display_name" binding:"omitempty,min=1,max=255"`
+	AvatarURL   *string `json:"avatar_url" binding:"omitempty,url,max=512"`
+	Bio         *string `json:"bio" binding:"omitempty,max=500"`
+	Locale      *string `json:"locale" binding:"omitempty,max=10"`
+}
+
+var patchMeAllowedFields = map[string]struct{}{
+	"display_name": {},
+	"avatar_url":   {},
+	"bio":          {},
+	"locale":       {},
+}
+
 type CurrentUserView = serviceme.CurrentUserView
 
 // CurrentUserHandler serves the /me identity surface.
@@ -42,6 +61,75 @@ type CurrentUserHandler struct {
 // NewCurrentUserHandler creates a current-user handler.
 func NewCurrentUserHandler(service CurrentUserReader) *CurrentUserHandler {
 	return &CurrentUserHandler{service: service}
+}
+
+// swagger:route PATCH /api/v1/me me patchMe
+//
+// Update current user.
+//
+// Updates the authenticated user's self-service profile fields. Only `display_name`, `avatar_url`, `bio`, and `locale` are accepted.
+//
+// Consumes:
+//   - application/json
+//
+// Produces:
+//   - application/json
+//
+// Security:
+//   - BearerAuth: []
+//
+// Responses:
+//
+//	200: meCurrentUserResponse
+//	400: meErrorResponse
+//	401: meErrorResponse
+//	404: meErrorResponse
+//	500: meErrorResponse
+//
+// PatchMe updates the authenticated current-user profile.
+func (h *CurrentUserHandler) PatchMe(c *gin.Context) {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == 0 {
+		response.Unauthorized(c, "user not authenticated")
+		return
+	}
+
+	var req patchMeRequest
+	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		return
+	}
+
+	var raw map[string]json.RawMessage
+	if err := c.ShouldBindBodyWith(&raw, binding.JSON); err != nil {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		return
+	}
+	if unsupported := unsupportedPatchMeFields(raw); len(unsupported) > 0 {
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "unsupported fields: "+strings.Join(unsupported, ", "), gin.H{"allowed_fields": []string{"display_name", "avatar_url", "bio", "locale"}})
+		return
+	}
+
+	view, err := h.service.UpdateCurrentUser(c.Request.Context(), serviceme.UpdateCurrentUserInput{
+		UserID:      userID,
+		DisplayName: req.DisplayName,
+		AvatarURL:   req.AvatarURL,
+		Bio:         req.Bio,
+		Locale:      req.Locale,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, serviceme.ErrDisplayNameRequired):
+			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			response.NotFound(c, "user not found")
+		default:
+			response.InternalServerError(c, "failed to update current user")
+		}
+		return
+	}
+
+	response.Success(c, view)
 }
 
 // swagger:route GET /api/v1/me me getMe
@@ -80,6 +168,18 @@ func (h *CurrentUserHandler) GetMe(c *gin.Context) {
 		return
 	}
 	response.Success(c, view)
+}
+
+func unsupportedPatchMeFields(raw map[string]json.RawMessage) []string {
+	unsupported := make([]string, 0)
+	for field := range raw {
+		if _, ok := patchMeAllowedFields[field]; ok {
+			continue
+		}
+		unsupported = append(unsupported, field)
+	}
+	sort.Strings(unsupported)
+	return unsupported
 }
 
 // swagger:route GET /api/v1/me/dashboard-summary me getMeDashboardSummary

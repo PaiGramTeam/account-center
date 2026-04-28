@@ -987,6 +987,19 @@ func TestGenericCredentialSummaryMapPreservesRuntimeSummaryFields(t *testing.T) 
 	}, summary)
 }
 
+func TestGenericCredentialSummaryMapPreservesMissingTimestampsAsNil(t *testing.T) {
+	summary, err := genericCredentialSummaryMap(&platformv1.GetCredentialSummaryResponse{
+		PlatformAccountId: "cn:resolved-account",
+		Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+	})
+
+	require.NoError(t, err)
+	require.Nil(t, summary["last_validated_at"])
+	require.Nil(t, summary["last_refreshed_at"])
+	require.NotEqual(t, "1970-01-01T00:00:00Z", summary["last_validated_at"])
+	require.NotEqual(t, "1970-01-01T00:00:00Z", summary["last_refreshed_at"])
+}
+
 func TestGenericCredentialSummaryMapRejectsMissingSummary(t *testing.T) {
 	summary, err := genericCredentialSummaryMap(nil)
 

@@ -9,6 +9,7 @@ import (
 	platformv1 "github.com/PaiGramTeam/proto-contracts/platform/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"paigram/internal/model"
 	serviceaudit "paigram/internal/service/audit"
@@ -153,7 +154,7 @@ func genericCredentialStatus(status platformv1.CredentialStatus) string {
 	}
 }
 
-func genericProtoTime(value interface{ AsTime() time.Time }) any {
+func genericProtoTime(value *timestamppb.Timestamp) any {
 	if value == nil {
 		return nil
 	}

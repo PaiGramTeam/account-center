@@ -235,7 +235,7 @@ func TestGrantServiceUpsertGrantReactivationPreservesTicketVersion(t *testing.T)
 	assert.Equal(t, uint64(4), grant.TicketVersion)
 }
 
-func TestGrantServiceRevokeGrantInvalidatorFailureLeavesGrantUnchanged(t *testing.T) {
+func TestGrantServiceRevokeGrantInvalidatorFailureLeavesRetryableRevocation(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	invalidationErr := errors.New("platform down")
 	service := NewGrantService(db, failingGrantInvalidator{err: invalidationErr})
@@ -262,9 +262,41 @@ func TestGrantServiceRevokeGrantInvalidatorFailureLeavesGrantUnchanged(t *testin
 
 	var stored model.ConsumerGrant
 	require.NoError(t, db.Where("binding_id = ? AND consumer = ?", binding.ID, ConsumerPaiGramBot).First(&stored).Error)
-	assert.Equal(t, model.ConsumerGrantStatusActive, stored.Status)
-	assert.False(t, stored.RevokedAt.Valid)
-	assert.Equal(t, uint64(2), stored.TicketVersion)
+	assert.Equal(t, model.ConsumerGrantStatusRevoked, stored.Status)
+	assert.True(t, stored.RevokedAt.Valid)
+	assert.Equal(t, uint64(3), stored.TicketVersion)
+	assert.False(t, stored.LastInvalidatedAt.Valid)
+}
+
+func TestGrantServiceRevokeGrantRetriesMissingInvalidationForRevokedGrant(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	invalidator := &capturingGrantInvalidator{}
+	service := NewGrantService(db, invalidator)
+	binding := seedGrantServiceBinding(t, db, "cn:grant-retry-invalid")
+	revokedAt := time.Now().UTC().Add(-time.Hour)
+	retryAt := time.Now().UTC()
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:     binding.ID,
+		Consumer:      ConsumerPaiGramBot,
+		Status:        model.ConsumerGrantStatusRevoked,
+		ScopesJSON:    "[]",
+		TicketVersion: 5,
+		GrantedAt:     time.Now().UTC(),
+		RevokedAt:     sql.NullTime{Time: revokedAt, Valid: true},
+	}).Error)
+
+	revoked, err := service.RevokeGrant(RevokeGrantInput{
+		BindingID: binding.ID,
+		Consumer:  ConsumerPaiGramBot,
+		RevokedAt: retryAt,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, invalidator.calls)
+	assert.Equal(t, uint64(5), invalidator.input.MinimumGrantVersion)
+	assert.Equal(t, uint64(5), revoked.TicketVersion)
+	assert.True(t, revoked.LastInvalidatedAt.Valid)
+	assert.True(t, revoked.LastInvalidatedAt.Time.Equal(retryAt))
 }
 
 func TestGrantServiceRevokeGrantCallsInvalidatorWithExpectedInput(t *testing.T) {

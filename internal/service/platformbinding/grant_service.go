@@ -103,12 +103,11 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 	}
 
 	var grant model.ConsumerGrant
+	shouldInvalidate := false
+	minimumGrantVersion := uint64(0)
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("binding_id = ? AND consumer = ?", input.BindingID, input.Consumer).First(&grant).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				if err := s.invalidateGrant(ctx, binding, input, 1); err != nil {
-					return err
-				}
 				grant = model.ConsumerGrant{
 					BindingID:         input.BindingID,
 					Consumer:          input.Consumer,
@@ -117,6 +116,8 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 					RevokedAt:         sql.NullTime{Time: revokedAt, Valid: true},
 					LastInvalidatedAt: sql.NullTime{Time: revokedAt, Valid: true},
 				}
+				shouldInvalidate = true
+				minimumGrantVersion = 1
 				writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
 				return nil
 			}
@@ -125,6 +126,13 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 		}
 
 		if grant.Status == model.ConsumerGrantStatusRevoked && grant.RevokedAt.Valid {
+			if !grant.LastInvalidatedAt.Valid {
+				minimumGrantVersion = grant.TicketVersion
+				if minimumGrantVersion == 0 {
+					minimumGrantVersion = 1
+				}
+				shouldInvalidate = true
+			}
 			writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
 			return nil
 		}
@@ -134,22 +142,40 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 			nextVersion = 1
 		}
 		nextVersion++
-		if err := s.invalidateGrant(ctx, binding, input, nextVersion); err != nil {
-			return err
-		}
-
 		grant.Status = model.ConsumerGrantStatusRevoked
 		grant.TicketVersion = nextVersion
 		grant.RevokedAt = sql.NullTime{Time: revokedAt, Valid: true}
-		grant.LastInvalidatedAt = sql.NullTime{Time: revokedAt, Valid: true}
+		grant.LastInvalidatedAt = sql.NullTime{}
 		if err := tx.Save(&grant).Error; err != nil {
 			return err
 		}
+		shouldInvalidate = true
+		minimumGrantVersion = nextVersion
 		writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, false)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if shouldInvalidate {
+		if err := s.invalidateGrant(ctx, binding, input, minimumGrantVersion); err != nil {
+			return nil, err
+		}
+		grant.LastInvalidatedAt = sql.NullTime{Time: revokedAt, Valid: true}
+		if grant.ID != 0 {
+			update := s.db.Model(&model.ConsumerGrant{}).
+				Where("id = ? AND status = ? AND ticket_version = ?", grant.ID, model.ConsumerGrantStatusRevoked, minimumGrantVersion).
+				Update("last_invalidated_at", revokedAt)
+			if update.Error != nil {
+				return nil, update.Error
+			}
+			if update.RowsAffected != 1 {
+				return nil, gorm.ErrRecordNotFound
+			}
+			if err := s.db.Where("id = ?", grant.ID).First(&grant).Error; err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return &grant, nil

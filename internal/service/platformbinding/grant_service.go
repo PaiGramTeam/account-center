@@ -48,6 +48,7 @@ func (s *GrantService) UpsertGrant(input UpsertGrantInput) (*model.ConsumerGrant
 				BindingID: input.BindingID,
 				Consumer:  input.Consumer,
 				Status:    model.ConsumerGrantStatusActive,
+				ScopesJSON: "[]",
 				GrantedBy: input.GrantedBy,
 				GrantedAt: grantedAt,
 			}

@@ -1,5 +1,5 @@
 ALTER TABLE `consumer_grants`
-    ADD COLUMN `scopes_json` LONGTEXT NOT NULL DEFAULT '[]' AFTER `status`;
+    ADD COLUMN `scopes_json` LONGTEXT NULL AFTER `status`;
 
 UPDATE `consumer_grants` cg
 JOIN `bot_account_grants` bg ON bg.`platform_account_ref_id` = cg.`binding_id`
@@ -42,3 +42,10 @@ WHERE bg.`deleted_at` IS NULL
         ELSE ''
       END <> ''
   AND cg.`id` IS NULL;
+
+UPDATE `consumer_grants`
+SET `scopes_json` = '[]'
+WHERE `scopes_json` IS NULL;
+
+ALTER TABLE `consumer_grants`
+    MODIFY COLUMN `scopes_json` LONGTEXT NOT NULL;

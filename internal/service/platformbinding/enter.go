@@ -3,6 +3,7 @@ package platformbinding
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	platformv1 "github.com/PaiGramTeam/proto-contracts/platform/v1"
@@ -14,6 +15,8 @@ import (
 
 	"gorm.io/gorm"
 )
+
+var errGenericCredentialSummaryRequired = errors.New("credential summary is required")
 
 type ServiceGroup struct {
 	BindingService           BindingService
@@ -67,7 +70,7 @@ func (defaultGenericCredentialGateway) PutCredential(ctx context.Context, endpoi
 	if err != nil {
 		return nil, err
 	}
-	return genericCredentialSummaryMap(resp.GetSummary()), nil
+	return genericCredentialSummaryMap(resp.GetSummary())
 }
 
 func (defaultGenericCredentialGateway) RefreshCredential(ctx context.Context, endpoint, ticket string, binding *model.PlatformAccountBinding) error {
@@ -121,15 +124,18 @@ func bindingExternalAccountKey(binding *model.PlatformAccountBinding) string {
 	return binding.ExternalAccountKey.String
 }
 
-func genericCredentialSummaryMap(resp *platformv1.GetCredentialSummaryResponse) map[string]any {
+func genericCredentialSummaryMap(resp *platformv1.GetCredentialSummaryResponse) (map[string]any, error) {
 	if resp == nil {
-		return map[string]any{}
+		return nil, errGenericCredentialSummaryRequired
 	}
 	return map[string]any{
 		"platform_account_id": resp.GetPlatformAccountId(),
 		"status":              genericCredentialStatus(resp.GetStatus()),
+		"last_validated_at":   genericProtoTime(resp.GetLastValidatedAt()),
+		"last_refreshed_at":   genericProtoTime(resp.GetLastRefreshedAt()),
+		"devices":             genericDeviceSummaries(resp.GetDevices()),
 		"profiles":            genericProfileSummaries(resp.GetProfiles()),
-	}
+	}, nil
 }
 
 func genericCredentialStatus(status platformv1.CredentialStatus) string {
@@ -145,6 +151,27 @@ func genericCredentialStatus(status platformv1.CredentialStatus) string {
 	default:
 		return "unspecified"
 	}
+}
+
+func genericProtoTime(value interface{ AsTime() time.Time }) any {
+	if value == nil {
+		return nil
+	}
+	return value.AsTime().UTC().Format(time.RFC3339)
+}
+
+func genericDeviceSummaries(devices []*platformv1.DeviceSummary) []map[string]any {
+	items := make([]map[string]any, 0, len(devices))
+	for _, device := range devices {
+		items = append(items, map[string]any{
+			"device_id":    device.GetDeviceId(),
+			"device_fp":    device.GetDeviceFp(),
+			"device_name":  device.GetDeviceName(),
+			"is_valid":     device.GetIsValid(),
+			"last_seen_at": genericProtoTime(device.GetLastSeenAt()),
+		})
+	}
+	return items
 }
 
 func genericProfileSummaries(profiles []*platformv1.ProfileSummary) []map[string]any {

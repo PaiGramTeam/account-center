@@ -1,0 +1,2 @@
+ALTER TABLE `bots`
+    ADD COLUMN `allow_legacy_binding_write` BOOLEAN NOT NULL DEFAULT FALSE AFTER `status`;

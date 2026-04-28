@@ -249,7 +249,8 @@ func TestMePutConsumerGrantAllowsExplicitEnabledFalse(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Params = []gin.Param{{Key: "bindingId", Value: strconv.FormatUint(101, 10)}, {Key: "consumer", Value: "paigram-bot"}}
-	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/me/platform-accounts/101/consumer-grants/paigram-bot", bytes.NewBufferString(`{"enabled":false}`))
+	requestContext := context.WithValue(context.Background(), mutationContextKey{}, "me-revoke")
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/me/platform-accounts/101/consumer-grants/paigram-bot", bytes.NewBufferString(`{"enabled":false}`)).WithContext(requestContext)
 	c.Request.Header.Set("Content-Type", "application/json")
 	middleware.SetUserID(c, 7)
 
@@ -258,6 +259,8 @@ func TestMePutConsumerGrantAllowsExplicitEnabledFalse(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.False(t, grantStub.upsertForOwnerCalled)
 	assert.True(t, grantStub.revokeForOwnerCalled)
+	require.NotNil(t, grantStub.revokeForOwnerInput.Context)
+	assert.Equal(t, "me-revoke", grantStub.revokeForOwnerInput.Context.Value(mutationContextKey{}))
 	assert.True(t, grantStub.revokeForOwnerInput.ActorUserID.Valid)
 	assert.Equal(t, int64(7), grantStub.revokeForOwnerInput.ActorUserID.Int64)
 
@@ -280,7 +283,8 @@ func TestAdminPutConsumerGrantAllowsExplicitEnabledFalseWithActorAttribution(t *
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Params = []gin.Param{{Key: "bindingId", Value: strconv.FormatUint(101, 10)}, {Key: "consumer", Value: "paigram-bot"}}
-	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/platform-accounts/101/consumer-grants/paigram-bot", bytes.NewBufferString(`{"enabled":false}`))
+	requestContext := context.WithValue(context.Background(), mutationContextKey{}, "admin-revoke")
+	c.Request = httptest.NewRequest(http.MethodPut, "/api/v1/admin/platform-accounts/101/consumer-grants/paigram-bot", bytes.NewBufferString(`{"enabled":false}`)).WithContext(requestContext)
 	c.Request.Header.Set("Content-Type", "application/json")
 	middleware.SetUserID(c, 9)
 
@@ -289,9 +293,13 @@ func TestAdminPutConsumerGrantAllowsExplicitEnabledFalseWithActorAttribution(t *
 	require.Equal(t, http.StatusOK, w.Code)
 	assert.False(t, grantStub.upsertCalled)
 	assert.True(t, grantStub.revokeCalled)
+	require.NotNil(t, grantStub.revokeInput.Context)
+	assert.Equal(t, "admin-revoke", grantStub.revokeInput.Context.Value(mutationContextKey{}))
 	assert.True(t, grantStub.revokeInput.ActorUserID.Valid)
 	assert.Equal(t, int64(9), grantStub.revokeInput.ActorUserID.Int64)
 }
+
+type mutationContextKey struct{}
 
 func TestWriteBindingErrorReturnsCodedCredentialValidationFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)

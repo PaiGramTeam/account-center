@@ -12,4 +12,5 @@ var (
 	ErrScopeNotGranted                 = errors.New("requested scope is not granted")
 	ErrInvalidTicketConfig             = errors.New("invalid service ticket config")
 	ErrInactiveAccountRef              = errors.New("platform account binding is not active")
+	ErrPlatformServiceNotEnabled       = errors.New("platform service is not enabled for platform")
 )

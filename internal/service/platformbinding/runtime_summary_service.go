@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"paigram/internal/model"
-	serviceplatform "paigram/internal/service/platform"
 )
 
 type runtimeSummaryPlatformService interface {
@@ -132,10 +131,10 @@ func normalizeRuntimeSummaryError(err error) error {
 		return nil
 	}
 	if IsExecutionPlaneUnavailableError(err) {
-		if errors.Is(err, serviceplatform.ErrPlatformServiceUnavailable) {
+		if errors.Is(err, ErrPlatformServiceUnavailable) {
 			return err
 		}
-		return serviceplatform.ErrPlatformSummaryProxyUnavailable
+		return ErrPlatformSummaryProxyUnavailable
 	}
 	return err
 }

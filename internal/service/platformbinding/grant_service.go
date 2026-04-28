@@ -1,6 +1,7 @@
 package platformbinding
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strconv"
@@ -13,11 +14,18 @@ import (
 )
 
 type GrantService struct {
-	db *gorm.DB
+	db          *gorm.DB
+	invalidator GrantInvalidator
 }
 
-func NewGrantService(db *gorm.DB) *GrantService {
-	return &GrantService{db: db}
+func NewGrantService(db *gorm.DB, dependencies ...any) *GrantService {
+	service := &GrantService{db: db}
+	for _, dependency := range dependencies {
+		if invalidator, ok := dependency.(GrantInvalidator); ok {
+			service.invalidator = invalidator
+		}
+	}
+	return service
 }
 
 func (s *GrantService) UpsertGrant(input UpsertGrantInput) (*model.ConsumerGrant, bool, error) {
@@ -45,12 +53,12 @@ func (s *GrantService) UpsertGrant(input UpsertGrantInput) (*model.ConsumerGrant
 			}
 
 			grant = model.ConsumerGrant{
-				BindingID: input.BindingID,
-				Consumer:  input.Consumer,
-				Status:    model.ConsumerGrantStatusActive,
+				BindingID:  input.BindingID,
+				Consumer:   input.Consumer,
+				Status:     model.ConsumerGrantStatusActive,
 				ScopesJSON: "[]",
-				GrantedBy: input.GrantedBy,
-				GrantedAt: grantedAt,
+				GrantedBy:  input.GrantedBy,
+				GrantedAt:  grantedAt,
 			}
 			created = true
 			if err := tx.Create(&grant).Error; err != nil {
@@ -79,6 +87,10 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 	if err := validateConsumer(input.Consumer); err != nil {
 		return nil, err
 	}
+	ctx := input.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	binding, err := s.getBinding(input.BindingID)
 	if err != nil {
@@ -91,34 +103,79 @@ func (s *GrantService) RevokeGrant(input RevokeGrantInput) (*model.ConsumerGrant
 	}
 
 	var grant model.ConsumerGrant
+	shouldInvalidate := false
+	minimumGrantVersion := uint64(0)
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("binding_id = ? AND consumer = ?", input.BindingID, input.Consumer).First(&grant).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				grant = model.ConsumerGrant{
-					BindingID: input.BindingID,
-					Consumer:  input.Consumer,
-					Status:    model.ConsumerGrantStatusRevoked,
-					RevokedAt: sql.NullTime{Time: revokedAt, Valid: true},
+					BindingID:         input.BindingID,
+					Consumer:          input.Consumer,
+					Status:            model.ConsumerGrantStatusRevoked,
+					TicketVersion:     1,
+					RevokedAt:         sql.NullTime{Time: revokedAt, Valid: true},
+					LastInvalidatedAt: sql.NullTime{Time: revokedAt, Valid: true},
 				}
-				return writeGrantAudit(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+				shouldInvalidate = true
+				minimumGrantVersion = 1
+				writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+				return nil
 			}
 
 			return err
 		}
 
 		if grant.Status == model.ConsumerGrantStatusRevoked && grant.RevokedAt.Valid {
-			return writeGrantAudit(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+			if !grant.LastInvalidatedAt.Valid {
+				minimumGrantVersion = grant.TicketVersion
+				if minimumGrantVersion == 0 {
+					minimumGrantVersion = 1
+				}
+				shouldInvalidate = true
+			}
+			writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, true)
+			return nil
 		}
 
+		nextVersion := grant.TicketVersion
+		if nextVersion == 0 {
+			nextVersion = 1
+		}
+		nextVersion++
 		grant.Status = model.ConsumerGrantStatusRevoked
+		grant.TicketVersion = nextVersion
 		grant.RevokedAt = sql.NullTime{Time: revokedAt, Valid: true}
+		grant.LastInvalidatedAt = sql.NullTime{}
 		if err := tx.Save(&grant).Error; err != nil {
 			return err
 		}
-		return writeGrantAudit(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, false)
+		shouldInvalidate = true
+		minimumGrantVersion = nextVersion
+		writeGrantAuditBestEffort(tx, binding, input.BindingID, input.Consumer, auditActorUserID(input.ActorUserID), false, false)
+		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	if shouldInvalidate {
+		if err := s.invalidateGrant(ctx, binding, input, minimumGrantVersion); err != nil {
+			return nil, err
+		}
+		grant.LastInvalidatedAt = sql.NullTime{Time: revokedAt, Valid: true}
+		if grant.ID != 0 {
+			update := s.db.Model(&model.ConsumerGrant{}).
+				Where("id = ? AND status = ? AND ticket_version = ?", grant.ID, model.ConsumerGrantStatusRevoked, minimumGrantVersion).
+				Update("last_invalidated_at", revokedAt)
+			if update.Error != nil {
+				return nil, update.Error
+			}
+			if update.RowsAffected != 1 {
+				return nil, gorm.ErrRecordNotFound
+			}
+			if err := s.db.Where("id = ?", grant.ID).First(&grant).Error; err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return &grant, nil
@@ -188,7 +245,7 @@ func (s *GrantService) ensureBindingExists(bindingID uint64) error {
 
 func (s *GrantService) getBinding(bindingID uint64) (*model.PlatformAccountBinding, error) {
 	var binding model.PlatformAccountBinding
-	if err := s.db.Select("id", "owner_user_id").First(&binding, bindingID).Error; err != nil {
+	if err := s.db.Select("id", "owner_user_id", "platform", "platform_service_key").First(&binding, bindingID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrBindingNotFound
 		}
@@ -210,6 +267,30 @@ func (s *GrantService) ensureBindingOwnedByUser(ownerUserID, bindingID uint64) e
 	}
 
 	return nil
+}
+
+func (s *GrantService) invalidateGrant(ctx context.Context, binding *model.PlatformAccountBinding, input RevokeGrantInput, minimumGrantVersion uint64) error {
+	if s.invalidator == nil {
+		return nil
+	}
+	actorType := "user"
+	actorID := "system:grant-revoke"
+	if input.ActorUserID.Valid && input.ActorUserID.Int64 > 0 {
+		actorID = strconv.FormatInt(input.ActorUserID.Int64, 10)
+		if uint64(input.ActorUserID.Int64) != binding.OwnerUserID {
+			actorType = "admin"
+		}
+	}
+	return s.invalidator.InvalidateConsumerGrant(ctx, GrantInvalidationInput{
+		BindingID:           binding.ID,
+		OwnerUserID:         binding.OwnerUserID,
+		Platform:            binding.Platform,
+		PlatformServiceKey:  binding.PlatformServiceKey,
+		Consumer:            input.Consumer,
+		MinimumGrantVersion: minimumGrantVersion,
+		ActorType:           actorType,
+		ActorID:             actorID,
+	})
 }
 
 func validateConsumer(consumer string) error {
@@ -247,6 +328,10 @@ func writeGrantAudit(tx *gorm.DB, binding *model.PlatformAccountBinding, binding
 			"idempotent":    idempotent,
 		},
 	})
+}
+
+func writeGrantAuditBestEffort(tx *gorm.DB, binding *model.PlatformAccountBinding, bindingID uint64, consumer string, actorUserID *uint64, enabled bool, idempotent bool) {
+	_ = writeGrantAudit(tx, binding, bindingID, consumer, actorUserID, enabled, idempotent)
 }
 
 func auditActorUserID(value sql.NullInt64) *uint64 {

@@ -82,16 +82,18 @@ func (PlatformAccountProfile) TableName() string {
 
 // ConsumerGrant records whether a named consumer may operate on a binding.
 type ConsumerGrant struct {
-	ID         uint64              `gorm:"primaryKey"`
-	BindingID  uint64              `gorm:"not null;uniqueIndex:uk_consumer_grants_binding_consumer,priority:1;index:idx_consumer_grants_binding_id"`
-	Consumer   string              `gorm:"size:64;not null;uniqueIndex:uk_consumer_grants_binding_consumer,priority:2"`
-	Status     ConsumerGrantStatus `gorm:"size:32;not null;default:'active';index:idx_consumer_grants_status"`
-	ScopesJSON string              `gorm:"type:text;not null"`
-	GrantedBy  sql.NullInt64       `gorm:"type:bigint unsigned;index:idx_consumer_grants_granted_by"`
-	GrantedAt  time.Time           `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
-	RevokedAt  sql.NullTime        `gorm:"type:datetime(3)"`
-	CreatedAt  time.Time           `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
-	UpdatedAt  time.Time           `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
+	ID                uint64              `gorm:"primaryKey"`
+	BindingID         uint64              `gorm:"not null;uniqueIndex:uk_consumer_grants_binding_consumer,priority:1;index:idx_consumer_grants_binding_id"`
+	Consumer          string              `gorm:"size:64;not null;uniqueIndex:uk_consumer_grants_binding_consumer,priority:2"`
+	Status            ConsumerGrantStatus `gorm:"size:32;not null;default:'active';index:idx_consumer_grants_status"`
+	ScopesJSON        string              `gorm:"type:text;not null"`
+	TicketVersion     uint64              `gorm:"not null;default:1"`
+	GrantedBy         sql.NullInt64       `gorm:"type:bigint unsigned;index:idx_consumer_grants_granted_by"`
+	GrantedAt         time.Time           `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
+	RevokedAt         sql.NullTime        `gorm:"type:datetime(3)"`
+	LastInvalidatedAt sql.NullTime        `gorm:"type:datetime(3)"`
+	CreatedAt         time.Time           `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
+	UpdatedAt         time.Time           `gorm:"not null;default:CURRENT_TIMESTAMP(3)"`
 
 	Binding PlatformAccountBinding `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;foreignKey:BindingID;references:ID"`
 	Grantor *User                  `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;foreignKey:GrantedBy;references:ID"`

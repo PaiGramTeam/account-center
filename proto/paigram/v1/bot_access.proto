@@ -8,6 +8,9 @@ import "google/protobuf/timestamp.proto";
 
 service BotAccessService {
   rpc ResolveBotUser(ResolveBotUserRequest) returns (ResolveBotUserResponse);
+  // Legacy migration-only endpoint for importing platform bindings from bot services.
+  // New callers must use account-center binding/grant APIs instead. This RPC may
+  // create a legacy migration ConsumerGrant for the caller bot and is capability-gated.
   rpc UpsertPlatformBinding(UpsertPlatformBindingRequest) returns (UpsertPlatformBindingResponse);
   rpc ListAccessibleBindings(ListAccessibleBindingsRequest) returns (ListAccessibleBindingsResponse);
   rpc IssueServiceTicket(IssueServiceTicketRequest) returns (IssueServiceTicketResponse);

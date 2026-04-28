@@ -9,15 +9,16 @@ import (
 	"testing"
 	"time"
 
+	platformv1 "github.com/PaiGramTeam/proto-contracts/platform/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
 
 	"paigram/internal/model"
 	serviceaudit "paigram/internal/service/audit"
-	serviceplatform "paigram/internal/service/platform"
 )
 
 type fakeOrchestrationAuditWriter struct {
@@ -355,7 +356,7 @@ func TestRuntimeSummaryNormalizesGRPCProxyOutage(t *testing.T) {
 	svc := NewRuntimeSummaryService(fake, reader)
 
 	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	require.ErrorIs(t, err, ErrPlatformSummaryProxyUnavailable)
 	assert.Nil(t, summary)
 }
 
@@ -371,7 +372,7 @@ func TestRuntimeSummaryNormalizesDialFailure(t *testing.T) {
 	svc := NewRuntimeSummaryService(fake, reader)
 
 	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	require.ErrorIs(t, err, ErrPlatformSummaryProxyUnavailable)
 	assert.Nil(t, summary)
 }
 
@@ -383,13 +384,13 @@ func TestRuntimeSummaryPreservesWrappedPlatformServiceUnavailable(t *testing.T) 
 		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
 	}
 	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
-	fake := &fakeRuntimeSummaryPlatformService{err: fmt.Errorf("wrapped: %w", serviceplatform.ErrPlatformServiceUnavailable)}
+	fake := &fakeRuntimeSummaryPlatformService{err: fmt.Errorf("wrapped: %w", ErrPlatformServiceUnavailable)}
 	svc := NewRuntimeSummaryService(fake, reader)
 
 	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformServiceUnavailable)
+	require.ErrorIs(t, err, ErrPlatformServiceUnavailable)
 	assert.Nil(t, summary)
-	require.NotErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	require.NotErrorIs(t, err, ErrPlatformSummaryProxyUnavailable)
 }
 
 func TestRuntimeSummaryReturnsBindingNotReadyWhenExternalAccountKeyUnresolved(t *testing.T) {
@@ -573,7 +574,7 @@ func TestDeleteBindingForOwnerNormalizesMissingPlatformServiceAsUnavailable(t *t
 	svc := NewOrchestrationService(reader, platformSvc, gateway)
 
 	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformServiceUnavailable)
+	require.ErrorIs(t, err, ErrPlatformServiceUnavailable)
 	assert.True(t, reader.updated)
 	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
 	assert.Equal(t, "credential_delete_failed", reader.updatedReason)
@@ -929,6 +930,81 @@ func TestCreateBindingForOwnerCreatesDraftBindsAndSyncsProfiles(t *testing.T) {
 	assert.Equal(t, "10001", profileSyncer.input.Profiles[0].PlayerUID)
 	assert.True(t, profileSyncer.input.Profiles[0].IsPrimary)
 	assert.True(t, profileSyncer.input.Profiles[0].SourceUpdatedAt.Valid)
+}
+
+func TestGenericCredentialSummaryMapPreservesRuntimeSummaryFields(t *testing.T) {
+	validatedAt := time.Date(2026, 4, 28, 6, 7, 8, 0, time.UTC)
+	refreshedAt := time.Date(2026, 4, 28, 7, 8, 9, 0, time.UTC)
+	lastSeenAt := time.Date(2026, 4, 28, 5, 0, 0, 0, time.UTC)
+
+	summary, err := genericCredentialSummaryMap(&platformv1.GetCredentialSummaryResponse{
+		PlatformAccountId: "cn:resolved-account",
+		Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+		LastValidatedAt:   timestamppb.New(validatedAt),
+		LastRefreshedAt:   timestamppb.New(refreshedAt),
+		Devices: []*platformv1.DeviceSummary{{
+			DeviceId:   "device-1",
+			DeviceFp:   "fp-1",
+			DeviceName: "Chrome on Windows",
+			IsValid:    true,
+			LastSeenAt: timestamppb.New(lastSeenAt),
+		}},
+		Profiles: []*platformv1.ProfileSummary{{
+			Id:                42,
+			PlatformAccountId: "cn:resolved-account",
+			GameBiz:           "hk4e_cn",
+			Region:            "cn_gf01",
+			PlayerId:          "10001",
+			Nickname:          "Traveler",
+			Level:             60,
+			IsDefault:         true,
+		}},
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"platform_account_id": "cn:resolved-account",
+		"status":              "active",
+		"last_validated_at":   "2026-04-28T06:07:08Z",
+		"last_refreshed_at":   "2026-04-28T07:08:09Z",
+		"devices": []map[string]any{{
+			"device_id":    "device-1",
+			"device_fp":    "fp-1",
+			"device_name":  "Chrome on Windows",
+			"is_valid":     true,
+			"last_seen_at": "2026-04-28T05:00:00Z",
+		}},
+		"profiles": []map[string]any{{
+			"id":                  uint64(42),
+			"platform_account_id": "cn:resolved-account",
+			"game_biz":            "hk4e_cn",
+			"region":              "cn_gf01",
+			"player_id":           "10001",
+			"nickname":            "Traveler",
+			"level":               int32(60),
+			"is_default":          true,
+		}},
+	}, summary)
+}
+
+func TestGenericCredentialSummaryMapPreservesMissingTimestampsAsNil(t *testing.T) {
+	summary, err := genericCredentialSummaryMap(&platformv1.GetCredentialSummaryResponse{
+		PlatformAccountId: "cn:resolved-account",
+		Status:            platformv1.CredentialStatus_CREDENTIAL_STATUS_ACTIVE,
+	})
+
+	require.NoError(t, err)
+	require.Nil(t, summary["last_validated_at"])
+	require.Nil(t, summary["last_refreshed_at"])
+	require.NotEqual(t, "1970-01-01T00:00:00Z", summary["last_validated_at"])
+	require.NotEqual(t, "1970-01-01T00:00:00Z", summary["last_refreshed_at"])
+}
+
+func TestGenericCredentialSummaryMapRejectsMissingSummary(t *testing.T) {
+	summary, err := genericCredentialSummaryMap(nil)
+
+	require.Error(t, err)
+	require.Nil(t, summary)
 }
 
 func TestCreateBindingForOwnerReturnsCommittedBindingWhenProfileSyncFails(t *testing.T) {

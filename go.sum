@@ -34,6 +34,10 @@ github.com/PaiGramTeam/proto-contracts v0.0.0-20260416033414-4016470bc78d h1:sRl
 github.com/PaiGramTeam/proto-contracts v0.0.0-20260416033414-4016470bc78d/go.mod h1:i5FW0tHMyzubj1qI/7e04arFyrDv3YXkK1Pu5UxejBI=
 github.com/PaiGramTeam/proto-contracts v0.0.0-20260419070719-80366e162dcf h1:Wa77pOdHqp/wtil+DecjMvAOZ0rlLczTu4/Wqi17Cjw=
 github.com/PaiGramTeam/proto-contracts v0.0.0-20260419070719-80366e162dcf/go.mod h1:i5FW0tHMyzubj1qI/7e04arFyrDv3YXkK1Pu5UxejBI=
+github.com/PaiGramTeam/proto-contracts v0.0.0-20260428062016-25b0c943e834 h1:M27OVIoKxzalKV0KoXy0N3uhFx/ET+5u9TDH1uSnkdA=
+github.com/PaiGramTeam/proto-contracts v0.0.0-20260428062016-25b0c943e834/go.mod h1:i5FW0tHMyzubj1qI/7e04arFyrDv3YXkK1Pu5UxejBI=
+github.com/PaiGramTeam/proto-contracts v0.0.0-20260428073339-584460d9cb18 h1:Oo5oWLHn8Ca/rTofJH/7HEMT+Z36c2JQDO/13vycdo4=
+github.com/PaiGramTeam/proto-contracts v0.0.0-20260428073339-584460d9cb18/go.mod h1:i5FW0tHMyzubj1qI/7e04arFyrDv3YXkK1Pu5UxejBI=
 github.com/agiledragon/gomonkey/v2 v2.2.0 h1:QJWqpdEhGV/JJy70sZ/LDnhbSlMrqHAWHcNOjz1kyuI=
 github.com/agiledragon/gomonkey/v2 v2.2.0/go.mod h1:ap1AmDzcVOAz1YpeJ3TCzIgstoaWLA6jbbgxfB4w2iY=
 github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 h1:DklsrG3dyBCFEj5IhUbnKptjxatkF07cF2ak3yi77so=

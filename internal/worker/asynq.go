@@ -12,6 +12,7 @@ import (
 	"paigram/internal/config"
 	"paigram/internal/handler/auth"
 	"paigram/internal/observability"
+	serviceplatform "paigram/internal/service/platform"
 	"paigram/internal/tasks"
 )
 
@@ -30,10 +31,18 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 	})
 
 	// Create task handlers
+	platformService := serviceplatform.NewServiceGroup(db)
+	if err := platformService.PlatformService.ConfigureAuth(cfg.Auth); err != nil {
+		return nil, nil, err
+	}
+	platformService.PlatformService.SetGenericSummaryProxy(serviceplatform.NewGRPCGenericSummaryProxy(nil))
 	refreshHandler := tasks.NewRefreshOAuthTokenHandler(db, cfg, authHandler)
 	scheduleHandler := tasks.NewScheduleOAuthRefreshHandler(db, cfg, asynqClient)
 	cleanupHandler := tasks.NewCleanExpiredOAuthStatesHandler(db)
 	botTokenCleanupHandler := tasks.NewCleanExpiredBotTokensHandler(db)
+	bindingReconcileHandler := tasks.NewPlatformBindingReconcileHandler(db, asynqClient)
+	bindingProjectionRepairHandler := tasks.NewPlatformBindingProjectionRepairHandler(db, &platformService.PlatformService)
+	bindingDeleteRepairHandler := tasks.NewPlatformBindingDeleteRepairHandler(db, &platformService.PlatformService)
 
 	// Create mux (task router)
 	mux := asynq.NewServeMux()
@@ -41,6 +50,9 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 	mux.HandleFunc(tasks.TypeScheduleOAuthRefresh, scheduleHandler.ProcessTask)
 	mux.HandleFunc(tasks.TypeCleanExpiredOAuthStates, cleanupHandler.ProcessTask)
 	mux.HandleFunc(tasks.TypeCleanExpiredBotTokens, botTokenCleanupHandler.ProcessTask)
+	mux.HandleFunc(tasks.TypePlatformBindingReconcile, bindingReconcileHandler.ProcessTask)
+	mux.HandleFunc(tasks.TypePlatformBindingProjectionRepair, bindingProjectionRepairHandler.ProcessTask)
+	mux.HandleFunc(tasks.TypePlatformBindingDeleteRepair, bindingDeleteRepairHandler.ProcessTask)
 
 	// Configure server
 	srv := asynq.NewServer(
@@ -129,6 +141,17 @@ func StartAsynqServer(cfg *config.Config, redisClient *redis.Client, db *gorm.DB
 		return nil, nil, err
 	}
 	log.Printf("[Asynq] Registered periodic task: clean_expired_bot_tokens (entry_id=%s)", entryID3)
+
+	bindingReconcileTask, err := tasks.NewPlatformBindingReconcileTask()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	entryID4, err := scheduler.Register("0 * * * *", bindingReconcileTask)
+	if err != nil {
+		return nil, nil, err
+	}
+	log.Printf("[Asynq] Registered periodic task: platform_binding_reconcile (entry_id=%s)", entryID4)
 
 	log.Println("[Asynq] Worker server starting...")
 	if err := srv.Start(mux); err != nil {

@@ -1,5 +1,7 @@
 package platformbinding
 
+import serviceplatformbinding "paigram/internal/service/platformbinding"
+
 // swagger:model platformBindingItem
 type swaggerPlatformBindingItem struct {
 	ID                  uint64  `json:"id"`
@@ -86,6 +88,19 @@ type swaggerPlatformBindingEnvelopeWrapper struct {
 	Body swaggerPlatformBindingEnvelope
 }
 
+// swagger:model platformBindingRuntimeSummaryEnvelope
+type swaggerPlatformBindingRuntimeSummaryEnvelope struct {
+	Code    int                                   `json:"code"`
+	Message string                                `json:"message"`
+	Data    serviceplatformbinding.RuntimeSummary `json:"data"`
+}
+
+// swagger:response platformBindingRuntimeSummaryEnvelope
+type swaggerPlatformBindingRuntimeSummaryEnvelopeWrapper struct {
+	// in: body
+	Body swaggerPlatformBindingRuntimeSummaryEnvelope
+}
+
 // swagger:model platformBindingListEnvelope
 type swaggerPlatformBindingListEnvelope struct {
 	Code    int                            `json:"code"`
@@ -166,7 +181,7 @@ type swaggerPlatformBindingPaginationParams struct {
 	PageSize int `json:"page_size"`
 }
 
-// swagger:parameters getMyPlatformBinding deleteMyPlatformBinding listMyPlatformBindingProfiles listMyPlatformBindingConsumerGrants putMyPlatformBindingConsumerGrant getPlatformBinding listPlatformBindingProfiles listPlatformBindingConsumerGrants putPlatformBindingConsumerGrant refreshPlatformBinding deletePlatformBinding
+// swagger:parameters getMyPlatformBinding getMyPlatformBindingRuntimeSummary deleteMyPlatformBinding listMyPlatformBindingProfiles listMyPlatformBindingConsumerGrants putMyPlatformBindingConsumerGrant getPlatformBinding getPlatformBindingRuntimeSummary listPlatformBindingProfiles listPlatformBindingConsumerGrants putPlatformBindingConsumerGrant refreshPlatformBinding deletePlatformBinding
 type swaggerPlatformBindingPathParams struct {
 	// Binding ID.
 	// in: path

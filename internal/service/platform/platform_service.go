@@ -10,6 +10,10 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/encoding"
+	"google.golang.org/protobuf/encoding/protowire"
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
@@ -51,6 +55,7 @@ type PlatformService struct {
 	issuer              string
 	ttl                 time.Duration
 	signingKey          []byte
+	dial                dialFunc
 	summaryProxy        platformSummaryProxy
 	genericSummaryProxy platformSummaryProxy
 	healthChecker       platformHealthChecker
@@ -58,15 +63,14 @@ type PlatformService struct {
 
 func buildPlatformServiceTicketClaims(actorType, actorID string, ownerUserID, platformAccountRefID uint64, platform, platformAccountID string, scopes []string) ServiceTicketClaims {
 	return ServiceTicketClaims{
-		ActorType:            actorType,
-		ActorID:              actorID,
-		OwnerUserID:          ownerUserID,
-		UserID:               ownerUserID,
-		Platform:             platform,
-		BindingID:            platformAccountRefID,
-		PlatformAccountRefID: platformAccountRefID,
-		PlatformAccountID:    platformAccountID,
-		Scopes:               scopes,
+		ActorType:         actorType,
+		ActorID:           actorID,
+		OwnerUserID:       ownerUserID,
+		UserID:            ownerUserID,
+		Platform:          platform,
+		BindingID:         platformAccountRefID,
+		PlatformAccountID: platformAccountID,
+		Scopes:            scopes,
 	}
 }
 
@@ -327,6 +331,95 @@ func (s *PlatformService) GetBindingRuntimeSummary(ctx context.Context, actorTyp
 	}
 
 	return s.summaryProxy.GetCredentialSummary(ctx, platformRow.Endpoint, ticket, platformAccountID)
+}
+
+func (s *PlatformService) ConfirmBindingPrimaryProfile(ctx context.Context, actorType, actorID string, binding *model.PlatformAccountBinding, playerID string) error {
+	if binding == nil || playerID == "" || !binding.ExternalAccountKey.Valid || binding.ExternalAccountKey.String == "" {
+		return gorm.ErrRecordNotFound
+	}
+	if binding.Platform != "mihomo" {
+		return ErrPlatformServiceUnavailable
+	}
+
+	platformRow, err := s.GetEnabledPlatform(binding.Platform)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrPlatformServiceUnavailable
+		}
+		return err
+	}
+
+	ticket, _, err := s.IssueBindingScopedTicket(actorType, actorID, binding, []string{"mihomo.profile.write"})
+	if err != nil {
+		return err
+	}
+
+	dial := s.dial
+	if dial == nil {
+		dial = func(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			return grpc.DialContext(ctx, endpoint,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithBlock(),
+			)
+		}
+	}
+
+	conn, err := dial(ctx, platformRow.Endpoint)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	var resp []byte
+	err = conn.Invoke(callCtx,
+		"/mihomo.v1.MihomoAccountService/ConfirmPrimaryProfile",
+		encodeConfirmPrimaryProfileRequest(ticket, nullableBindingExternalAccountKey(binding.ExternalAccountKey), playerID),
+		&resp,
+		grpc.ForceCodec(rawProtoCodec{}),
+	)
+	return err
+}
+
+type rawProtoCodec struct{}
+
+func (rawProtoCodec) Marshal(v any) ([]byte, error) {
+	bytes, ok := v.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("raw proto codec expects []byte, got %T", v)
+	}
+	return bytes, nil
+}
+
+func (rawProtoCodec) Unmarshal(data []byte, v any) error {
+	bytes, ok := v.(*[]byte)
+	if !ok {
+		return fmt.Errorf("raw proto codec expects *[]byte, got %T", v)
+	}
+	*bytes = append((*bytes)[:0], data...)
+	return nil
+}
+
+func (rawProtoCodec) Name() string {
+	return "proto"
+}
+
+var _ encoding.Codec = rawProtoCodec{}
+
+func encodeConfirmPrimaryProfileRequest(ticket, platformAccountID, playerID string) []byte {
+	message := make([]byte, 0, len(ticket)+len(platformAccountID)+len(playerID)+8)
+	message = protowire.AppendTag(message, 1, protowire.BytesType)
+	message = protowire.AppendString(message, ticket)
+	message = protowire.AppendTag(message, 2, protowire.BytesType)
+	message = protowire.AppendString(message, platformAccountID)
+	message = protowire.AppendTag(message, 3, protowire.BytesType)
+	message = protowire.AppendString(message, playerID)
+	return message
 }
 
 func (s *PlatformService) getBindingSummary(ctx context.Context, ownerUserID, bindingID uint64) (map[string]any, bool, error) {

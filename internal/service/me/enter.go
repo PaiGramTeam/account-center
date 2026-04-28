@@ -27,6 +27,7 @@ var (
 	ErrInvalidTwoFactorCode        = errors.New("invalid verification code")
 	ErrEmailAlreadyAddedToAccount  = errors.New("email already added to this account")
 	ErrEmailAlreadyInUse           = errors.New("email already in use by another account")
+	ErrDisplayNameRequired         = errors.New("display_name must not be empty")
 )
 
 // ServiceGroup holds phase-two current-user services.

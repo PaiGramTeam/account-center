@@ -36,6 +36,7 @@ func TestPhaseTwoRouteGroupsExposeOnlyCurrentNamespaces(t *testing.T) {
 	}
 
 	require.Contains(t, routes, "GET /api/v1/me")
+	require.Contains(t, routes, "PATCH /api/v1/me")
 	require.Contains(t, routes, "GET /api/v1/me/dashboard-summary")
 	require.Contains(t, routes, "GET /api/v1/me/emails")
 	require.Contains(t, routes, "POST /api/v1/me/emails")
@@ -72,6 +73,7 @@ func TestPhaseTwoRouteGroupsExposeOnlyCurrentNamespaces(t *testing.T) {
 	require.Contains(t, routes, "PUT /api/v1/me/platform-accounts/:bindingId/credential")
 	require.Contains(t, routes, "POST /api/v1/me/platform-accounts/:bindingId/refresh")
 	require.Contains(t, routes, "GET /api/v1/me/platform-accounts/:bindingId/runtime-summary")
+	require.NotContains(t, routes, "GET /api/v1/me/platform-accounts/:bindingId/summary")
 	require.Contains(t, routes, "PUT /api/v1/admin/platform-accounts/:bindingId/credential")
 	require.Contains(t, routes, "GET /api/v1/admin/platform-accounts/:bindingId/runtime-summary")
 	require.NotContains(t, routes, "GET /api/v1/profiles/:id")

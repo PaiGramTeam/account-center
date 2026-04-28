@@ -30,6 +30,7 @@ func setupAuthorityHandlerTestDB(t *testing.T) *gorm.DB {
 		&model.RolePermission{},
 		&model.User{},
 		&model.UserRole{},
+		&model.AuditEvent{},
 	)
 }
 
@@ -101,4 +102,30 @@ func TestListAuthoritiesReturnsCanonicalPaginatedEnvelope(t *testing.T) {
 	assert.Equal(t, float64(1), pagination["page"])
 	assert.Equal(t, float64(10), pagination["page_size"])
 	assert.Equal(t, float64(1), pagination["total_pages"])
+}
+
+func TestCreateAuthorityWritesUnifiedAuditEvent(t *testing.T) {
+	db := setupAuthorityHandlerTestDB(t)
+	serviceGroup := serviceauthority.NewServiceGroup(db, nil)
+	handler := NewAuthorityHandler(&serviceGroup.AuthorityService)
+
+	body := bytes.NewBufferString(`{"name":"audited-role","description":"role with audit"}`)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/roles", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("X-Request-ID", "req-role-create")
+	c.Set("user_id", uint64(99))
+
+	handler.CreateAuthority(c)
+
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "authority", "authority_create").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "admin", event.ActorType)
+	assert.Equal(t, int64(99), event.ActorUserID.Int64)
+	assert.Equal(t, "role", event.TargetType)
+	assert.Equal(t, "success", event.Result)
+	assert.Equal(t, "req-role-create", event.RequestID)
 }

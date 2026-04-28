@@ -23,6 +23,7 @@ import (
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	serviceaudit "paigram/internal/service/audit"
 	serviceme "paigram/internal/service/me"
 	"paigram/internal/service/user"
 	"paigram/internal/sessioncache"
@@ -754,6 +755,16 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	}
 
 	response.Created(c, userData)
+	h.recordAdminUserAudit(c, serviceaudit.WriteInput{
+		Category:    "admin_user",
+		ActorType:   "admin",
+		ActorUserID: currentActorUserID(c),
+		Action:      "admin_user_create",
+		TargetType:  "user",
+		TargetID:    strconv.FormatUint(fullUser.ID, 10),
+		OwnerUserID: uint64Ptr(fullUser.ID),
+		Result:      "success",
+	})
 }
 
 // UpdateUser modifies user profile fields and locale.
@@ -861,6 +872,16 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	}
 
 	response.Success(c, userData)
+	h.recordAdminUserAudit(c, serviceaudit.WriteInput{
+		Category:    "admin_user",
+		ActorType:   "admin",
+		ActorUserID: currentActorUserID(c),
+		Action:      "admin_user_patch",
+		TargetType:  "user",
+		TargetID:    strconv.FormatUint(fullUser.ID, 10),
+		OwnerUserID: uint64Ptr(fullUser.ID),
+		Result:      "success",
+	})
 }
 
 // DeleteUser soft-deletes a user account, or hard-deletes if ?hard_delete=true.
@@ -978,6 +999,19 @@ func (h *Handler) UpdateUserStatus(c *gin.Context) {
 		"message": "user status updated successfully",
 		"status":  status,
 	})
+	h.recordAdminUserAudit(c, serviceaudit.WriteInput{
+		Category:    "admin_user",
+		ActorType:   "admin",
+		ActorUserID: currentActorUserID(c),
+		Action:      "admin_user_disable",
+		TargetType:  "user",
+		TargetID:    strconv.FormatUint(user.ID, 10),
+		OwnerUserID: uint64Ptr(user.ID),
+		Result:      "success",
+		Metadata: map[string]any{
+			"status": status,
+		},
+	})
 }
 
 // swagger:route POST /api/v1/admin/users/{id}/reset-password users resetUserPassword
@@ -1057,6 +1091,19 @@ func (h *Handler) ResetUserPassword(c *gin.Context) {
 
 	response.Success(c, gin.H{
 		"message": "password reset successfully",
+	})
+	h.recordAdminUserAudit(c, serviceaudit.WriteInput{
+		Category:    "admin_user",
+		ActorType:   "admin",
+		ActorUserID: currentActorUserID(c),
+		Action:      "admin_user_reset_password",
+		TargetType:  "user",
+		TargetID:    strconv.FormatUint(user.ID, 10),
+		OwnerUserID: uint64Ptr(user.ID),
+		Result:      "success",
+		Metadata: map[string]any{
+			"invalidate_sessions": req.InvalidateSessions,
+		},
 	})
 }
 
@@ -1260,6 +1307,20 @@ func (h *Handler) PutUserRoles(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"primary_role_id": nullableUserRoleID(updatedUser.PrimaryRoleID)})
+	h.recordAdminUserAudit(c, serviceaudit.WriteInput{
+		Category:    "admin_user",
+		ActorType:   "admin",
+		ActorUserID: uint64Ptr(actorUserID),
+		Action:      "admin_user_role_assignment",
+		TargetType:  "user",
+		TargetID:    strconv.FormatUint(targetUserID, 10),
+		OwnerUserID: uint64Ptr(targetUserID),
+		Result:      "success",
+		Metadata: map[string]any{
+			"role_ids":        req.RoleIDs,
+			"primary_role_id": req.PrimaryRoleID,
+		},
+	})
 }
 
 // PatchPrimaryRole updates a user's primary role.
@@ -1314,6 +1375,45 @@ func (h *Handler) PatchPrimaryRole(c *gin.Context) {
 	}
 
 	response.Success(c, gin.H{"primary_role_id": nullableUserRoleID(updatedUser.PrimaryRoleID)})
+	h.recordAdminUserAudit(c, serviceaudit.WriteInput{
+		Category:    "admin_user",
+		ActorType:   "admin",
+		ActorUserID: currentActorUserID(c),
+		Action:      "admin_user_primary_role_change",
+		TargetType:  "user",
+		TargetID:    strconv.FormatUint(targetUserID, 10),
+		OwnerUserID: uint64Ptr(targetUserID),
+		Result:      "success",
+		Metadata: map[string]any{
+			"clear":           clear,
+			"primary_role_id": req.PrimaryRoleID,
+		},
+	})
+}
+
+func (h *Handler) recordAdminUserAudit(c *gin.Context, input serviceaudit.WriteInput) {
+	if h.db == nil {
+		return
+	}
+	input.RequestID = c.GetHeader("X-Request-ID")
+	input.IP = c.ClientIP()
+	input.UserAgent = c.Request.UserAgent()
+	_ = serviceaudit.Record(c.Request.Context(), h.db, input)
+}
+
+func currentActorUserID(c *gin.Context) *uint64 {
+	userID, ok := middleware.GetUserID(c)
+	if !ok || userID == 0 {
+		return nil
+	}
+	return uint64Ptr(userID)
+}
+
+func uint64Ptr(value uint64) *uint64 {
+	if value == 0 {
+		return nil
+	}
+	return &value
 }
 
 // swagger:route GET /api/v1/admin/users/{id}/permissions users getUserPermissions

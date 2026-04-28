@@ -37,6 +37,7 @@ func setupTestDB(t *testing.T) *gorm.DB {
 		&model.Permission{},
 		&model.UserRole{},
 		&model.RolePermission{},
+		&model.AuditEvent{},
 	)
 
 	return db
@@ -305,6 +306,39 @@ func TestHandler_CreateUser(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_CreateUserWritesUnifiedAuditEvent(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := bytes.NewBufferString(`{"email":"audit-create@example.com","password":"TestPass123!","display_name":"Audit Create","primary_login_type":"email"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/users", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("X-Request-ID", "req-admin-user-create")
+	c.Set("user_id", uint64(42))
+
+	handler.CreateUser(c)
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "admin_user", "admin_user_create").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "admin", event.ActorType)
+	assert.Equal(t, int64(42), event.ActorUserID.Int64)
+	assert.Equal(t, "user", event.TargetType)
+	assert.Equal(t, "success", event.Result)
+	assert.Equal(t, "req-admin-user-create", event.RequestID)
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(event.MetadataJSON), &metadata))
+	owner, ok := metadata["owner"].(map[string]any)
+	require.True(t, ok)
+	targetID, err := strconv.ParseUint(event.TargetID, 10, 64)
+	require.NoError(t, err)
+	assert.Equal(t, float64(targetID), owner["user_id"])
 }
 
 func TestHandler_ListUsers(t *testing.T) {

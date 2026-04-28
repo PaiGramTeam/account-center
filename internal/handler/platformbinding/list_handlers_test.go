@@ -26,6 +26,10 @@ import (
 
 type noopOrchestrationService struct{}
 
+func (noopOrchestrationService) CreateBindingForOwner(_ context.Context, _ serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error) {
+	return nil, nil
+}
+
 func (noopOrchestrationService) PutCredentialForOwner(_ context.Context, _ serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error) {
 	return nil, nil
 }
@@ -38,8 +42,20 @@ func (noopOrchestrationService) RefreshBindingForOwner(_ context.Context, _ uint
 	return nil, nil
 }
 
-func (noopOrchestrationService) RefreshBindingAsAdmin(_ context.Context, _ uint64) (*model.PlatformAccountBinding, error) {
+func (noopOrchestrationService) SetPrimaryProfileForOwner(_ context.Context, _ uint64, _ uint64, _ uint64, _ string) (*model.PlatformAccountBinding, error) {
 	return nil, nil
+}
+
+func (noopOrchestrationService) DeleteBindingForOwner(_ context.Context, _ uint64, _ uint64) error {
+	return nil
+}
+
+func (noopOrchestrationService) RefreshBindingAsAdmin(_ context.Context, _ uint64, _ uint64) (*model.PlatformAccountBinding, error) {
+	return nil, nil
+}
+
+func (noopOrchestrationService) DeleteBindingAsAdmin(_ context.Context, _ uint64, _ uint64) error {
+	return nil
 }
 
 type noopRuntimeSummaryService struct{}
@@ -381,6 +397,7 @@ func setupPlatformBindingHandlerTestDB(t *testing.T) *gorm.DB {
 		"000036_create_platform_account_profiles_table.up.sql",
 		"000037_create_consumer_grants_table.up.sql",
 		"000038_alter_platform_account_bindings_for_phase_two.up.sql",
+		"000044_add_scopes_json_to_consumer_grants.up.sql",
 	} {
 		require.NoError(t, db.Exec(readPlatformBindingHandlerMigration(t, fileName)).Error)
 	}

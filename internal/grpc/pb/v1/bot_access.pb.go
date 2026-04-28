@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.34.0
-// source: proto/paigram/v1/bot_access.proto
+// source: bot_access.proto
 
 package pb
 
@@ -58,11 +58,11 @@ func (x PlatformAccountStatus) String() string {
 }
 
 func (PlatformAccountStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_paigram_v1_bot_access_proto_enumTypes[0].Descriptor()
+	return file_bot_access_proto_enumTypes[0].Descriptor()
 }
 
 func (PlatformAccountStatus) Type() protoreflect.EnumType {
-	return &file_proto_paigram_v1_bot_access_proto_enumTypes[0]
+	return &file_bot_access_proto_enumTypes[0]
 }
 
 func (x PlatformAccountStatus) Number() protoreflect.EnumNumber {
@@ -71,10 +71,10 @@ func (x PlatformAccountStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PlatformAccountStatus.Descriptor instead.
 func (PlatformAccountStatus) EnumDescriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{0}
+	return file_bot_access_proto_rawDescGZIP(), []int{0}
 }
 
-type PlatformAccountRef struct {
+type PlatformAccountBinding struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	Id                 uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
 	UserId             uint64                 `protobuf:"varint,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
@@ -90,21 +90,21 @@ type PlatformAccountRef struct {
 	sizeCache          protoimpl.SizeCache
 }
 
-func (x *PlatformAccountRef) Reset() {
-	*x = PlatformAccountRef{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[0]
+func (x *PlatformAccountBinding) Reset() {
+	*x = PlatformAccountBinding{}
+	mi := &file_bot_access_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *PlatformAccountRef) String() string {
+func (x *PlatformAccountBinding) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*PlatformAccountRef) ProtoMessage() {}
+func (*PlatformAccountBinding) ProtoMessage() {}
 
-func (x *PlatformAccountRef) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[0]
+func (x *PlatformAccountBinding) ProtoReflect() protoreflect.Message {
+	mi := &file_bot_access_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -115,75 +115,75 @@ func (x *PlatformAccountRef) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use PlatformAccountRef.ProtoReflect.Descriptor instead.
-func (*PlatformAccountRef) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{0}
+// Deprecated: Use PlatformAccountBinding.ProtoReflect.Descriptor instead.
+func (*PlatformAccountBinding) Descriptor() ([]byte, []int) {
+	return file_bot_access_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *PlatformAccountRef) GetId() uint64 {
+func (x *PlatformAccountBinding) GetId() uint64 {
 	if x != nil {
 		return x.Id
 	}
 	return 0
 }
 
-func (x *PlatformAccountRef) GetUserId() uint64 {
+func (x *PlatformAccountBinding) GetUserId() uint64 {
 	if x != nil {
 		return x.UserId
 	}
 	return 0
 }
 
-func (x *PlatformAccountRef) GetPlatform() string {
+func (x *PlatformAccountBinding) GetPlatform() string {
 	if x != nil {
 		return x.Platform
 	}
 	return ""
 }
 
-func (x *PlatformAccountRef) GetPlatformServiceKey() string {
+func (x *PlatformAccountBinding) GetPlatformServiceKey() string {
 	if x != nil {
 		return x.PlatformServiceKey
 	}
 	return ""
 }
 
-func (x *PlatformAccountRef) GetPlatformAccountId() string {
+func (x *PlatformAccountBinding) GetPlatformAccountId() string {
 	if x != nil {
 		return x.PlatformAccountId
 	}
 	return ""
 }
 
-func (x *PlatformAccountRef) GetDisplayName() string {
+func (x *PlatformAccountBinding) GetDisplayName() string {
 	if x != nil {
 		return x.DisplayName
 	}
 	return ""
 }
 
-func (x *PlatformAccountRef) GetStatus() PlatformAccountStatus {
+func (x *PlatformAccountBinding) GetStatus() PlatformAccountStatus {
 	if x != nil {
 		return x.Status
 	}
 	return PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_UNSPECIFIED
 }
 
-func (x *PlatformAccountRef) GetMetaJson() string {
+func (x *PlatformAccountBinding) GetMetaJson() string {
 	if x != nil {
 		return x.MetaJson
 	}
 	return ""
 }
 
-func (x *PlatformAccountRef) GetCreatedAt() *timestamppb.Timestamp {
+func (x *PlatformAccountBinding) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
 	}
 	return nil
 }
 
-func (x *PlatformAccountRef) GetUpdatedAt() *timestamppb.Timestamp {
+func (x *PlatformAccountBinding) GetUpdatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.UpdatedAt
 	}
@@ -199,7 +199,7 @@ type ResolveBotUserRequest struct {
 
 func (x *ResolveBotUserRequest) Reset() {
 	*x = ResolveBotUserRequest{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[1]
+	mi := &file_bot_access_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -211,7 +211,7 @@ func (x *ResolveBotUserRequest) String() string {
 func (*ResolveBotUserRequest) ProtoMessage() {}
 
 func (x *ResolveBotUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[1]
+	mi := &file_bot_access_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -224,7 +224,7 @@ func (x *ResolveBotUserRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBotUserRequest.ProtoReflect.Descriptor instead.
 func (*ResolveBotUserRequest) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{1}
+	return file_bot_access_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *ResolveBotUserRequest) GetExternalUserId() string {
@@ -246,7 +246,7 @@ type ResolveBotUserResponse struct {
 
 func (x *ResolveBotUserResponse) Reset() {
 	*x = ResolveBotUserResponse{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[2]
+	mi := &file_bot_access_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -258,7 +258,7 @@ func (x *ResolveBotUserResponse) String() string {
 func (*ResolveBotUserResponse) ProtoMessage() {}
 
 func (x *ResolveBotUserResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[2]
+	mi := &file_bot_access_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -271,7 +271,7 @@ func (x *ResolveBotUserResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveBotUserResponse.ProtoReflect.Descriptor instead.
 func (*ResolveBotUserResponse) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{2}
+	return file_bot_access_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ResolveBotUserResponse) GetUserId() uint64 {
@@ -302,7 +302,7 @@ func (x *ResolveBotUserResponse) GetExternalUsername() string {
 	return ""
 }
 
-type LinkPlatformAccountRequest struct {
+type UpsertPlatformBindingRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	ExternalUserId     string                 `protobuf:"bytes,1,opt,name=external_user_id,json=externalUserId,proto3" json:"external_user_id,omitempty"`
 	Platform           string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
@@ -315,21 +315,21 @@ type LinkPlatformAccountRequest struct {
 	sizeCache          protoimpl.SizeCache
 }
 
-func (x *LinkPlatformAccountRequest) Reset() {
-	*x = LinkPlatformAccountRequest{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[3]
+func (x *UpsertPlatformBindingRequest) Reset() {
+	*x = UpsertPlatformBindingRequest{}
+	mi := &file_bot_access_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *LinkPlatformAccountRequest) String() string {
+func (x *UpsertPlatformBindingRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*LinkPlatformAccountRequest) ProtoMessage() {}
+func (*UpsertPlatformBindingRequest) ProtoMessage() {}
 
-func (x *LinkPlatformAccountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[3]
+func (x *UpsertPlatformBindingRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bot_access_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -340,83 +340,83 @@ func (x *LinkPlatformAccountRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use LinkPlatformAccountRequest.ProtoReflect.Descriptor instead.
-func (*LinkPlatformAccountRequest) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{3}
+// Deprecated: Use UpsertPlatformBindingRequest.ProtoReflect.Descriptor instead.
+func (*UpsertPlatformBindingRequest) Descriptor() ([]byte, []int) {
+	return file_bot_access_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *LinkPlatformAccountRequest) GetExternalUserId() string {
+func (x *UpsertPlatformBindingRequest) GetExternalUserId() string {
 	if x != nil {
 		return x.ExternalUserId
 	}
 	return ""
 }
 
-func (x *LinkPlatformAccountRequest) GetPlatform() string {
+func (x *UpsertPlatformBindingRequest) GetPlatform() string {
 	if x != nil {
 		return x.Platform
 	}
 	return ""
 }
 
-func (x *LinkPlatformAccountRequest) GetPlatformServiceKey() string {
+func (x *UpsertPlatformBindingRequest) GetPlatformServiceKey() string {
 	if x != nil {
 		return x.PlatformServiceKey
 	}
 	return ""
 }
 
-func (x *LinkPlatformAccountRequest) GetPlatformAccountId() string {
+func (x *UpsertPlatformBindingRequest) GetPlatformAccountId() string {
 	if x != nil {
 		return x.PlatformAccountId
 	}
 	return ""
 }
 
-func (x *LinkPlatformAccountRequest) GetDisplayName() string {
+func (x *UpsertPlatformBindingRequest) GetDisplayName() string {
 	if x != nil {
 		return x.DisplayName
 	}
 	return ""
 }
 
-func (x *LinkPlatformAccountRequest) GetMetaJson() string {
+func (x *UpsertPlatformBindingRequest) GetMetaJson() string {
 	if x != nil {
 		return x.MetaJson
 	}
 	return ""
 }
 
-func (x *LinkPlatformAccountRequest) GetGrantScopes() []string {
+func (x *UpsertPlatformBindingRequest) GetGrantScopes() []string {
 	if x != nil {
 		return x.GrantScopes
 	}
 	return nil
 }
 
-type LinkPlatformAccountResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Account       *PlatformAccountRef    `protobuf:"bytes,1,opt,name=account,proto3" json:"account,omitempty"`
-	Created       bool                   `protobuf:"varint,2,opt,name=created,proto3" json:"created,omitempty"`
+type UpsertPlatformBindingResponse struct {
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Binding       *PlatformAccountBinding `protobuf:"bytes,1,opt,name=binding,proto3" json:"binding,omitempty"`
+	Created       bool                    `protobuf:"varint,2,opt,name=created,proto3" json:"created,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *LinkPlatformAccountResponse) Reset() {
-	*x = LinkPlatformAccountResponse{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[4]
+func (x *UpsertPlatformBindingResponse) Reset() {
+	*x = UpsertPlatformBindingResponse{}
+	mi := &file_bot_access_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *LinkPlatformAccountResponse) String() string {
+func (x *UpsertPlatformBindingResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*LinkPlatformAccountResponse) ProtoMessage() {}
+func (*UpsertPlatformBindingResponse) ProtoMessage() {}
 
-func (x *LinkPlatformAccountResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[4]
+func (x *UpsertPlatformBindingResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bot_access_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -427,26 +427,26 @@ func (x *LinkPlatformAccountResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use LinkPlatformAccountResponse.ProtoReflect.Descriptor instead.
-func (*LinkPlatformAccountResponse) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{4}
+// Deprecated: Use UpsertPlatformBindingResponse.ProtoReflect.Descriptor instead.
+func (*UpsertPlatformBindingResponse) Descriptor() ([]byte, []int) {
+	return file_bot_access_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *LinkPlatformAccountResponse) GetAccount() *PlatformAccountRef {
+func (x *UpsertPlatformBindingResponse) GetBinding() *PlatformAccountBinding {
 	if x != nil {
-		return x.Account
+		return x.Binding
 	}
 	return nil
 }
 
-func (x *LinkPlatformAccountResponse) GetCreated() bool {
+func (x *UpsertPlatformBindingResponse) GetCreated() bool {
 	if x != nil {
 		return x.Created
 	}
 	return false
 }
 
-type ListAccessibleAccountsRequest struct {
+type ListAccessibleBindingsRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ExternalUserId string                 `protobuf:"bytes,1,opt,name=external_user_id,json=externalUserId,proto3" json:"external_user_id,omitempty"`
 	Platform       string                 `protobuf:"bytes,2,opt,name=platform,proto3" json:"platform,omitempty"`
@@ -454,21 +454,21 @@ type ListAccessibleAccountsRequest struct {
 	sizeCache      protoimpl.SizeCache
 }
 
-func (x *ListAccessibleAccountsRequest) Reset() {
-	*x = ListAccessibleAccountsRequest{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[5]
+func (x *ListAccessibleBindingsRequest) Reset() {
+	*x = ListAccessibleBindingsRequest{}
+	mi := &file_bot_access_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListAccessibleAccountsRequest) String() string {
+func (x *ListAccessibleBindingsRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListAccessibleAccountsRequest) ProtoMessage() {}
+func (*ListAccessibleBindingsRequest) ProtoMessage() {}
 
-func (x *ListAccessibleAccountsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[5]
+func (x *ListAccessibleBindingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_bot_access_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -479,47 +479,47 @@ func (x *ListAccessibleAccountsRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListAccessibleAccountsRequest.ProtoReflect.Descriptor instead.
-func (*ListAccessibleAccountsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{5}
+// Deprecated: Use ListAccessibleBindingsRequest.ProtoReflect.Descriptor instead.
+func (*ListAccessibleBindingsRequest) Descriptor() ([]byte, []int) {
+	return file_bot_access_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *ListAccessibleAccountsRequest) GetExternalUserId() string {
+func (x *ListAccessibleBindingsRequest) GetExternalUserId() string {
 	if x != nil {
 		return x.ExternalUserId
 	}
 	return ""
 }
 
-func (x *ListAccessibleAccountsRequest) GetPlatform() string {
+func (x *ListAccessibleBindingsRequest) GetPlatform() string {
 	if x != nil {
 		return x.Platform
 	}
 	return ""
 }
 
-type ListAccessibleAccountsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accounts      []*PlatformAccountRef  `protobuf:"bytes,1,rep,name=accounts,proto3" json:"accounts,omitempty"`
+type ListAccessibleBindingsResponse struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Bindings      []*PlatformAccountBinding `protobuf:"bytes,1,rep,name=bindings,proto3" json:"bindings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ListAccessibleAccountsResponse) Reset() {
-	*x = ListAccessibleAccountsResponse{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[6]
+func (x *ListAccessibleBindingsResponse) Reset() {
+	*x = ListAccessibleBindingsResponse{}
+	mi := &file_bot_access_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ListAccessibleAccountsResponse) String() string {
+func (x *ListAccessibleBindingsResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ListAccessibleAccountsResponse) ProtoMessage() {}
+func (*ListAccessibleBindingsResponse) ProtoMessage() {}
 
-func (x *ListAccessibleAccountsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[6]
+func (x *ListAccessibleBindingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_bot_access_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -530,31 +530,32 @@ func (x *ListAccessibleAccountsResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ListAccessibleAccountsResponse.ProtoReflect.Descriptor instead.
-func (*ListAccessibleAccountsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{6}
+// Deprecated: Use ListAccessibleBindingsResponse.ProtoReflect.Descriptor instead.
+func (*ListAccessibleBindingsResponse) Descriptor() ([]byte, []int) {
+	return file_bot_access_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *ListAccessibleAccountsResponse) GetAccounts() []*PlatformAccountRef {
+func (x *ListAccessibleBindingsResponse) GetBindings() []*PlatformAccountBinding {
 	if x != nil {
-		return x.Accounts
+		return x.Bindings
 	}
 	return nil
 }
 
 type IssueServiceTicketRequest struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	ExternalUserId       string                 `protobuf:"bytes,1,opt,name=external_user_id,json=externalUserId,proto3" json:"external_user_id,omitempty"`
-	PlatformAccountRefId uint64                 `protobuf:"varint,2,opt,name=platform_account_ref_id,json=platformAccountRefId,proto3" json:"platform_account_ref_id,omitempty"`
-	RequestedScopes      []string               `protobuf:"bytes,3,rep,name=requested_scopes,json=requestedScopes,proto3" json:"requested_scopes,omitempty"`
-	Audience             string                 `protobuf:"bytes,4,opt,name=audience,proto3" json:"audience,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ExternalUserId  string                 `protobuf:"bytes,1,opt,name=external_user_id,json=externalUserId,proto3" json:"external_user_id,omitempty"`
+	BindingId       uint64                 `protobuf:"varint,2,opt,name=binding_id,json=bindingId,proto3" json:"binding_id,omitempty"`
+	RequestedScopes []string               `protobuf:"bytes,3,rep,name=requested_scopes,json=requestedScopes,proto3" json:"requested_scopes,omitempty"`
+	Audience        string                 `protobuf:"bytes,4,opt,name=audience,proto3" json:"audience,omitempty"`
+	ProfileId       uint64                 `protobuf:"varint,5,opt,name=profile_id,json=profileId,proto3" json:"profile_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *IssueServiceTicketRequest) Reset() {
 	*x = IssueServiceTicketRequest{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[7]
+	mi := &file_bot_access_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -566,7 +567,7 @@ func (x *IssueServiceTicketRequest) String() string {
 func (*IssueServiceTicketRequest) ProtoMessage() {}
 
 func (x *IssueServiceTicketRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[7]
+	mi := &file_bot_access_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -579,7 +580,7 @@ func (x *IssueServiceTicketRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueServiceTicketRequest.ProtoReflect.Descriptor instead.
 func (*IssueServiceTicketRequest) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{7}
+	return file_bot_access_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *IssueServiceTicketRequest) GetExternalUserId() string {
@@ -589,9 +590,9 @@ func (x *IssueServiceTicketRequest) GetExternalUserId() string {
 	return ""
 }
 
-func (x *IssueServiceTicketRequest) GetPlatformAccountRefId() uint64 {
+func (x *IssueServiceTicketRequest) GetBindingId() uint64 {
 	if x != nil {
-		return x.PlatformAccountRefId
+		return x.BindingId
 	}
 	return 0
 }
@@ -610,19 +611,26 @@ func (x *IssueServiceTicketRequest) GetAudience() string {
 	return ""
 }
 
+func (x *IssueServiceTicketRequest) GetProfileId() uint64 {
+	if x != nil {
+		return x.ProfileId
+	}
+	return 0
+}
+
 type IssueServiceTicketResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ticket        string                 `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
-	Audience      string                 `protobuf:"bytes,2,opt,name=audience,proto3" json:"audience,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	Account       *PlatformAccountRef    `protobuf:"bytes,4,opt,name=account,proto3" json:"account,omitempty"`
+	state         protoimpl.MessageState  `protogen:"open.v1"`
+	Ticket        string                  `protobuf:"bytes,1,opt,name=ticket,proto3" json:"ticket,omitempty"`
+	Audience      string                  `protobuf:"bytes,2,opt,name=audience,proto3" json:"audience,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp  `protobuf:"bytes,3,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Binding       *PlatformAccountBinding `protobuf:"bytes,4,opt,name=binding,proto3" json:"binding,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *IssueServiceTicketResponse) Reset() {
 	*x = IssueServiceTicketResponse{}
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[8]
+	mi := &file_bot_access_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -634,7 +642,7 @@ func (x *IssueServiceTicketResponse) String() string {
 func (*IssueServiceTicketResponse) ProtoMessage() {}
 
 func (x *IssueServiceTicketResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_paigram_v1_bot_access_proto_msgTypes[8]
+	mi := &file_bot_access_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -647,7 +655,7 @@ func (x *IssueServiceTicketResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IssueServiceTicketResponse.ProtoReflect.Descriptor instead.
 func (*IssueServiceTicketResponse) Descriptor() ([]byte, []int) {
-	return file_proto_paigram_v1_bot_access_proto_rawDescGZIP(), []int{8}
+	return file_bot_access_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *IssueServiceTicketResponse) GetTicket() string {
@@ -671,20 +679,20 @@ func (x *IssueServiceTicketResponse) GetExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *IssueServiceTicketResponse) GetAccount() *PlatformAccountRef {
+func (x *IssueServiceTicketResponse) GetBinding() *PlatformAccountBinding {
 	if x != nil {
-		return x.Account
+		return x.Binding
 	}
 	return nil
 }
 
-var File_proto_paigram_v1_bot_access_proto protoreflect.FileDescriptor
+var File_bot_access_proto protoreflect.FileDescriptor
 
-const file_proto_paigram_v1_bot_access_proto_rawDesc = "" +
+const file_bot_access_proto_rawDesc = "" +
 	"\n" +
-	"!proto/paigram/v1/bot_access.proto\x12\n" +
-	"paigram.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xac\x03\n" +
-	"\x12PlatformAccountRef\x12\x0e\n" +
+	"\x10bot_access.proto\x12\n" +
+	"paigram.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb0\x03\n" +
+	"\x16PlatformAccountBinding\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x04R\x06userId\x12\x1a\n" +
 	"\bplatform\x18\x03 \x01(\tR\bplatform\x120\n" +
@@ -704,87 +712,90 @@ const file_proto_paigram_v1_bot_access_proto_rawDesc = "" +
 	"\auser_id\x18\x01 \x01(\x04R\x06userId\x12\x15\n" +
 	"\x06bot_id\x18\x02 \x01(\tR\x05botId\x12(\n" +
 	"\x10external_user_id\x18\x03 \x01(\tR\x0eexternalUserId\x12+\n" +
-	"\x11external_username\x18\x04 \x01(\tR\x10externalUsername\"\xa7\x02\n" +
-	"\x1aLinkPlatformAccountRequest\x12(\n" +
+	"\x11external_username\x18\x04 \x01(\tR\x10externalUsername\"\xa9\x02\n" +
+	"\x1cUpsertPlatformBindingRequest\x12(\n" +
 	"\x10external_user_id\x18\x01 \x01(\tR\x0eexternalUserId\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x120\n" +
 	"\x14platform_service_key\x18\x03 \x01(\tR\x12platformServiceKey\x12.\n" +
 	"\x13platform_account_id\x18\x04 \x01(\tR\x11platformAccountId\x12!\n" +
 	"\fdisplay_name\x18\x05 \x01(\tR\vdisplayName\x12\x1b\n" +
 	"\tmeta_json\x18\x06 \x01(\tR\bmetaJson\x12!\n" +
-	"\fgrant_scopes\x18\a \x03(\tR\vgrantScopes\"q\n" +
-	"\x1bLinkPlatformAccountResponse\x128\n" +
-	"\aaccount\x18\x01 \x01(\v2\x1e.paigram.v1.PlatformAccountRefR\aaccount\x12\x18\n" +
+	"\fgrant_scopes\x18\a \x03(\tR\vgrantScopes\"w\n" +
+	"\x1dUpsertPlatformBindingResponse\x12<\n" +
+	"\abinding\x18\x01 \x01(\v2\".paigram.v1.PlatformAccountBindingR\abinding\x12\x18\n" +
 	"\acreated\x18\x02 \x01(\bR\acreated\"e\n" +
-	"\x1dListAccessibleAccountsRequest\x12(\n" +
+	"\x1dListAccessibleBindingsRequest\x12(\n" +
 	"\x10external_user_id\x18\x01 \x01(\tR\x0eexternalUserId\x12\x1a\n" +
-	"\bplatform\x18\x02 \x01(\tR\bplatform\"\\\n" +
-	"\x1eListAccessibleAccountsResponse\x12:\n" +
-	"\baccounts\x18\x01 \x03(\v2\x1e.paigram.v1.PlatformAccountRefR\baccounts\"\xc3\x01\n" +
+	"\bplatform\x18\x02 \x01(\tR\bplatform\"`\n" +
+	"\x1eListAccessibleBindingsResponse\x12>\n" +
+	"\bbindings\x18\x01 \x03(\v2\".paigram.v1.PlatformAccountBindingR\bbindings\"\xca\x01\n" +
 	"\x19IssueServiceTicketRequest\x12(\n" +
-	"\x10external_user_id\x18\x01 \x01(\tR\x0eexternalUserId\x125\n" +
-	"\x17platform_account_ref_id\x18\x02 \x01(\x04R\x14platformAccountRefId\x12)\n" +
+	"\x10external_user_id\x18\x01 \x01(\tR\x0eexternalUserId\x12\x1d\n" +
+	"\n" +
+	"binding_id\x18\x02 \x01(\x04R\tbindingId\x12)\n" +
 	"\x10requested_scopes\x18\x03 \x03(\tR\x0frequestedScopes\x12\x1a\n" +
-	"\baudience\x18\x04 \x01(\tR\baudience\"\xc5\x01\n" +
+	"\baudience\x18\x04 \x01(\tR\baudience\x12\x1d\n" +
+	"\n" +
+	"profile_id\x18\x05 \x01(\x04R\tprofileId\"\xc9\x01\n" +
 	"\x1aIssueServiceTicketResponse\x12\x16\n" +
 	"\x06ticket\x18\x01 \x01(\tR\x06ticket\x12\x1a\n" +
 	"\baudience\x18\x02 \x01(\tR\baudience\x129\n" +
 	"\n" +
-	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x128\n" +
-	"\aaccount\x18\x04 \x01(\v2\x1e.paigram.v1.PlatformAccountRefR\aaccount*\xaf\x01\n" +
+	"expires_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12<\n" +
+	"\abinding\x18\x04 \x01(\v2\".paigram.v1.PlatformAccountBindingR\abinding*\xaf\x01\n" +
 	"\x15PlatformAccountStatus\x12'\n" +
 	"#PLATFORM_ACCOUNT_STATUS_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1ePLATFORM_ACCOUNT_STATUS_ACTIVE\x10\x01\x12$\n" +
 	" PLATFORM_ACCOUNT_STATUS_INACTIVE\x10\x02\x12#\n" +
-	"\x1fPLATFORM_ACCOUNT_STATUS_REVOKED\x10\x032\xa9\x03\n" +
+	"\x1fPLATFORM_ACCOUNT_STATUS_REVOKED\x10\x032\xaf\x03\n" +
 	"\x10BotAccessService\x12W\n" +
-	"\x0eResolveBotUser\x12!.paigram.v1.ResolveBotUserRequest\x1a\".paigram.v1.ResolveBotUserResponse\x12f\n" +
-	"\x13LinkPlatformAccount\x12&.paigram.v1.LinkPlatformAccountRequest\x1a'.paigram.v1.LinkPlatformAccountResponse\x12o\n" +
-	"\x16ListAccessibleAccounts\x12).paigram.v1.ListAccessibleAccountsRequest\x1a*.paigram.v1.ListAccessibleAccountsResponse\x12c\n" +
+	"\x0eResolveBotUser\x12!.paigram.v1.ResolveBotUserRequest\x1a\".paigram.v1.ResolveBotUserResponse\x12l\n" +
+	"\x15UpsertPlatformBinding\x12(.paigram.v1.UpsertPlatformBindingRequest\x1a).paigram.v1.UpsertPlatformBindingResponse\x12o\n" +
+	"\x16ListAccessibleBindings\x12).paigram.v1.ListAccessibleBindingsRequest\x1a*.paigram.v1.ListAccessibleBindingsResponse\x12c\n" +
 	"\x12IssueServiceTicket\x12%.paigram.v1.IssueServiceTicketRequest\x1a&.paigram.v1.IssueServiceTicketResponseB Z\x1epaigram/internal/grpc/pb/v1;pbb\x06proto3"
 
 var (
-	file_proto_paigram_v1_bot_access_proto_rawDescOnce sync.Once
-	file_proto_paigram_v1_bot_access_proto_rawDescData []byte
+	file_bot_access_proto_rawDescOnce sync.Once
+	file_bot_access_proto_rawDescData []byte
 )
 
-func file_proto_paigram_v1_bot_access_proto_rawDescGZIP() []byte {
-	file_proto_paigram_v1_bot_access_proto_rawDescOnce.Do(func() {
-		file_proto_paigram_v1_bot_access_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_paigram_v1_bot_access_proto_rawDesc), len(file_proto_paigram_v1_bot_access_proto_rawDesc)))
+func file_bot_access_proto_rawDescGZIP() []byte {
+	file_bot_access_proto_rawDescOnce.Do(func() {
+		file_bot_access_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_bot_access_proto_rawDesc), len(file_bot_access_proto_rawDesc)))
 	})
-	return file_proto_paigram_v1_bot_access_proto_rawDescData
+	return file_bot_access_proto_rawDescData
 }
 
-var file_proto_paigram_v1_bot_access_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_paigram_v1_bot_access_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
-var file_proto_paigram_v1_bot_access_proto_goTypes = []any{
+var file_bot_access_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_bot_access_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_bot_access_proto_goTypes = []any{
 	(PlatformAccountStatus)(0),             // 0: paigram.v1.PlatformAccountStatus
-	(*PlatformAccountRef)(nil),             // 1: paigram.v1.PlatformAccountRef
+	(*PlatformAccountBinding)(nil),         // 1: paigram.v1.PlatformAccountBinding
 	(*ResolveBotUserRequest)(nil),          // 2: paigram.v1.ResolveBotUserRequest
 	(*ResolveBotUserResponse)(nil),         // 3: paigram.v1.ResolveBotUserResponse
-	(*LinkPlatformAccountRequest)(nil),     // 4: paigram.v1.LinkPlatformAccountRequest
-	(*LinkPlatformAccountResponse)(nil),    // 5: paigram.v1.LinkPlatformAccountResponse
-	(*ListAccessibleAccountsRequest)(nil),  // 6: paigram.v1.ListAccessibleAccountsRequest
-	(*ListAccessibleAccountsResponse)(nil), // 7: paigram.v1.ListAccessibleAccountsResponse
+	(*UpsertPlatformBindingRequest)(nil),   // 4: paigram.v1.UpsertPlatformBindingRequest
+	(*UpsertPlatformBindingResponse)(nil),  // 5: paigram.v1.UpsertPlatformBindingResponse
+	(*ListAccessibleBindingsRequest)(nil),  // 6: paigram.v1.ListAccessibleBindingsRequest
+	(*ListAccessibleBindingsResponse)(nil), // 7: paigram.v1.ListAccessibleBindingsResponse
 	(*IssueServiceTicketRequest)(nil),      // 8: paigram.v1.IssueServiceTicketRequest
 	(*IssueServiceTicketResponse)(nil),     // 9: paigram.v1.IssueServiceTicketResponse
 	(*timestamppb.Timestamp)(nil),          // 10: google.protobuf.Timestamp
 }
-var file_proto_paigram_v1_bot_access_proto_depIdxs = []int32{
-	0,  // 0: paigram.v1.PlatformAccountRef.status:type_name -> paigram.v1.PlatformAccountStatus
-	10, // 1: paigram.v1.PlatformAccountRef.created_at:type_name -> google.protobuf.Timestamp
-	10, // 2: paigram.v1.PlatformAccountRef.updated_at:type_name -> google.protobuf.Timestamp
-	1,  // 3: paigram.v1.LinkPlatformAccountResponse.account:type_name -> paigram.v1.PlatformAccountRef
-	1,  // 4: paigram.v1.ListAccessibleAccountsResponse.accounts:type_name -> paigram.v1.PlatformAccountRef
+var file_bot_access_proto_depIdxs = []int32{
+	0,  // 0: paigram.v1.PlatformAccountBinding.status:type_name -> paigram.v1.PlatformAccountStatus
+	10, // 1: paigram.v1.PlatformAccountBinding.created_at:type_name -> google.protobuf.Timestamp
+	10, // 2: paigram.v1.PlatformAccountBinding.updated_at:type_name -> google.protobuf.Timestamp
+	1,  // 3: paigram.v1.UpsertPlatformBindingResponse.binding:type_name -> paigram.v1.PlatformAccountBinding
+	1,  // 4: paigram.v1.ListAccessibleBindingsResponse.bindings:type_name -> paigram.v1.PlatformAccountBinding
 	10, // 5: paigram.v1.IssueServiceTicketResponse.expires_at:type_name -> google.protobuf.Timestamp
-	1,  // 6: paigram.v1.IssueServiceTicketResponse.account:type_name -> paigram.v1.PlatformAccountRef
+	1,  // 6: paigram.v1.IssueServiceTicketResponse.binding:type_name -> paigram.v1.PlatformAccountBinding
 	2,  // 7: paigram.v1.BotAccessService.ResolveBotUser:input_type -> paigram.v1.ResolveBotUserRequest
-	4,  // 8: paigram.v1.BotAccessService.LinkPlatformAccount:input_type -> paigram.v1.LinkPlatformAccountRequest
-	6,  // 9: paigram.v1.BotAccessService.ListAccessibleAccounts:input_type -> paigram.v1.ListAccessibleAccountsRequest
+	4,  // 8: paigram.v1.BotAccessService.UpsertPlatformBinding:input_type -> paigram.v1.UpsertPlatformBindingRequest
+	6,  // 9: paigram.v1.BotAccessService.ListAccessibleBindings:input_type -> paigram.v1.ListAccessibleBindingsRequest
 	8,  // 10: paigram.v1.BotAccessService.IssueServiceTicket:input_type -> paigram.v1.IssueServiceTicketRequest
 	3,  // 11: paigram.v1.BotAccessService.ResolveBotUser:output_type -> paigram.v1.ResolveBotUserResponse
-	5,  // 12: paigram.v1.BotAccessService.LinkPlatformAccount:output_type -> paigram.v1.LinkPlatformAccountResponse
-	7,  // 13: paigram.v1.BotAccessService.ListAccessibleAccounts:output_type -> paigram.v1.ListAccessibleAccountsResponse
+	5,  // 12: paigram.v1.BotAccessService.UpsertPlatformBinding:output_type -> paigram.v1.UpsertPlatformBindingResponse
+	7,  // 13: paigram.v1.BotAccessService.ListAccessibleBindings:output_type -> paigram.v1.ListAccessibleBindingsResponse
 	9,  // 14: paigram.v1.BotAccessService.IssueServiceTicket:output_type -> paigram.v1.IssueServiceTicketResponse
 	11, // [11:15] is the sub-list for method output_type
 	7,  // [7:11] is the sub-list for method input_type
@@ -793,27 +804,27 @@ var file_proto_paigram_v1_bot_access_proto_depIdxs = []int32{
 	0,  // [0:7] is the sub-list for field type_name
 }
 
-func init() { file_proto_paigram_v1_bot_access_proto_init() }
-func file_proto_paigram_v1_bot_access_proto_init() {
-	if File_proto_paigram_v1_bot_access_proto != nil {
+func init() { file_bot_access_proto_init() }
+func file_bot_access_proto_init() {
+	if File_bot_access_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_paigram_v1_bot_access_proto_rawDesc), len(file_proto_paigram_v1_bot_access_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_bot_access_proto_rawDesc), len(file_bot_access_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_paigram_v1_bot_access_proto_goTypes,
-		DependencyIndexes: file_proto_paigram_v1_bot_access_proto_depIdxs,
-		EnumInfos:         file_proto_paigram_v1_bot_access_proto_enumTypes,
-		MessageInfos:      file_proto_paigram_v1_bot_access_proto_msgTypes,
+		GoTypes:           file_bot_access_proto_goTypes,
+		DependencyIndexes: file_bot_access_proto_depIdxs,
+		EnumInfos:         file_bot_access_proto_enumTypes,
+		MessageInfos:      file_bot_access_proto_msgTypes,
 	}.Build()
-	File_proto_paigram_v1_bot_access_proto = out.File
-	file_proto_paigram_v1_bot_access_proto_goTypes = nil
-	file_proto_paigram_v1_bot_access_proto_depIdxs = nil
+	File_bot_access_proto = out.File
+	file_bot_access_proto_goTypes = nil
+	file_bot_access_proto_depIdxs = nil
 }

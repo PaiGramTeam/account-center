@@ -51,6 +51,11 @@ type refreshOrchestrationStub struct {
 	ownerUserID uint64
 	bindingID   uint64
 	called      bool
+	adminUserID uint64
+}
+
+func (s *refreshOrchestrationStub) CreateBindingForOwner(_ context.Context, _ serviceplatformbinding.CreateAndBindInput) (*model.PlatformAccountBinding, error) {
+	panic("unexpected call")
 }
 
 func (s *refreshOrchestrationStub) PutCredentialForOwner(_ context.Context, _ serviceplatformbinding.PutCredentialInput) (*serviceplatformbinding.RuntimeSummary, error) {
@@ -65,7 +70,19 @@ func (s *refreshOrchestrationStub) RefreshBindingForOwner(_ context.Context, own
 	s.bindingID = bindingID
 	return &model.PlatformAccountBinding{ID: bindingID, OwnerUserID: ownerUserID, Platform: "mihomo", Status: model.PlatformAccountBindingStatusRefreshRequired}, nil
 }
-func (s *refreshOrchestrationStub) RefreshBindingAsAdmin(_ context.Context, _ uint64) (*model.PlatformAccountBinding, error) {
+func (s *refreshOrchestrationStub) SetPrimaryProfileForOwner(_ context.Context, _ uint64, _ uint64, _ uint64, _ string) (*model.PlatformAccountBinding, error) {
+	panic("unexpected call")
+}
+func (s *refreshOrchestrationStub) DeleteBindingForOwner(_ context.Context, ownerUserID, bindingID uint64) error {
+	panic("unexpected call")
+}
+func (s *refreshOrchestrationStub) RefreshBindingAsAdmin(_ context.Context, bindingID, adminUserID uint64) (*model.PlatformAccountBinding, error) {
+	s.called = true
+	s.bindingID = bindingID
+	s.adminUserID = adminUserID
+	return &model.PlatformAccountBinding{ID: bindingID, OwnerUserID: 7, Platform: "mihomo", Status: model.PlatformAccountBindingStatusRefreshRequired}, nil
+}
+func (s *refreshOrchestrationStub) DeleteBindingAsAdmin(_ context.Context, _ uint64, _ uint64) error {
 	panic("unexpected call")
 }
 
@@ -87,6 +104,32 @@ func TestMeHandlerRefreshBindingUsesOrchestrationBoundary(t *testing.T) {
 	require.True(t, orchestration.called)
 	require.Equal(t, uint64(7), orchestration.ownerUserID)
 	require.Equal(t, uint64(101), orchestration.bindingID)
+
+	var body struct {
+		Data map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, string(model.PlatformAccountBindingStatusRefreshRequired), body.Data["status"])
+}
+
+func TestAdminHandlerRefreshBindingPassesAdminUserID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	orchestration := &refreshOrchestrationStub{}
+	h := NewAdminHandler(refreshBindingStub{}, nil, nil, orchestration, nil)
+	g := gin.New()
+	g.POST("/api/v1/admin/platform-accounts/:bindingId/refresh", func(c *gin.Context) {
+		c.Set("user_id", uint64(19))
+		h.RefreshBinding(c)
+	})
+
+	rec := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/admin/platform-accounts/101/refresh", nil)
+	g.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.True(t, orchestration.called)
+	require.Equal(t, uint64(101), orchestration.bindingID)
+	require.Equal(t, uint64(19), orchestration.adminUserID)
 
 	var body struct {
 		Data map[string]any `json:"data"`

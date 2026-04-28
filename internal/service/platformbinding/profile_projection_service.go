@@ -43,7 +43,13 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 		}
 
 		primaryProfileID := sql.NullInt64{}
+		profileKeys := make([]string, 0, len(input.Profiles))
 		for _, item := range input.Profiles {
+			profileKeys = append(profileKeys, item.PlatformProfileKey)
+			sourceUpdatedAt := item.SourceUpdatedAt
+			if !sourceUpdatedAt.Valid {
+				sourceUpdatedAt = sql.NullTime{Time: syncedAt, Valid: true}
+			}
 			var profile model.PlatformAccountProfile
 			lookup := tx.Where("binding_id = ? AND platform_profile_key = ?", input.BindingID, item.PlatformProfileKey).First(&profile)
 			if lookup.Error != nil {
@@ -63,7 +69,7 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 			profile.Nickname = item.Nickname
 			profile.Level = item.Level
 			profile.IsPrimary = item.IsPrimary
-			profile.SourceUpdatedAt = item.SourceUpdatedAt
+			profile.SourceUpdatedAt = sourceUpdatedAt
 
 			if profile.ID == 0 {
 				if err := tx.Create(&profile).Error; err != nil {
@@ -80,6 +86,14 @@ func (s *ProfileProjectionService) SyncProfiles(input SyncProfilesInput) ([]mode
 			}
 
 			profiles = append(profiles, profile)
+		}
+
+		deleteQuery := tx.Where("binding_id = ?", input.BindingID)
+		if len(profileKeys) > 0 {
+			deleteQuery = deleteQuery.Where("platform_profile_key NOT IN ?", profileKeys)
+		}
+		if err := deleteQuery.Delete(&model.PlatformAccountProfile{}).Error; err != nil {
+			return err
 		}
 
 		return tx.Model(&model.PlatformAccountBinding{}).
@@ -130,6 +144,37 @@ func (s *ProfileProjectionService) ListProfilesForOwner(ownerUserID, bindingID u
 	}
 
 	return s.ListProfiles(bindingID, params)
+}
+
+func (s *ProfileProjectionService) DeleteProfiles(bindingID uint64) error {
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var binding model.PlatformAccountBinding
+		if err := tx.Select("id").First(&binding, bindingID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrBindingNotFound
+			}
+
+			return err
+		}
+
+		if err := tx.Model(&model.PlatformAccountBinding{}).Where("id = ?", bindingID).Update("primary_profile_id", nil).Error; err != nil {
+			return err
+		}
+
+		return tx.Where("binding_id = ?", bindingID).Delete(&model.PlatformAccountProfile{}).Error
+	})
+}
+
+func (s *ProfileProjectionService) GetProfile(bindingID, profileID uint64) (*model.PlatformAccountProfile, error) {
+	var profile model.PlatformAccountProfile
+	if err := s.db.Where("binding_id = ?", bindingID).First(&profile, profileID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrPrimaryProfileNotOwned
+		}
+		return nil, err
+	}
+
+	return &profile, nil
 }
 
 func (s *ProfileProjectionService) SetPrimaryProfileForOwner(ownerUserID, bindingID uint64, profileID *uint64) (*model.PlatformAccountBinding, error) {

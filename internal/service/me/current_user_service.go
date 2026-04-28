@@ -96,6 +96,15 @@ type VerifyEmailInput struct {
 	VerificationTTL time.Duration
 }
 
+// UpdateCurrentUserInput describes a self-service profile update.
+type UpdateCurrentUserInput struct {
+	UserID      uint64
+	DisplayName *string
+	AvatarURL   *string
+	Bio         *string
+	Locale      *string
+}
+
 // CurrentUserService serves the /me current-user surface.
 type CurrentUserService struct {
 	db *gorm.DB
@@ -140,6 +149,52 @@ func (s *CurrentUserService) GetCurrentUserView(ctx context.Context, userID uint
 		UpdatedAt:    user.UpdatedAt,
 	}
 	return view, nil
+}
+
+// UpdateCurrentUser updates the authenticated user's self-service profile fields.
+func (s *CurrentUserService) UpdateCurrentUser(ctx context.Context, input UpdateCurrentUserInput) (*CurrentUserView, error) {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.First(&user, input.UserID).Error; err != nil {
+			return err
+		}
+
+		var profile model.UserProfile
+		if err := tx.Where("user_id = ?", input.UserID).First(&profile).Error; err != nil {
+			return err
+		}
+
+		updates := map[string]any{}
+		if input.DisplayName != nil {
+			displayName := strings.TrimSpace(*input.DisplayName)
+			if displayName == "" {
+				return ErrDisplayNameRequired
+			}
+			updates["display_name"] = displayName
+		}
+		if input.AvatarURL != nil {
+			updates["avatar_url"] = *input.AvatarURL
+		}
+		if input.Bio != nil {
+			updates["bio"] = *input.Bio
+		}
+		if input.Locale != nil {
+			updates["locale"] = strings.TrimSpace(*input.Locale)
+		}
+		if len(updates) == 0 {
+			return nil
+		}
+
+		if err := tx.Model(&profile).Updates(updates).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return s.GetCurrentUserView(ctx, input.UserID)
 }
 
 func (s *CurrentUserService) loadRoleNames(ctx context.Context, userID uint64) ([]string, error) {

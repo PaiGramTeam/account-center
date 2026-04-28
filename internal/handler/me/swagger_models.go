@@ -215,6 +215,37 @@ type createMeEmailParams struct {
 	} `json:"body"`
 }
 
+// swagger:parameters patchMe
+type patchMeParams struct {
+	// Current-user self-service profile update payload.
+	// Only display_name, avatar_url, bio, and locale are accepted.
+	// display_name: trimmed, must not be empty when provided, max length 255.
+	// avatar_url: must be a valid URL when provided, max length 512.
+	// bio: optional, max length 500.
+	// locale: optional, max length 10.
+	// in: body
+	// required: true
+	Body struct {
+		// Display name. Cannot be blank after trimming when provided.
+		// min length: 1
+		// max length: 255
+		// example: Account Operator
+		DisplayName *string `json:"display_name" binding:"omitempty,min=1,max=255"`
+		// Avatar URL.
+		// format: uri
+		// max length: 512
+		// example: https://example.com/avatar.png
+		AvatarURL *string `json:"avatar_url" binding:"omitempty,url,max=512"`
+		// Profile bio.
+		// max length: 500
+		Bio *string `json:"bio" binding:"omitempty,max=500"`
+		// Locale code.
+		// max length: 10
+		// example: zh_CN
+		Locale *string `json:"locale" binding:"omitempty,max=10"`
+	} `json:"body"`
+}
+
 // swagger:parameters patchMePrimaryEmail deleteMeEmail verifyMeEmail
 type meEmailIDParams struct {
 	// Email ID.

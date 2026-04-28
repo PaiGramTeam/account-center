@@ -60,6 +60,9 @@ func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingPa
 	if err != nil {
 		return nil, false, err
 	}
+	if err := s.validateEnabledPlatformService(params.Platform, params.PlatformServiceKey); err != nil {
+		return nil, false, err
+	}
 	consumer := ""
 	scopeJSON := []byte("[]")
 	if params.GrantMode == PlatformBindingGrantModeLegacyMigration {
@@ -140,6 +143,20 @@ func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingPa
 	}
 
 	return &binding, created, nil
+}
+
+func (s *AccountRefService) validateEnabledPlatformService(platform, serviceKey string) error {
+	var count int64
+	if err := s.db.Model(&model.PlatformService{}).
+		Where("platform_key = ? AND service_key = ? AND enabled = ?", platform, serviceKey, true).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("validate platform service: %w", err)
+	}
+	if count == 0 {
+		return ErrPlatformServiceNotEnabled
+	}
+
+	return nil
 }
 
 func (s *AccountRefService) ListAccessibleBindings(botID, externalUserID, platform string) ([]model.PlatformAccountBinding, error) {

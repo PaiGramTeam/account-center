@@ -371,7 +371,8 @@ func TestGrantServiceUpsertWritesUnifiedAuditEvent(t *testing.T) {
 
 func TestGrantServiceRevokeWritesAdminActorAttribution(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
-	service := NewGrantService(db)
+	invalidator := &capturingGrantInvalidator{}
+	service := NewGrantService(db, invalidator)
 	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
 	admin := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
 	require.NoError(t, db.Create(&owner).Error)
@@ -400,6 +401,9 @@ func TestGrantServiceRevokeWritesAdminActorAttribution(t *testing.T) {
 		ActorUserID: sql.NullInt64{Int64: int64(admin.ID), Valid: true},
 	})
 	require.NoError(t, err)
+	require.Equal(t, 1, invalidator.calls)
+	assert.Equal(t, "admin", invalidator.input.ActorType)
+	assert.Equal(t, strconv.FormatUint(admin.ID, 10), invalidator.input.ActorID)
 
 	var event model.AuditEvent
 	require.NoError(t, db.Where("category = ? AND action = ?", "platform_binding", "grant_change").Order("id DESC").First(&event).Error)

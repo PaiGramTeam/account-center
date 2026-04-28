@@ -235,6 +235,8 @@ func mapBotAccessError(operation string, err error) error {
 		return status.Error(codes.PermissionDenied, "requested scope is not granted")
 	case errors.Is(err, botaccess.ErrPlatformAccountOwnedByOtherUser):
 		return status.Error(codes.AlreadyExists, "platform account already bound")
+	case errors.Is(err, botaccess.ErrPlatformServiceNotEnabled):
+		return status.Error(codes.InvalidArgument, "platform service is not enabled for platform")
 	case errors.Is(err, botaccess.ErrInactiveAccountRef):
 		return status.Error(codes.FailedPrecondition, "platform account binding is not active")
 	case errors.Is(err, botaccess.ErrInvalidTicketConfig):

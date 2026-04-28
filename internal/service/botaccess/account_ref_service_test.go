@@ -20,6 +20,7 @@ func setupBotAccessServiceTestDB(t *testing.T) *gorm.DB {
 		&model.User{},
 		&model.Bot{},
 		&model.BotIdentity{},
+		&model.PlatformService{},
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
@@ -56,9 +57,33 @@ func TestAccountRefService_ResolveBotUser(t *testing.T) {
 	assert.Nil(t, missing)
 }
 
+func TestAccountRefService_UpsertPlatformBindingRejectsStalePlatformServiceKey(t *testing.T) {
+	db := setupBotAccessServiceTestDB(t)
+	service := &AccountRefService{db: db}
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-stale-service", 41)
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
+	seedEnabledPlatformService(t, db, "discord", "dc-main")
+
+	binding, created, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
+		BotID:              identity.BotID,
+		ExternalUserID:     identity.ExternalUserID,
+		Platform:           "telegram",
+		PlatformServiceKey: "dc-main",
+		PlatformAccountID:  "acct-stale-service",
+		DisplayName:        "Stale Service",
+		GrantScopes:        []string{"messages:read"},
+		GrantMode:          PlatformBindingGrantModeLegacyMigration,
+	})
+
+	require.ErrorIs(t, err, ErrPlatformServiceNotEnabled)
+	assert.Nil(t, binding)
+	assert.False(t, created)
+}
+
 func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
 
 	identity := seedBotIdentity(t, db, "bot-paigram", "external-link", 1)
 
@@ -106,6 +131,7 @@ func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(
 func TestAccountRefService_UpsertPlatformBindingCanSkipConsumerGrant(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
 
 	identity := seedBotIdentity(t, db, "bot-paigram", "external-link-no-grant", 2)
 
@@ -133,6 +159,7 @@ func TestAccountRefService_UpsertPlatformBindingCanSkipConsumerGrant(t *testing.
 func TestAccountRefService_UpsertPlatformBindingRejectsOtherUserOwnership(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
+	seedEnabledPlatformService(t, db, "telegram", "tg-main")
 
 	identityA := seedBotIdentity(t, db, "bot-paigram", "external-owner-a", 21)
 	identityB := seedBotIdentity(t, db, "bot-pamgram", "external-owner-b", 22)
@@ -384,4 +411,21 @@ func seedBotIdentity(t *testing.T, db *gorm.DB, botID, externalUserID string, su
 	require.NoError(t, db.Create(&identity).Error)
 
 	return identity
+}
+
+func seedEnabledPlatformService(t *testing.T, db *gorm.DB, platformKey, serviceKey string) {
+	t.Helper()
+
+	service := model.PlatformService{
+		PlatformKey:          platformKey,
+		DisplayName:          serviceKey,
+		ServiceKey:           serviceKey,
+		ServiceAudience:      serviceKey,
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:9000",
+		Enabled:              true,
+		SupportedActionsJSON: "[]",
+		CredentialSchemaJSON: "{}",
+	}
+	require.NoError(t, db.Create(&service).Error)
 }

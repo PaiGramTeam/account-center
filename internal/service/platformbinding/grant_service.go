@@ -251,6 +251,9 @@ func (s *GrantService) invalidateGrant(ctx context.Context, binding *model.Platf
 	actorID := "system:grant-revoke"
 	if input.ActorUserID.Valid && input.ActorUserID.Int64 > 0 {
 		actorID = strconv.FormatInt(input.ActorUserID.Int64, 10)
+		if uint64(input.ActorUserID.Int64) != binding.OwnerUserID {
+			actorType = "admin"
+		}
 	}
 	return s.invalidator.InvalidateConsumerGrant(ctx, GrantInvalidationInput{
 		BindingID:           binding.ID,

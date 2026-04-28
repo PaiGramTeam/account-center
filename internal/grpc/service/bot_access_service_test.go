@@ -39,8 +39,6 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 		&model.Bot{},
 		&model.BotToken{},
 		&model.BotIdentity{},
-		&model.PlatformAccountRef{},
-		&model.BotAccountGrant{},
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
@@ -63,14 +61,14 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 	assert.Equal(t, "tg-123", resolved.ExternalUserId)
 	assert.Equal(t, "alice", resolved.ExternalUsername)
 
-	accounts, err := accessClient.ListAccessibleAccounts(ctx, &pb.ListAccessibleAccountsRequest{
+	accounts, err := accessClient.ListAccessibleBindings(ctx, &pb.ListAccessibleBindingsRequest{
 		ExternalUserId: "tg-123",
 		Platform:       "hoyoverse",
 	})
 	require.NoError(t, err)
-	require.Len(t, accounts.Accounts, 1)
-	assert.Equal(t, ref.ID, accounts.Accounts[0].Id)
-	assert.Equal(t, "platform-hoyoverse-service", accounts.Accounts[0].PlatformServiceKey)
+	require.Len(t, accounts.Bindings, 1)
+	assert.Equal(t, ref.ID, accounts.Bindings[0].Id)
+	assert.Equal(t, "platform-hoyoverse-service", accounts.Bindings[0].PlatformServiceKey)
 
 	ticketResp, err := accessClient.IssueServiceTicket(ctx, &pb.IssueServiceTicketRequest{
 		ExternalUserId:  "tg-123",
@@ -81,7 +79,7 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, ticketResp.Ticket)
 	assert.Equal(t, "platform-hoyoverse-service", ticketResp.Audience)
-	assert.Equal(t, ref.ID, ticketResp.Account.Id)
+	assert.Equal(t, ref.ID, ticketResp.Binding.Id)
 
 	parsedClaims := &botaccess.ServiceTicketClaims{}
 	parsedToken, err := jwt.ParseWithClaims(ticketResp.Ticket, parsedClaims, func(token *jwt.Token) (any, error) {
@@ -95,7 +93,6 @@ func TestBotAccessServiceAuthenticatedFlow(t *testing.T) {
 	assert.Equal(t, bot.ID, parsedClaims.BotID)
 	assert.Equal(t, identityUser.ID, parsedClaims.UserID)
 	assert.Equal(t, ref.ID, parsedClaims.BindingID)
-	assert.Equal(t, ref.ID, parsedClaims.PlatformAccountRefID)
 	assert.Equal(t, []string{"daily.sign"}, parsedClaims.Scopes)
 	assert.ElementsMatch(t, []string{"platform-hoyoverse-service"}, []string(parsedClaims.Audience))
 	assert.WithinDuration(t, ticketResp.ExpiresAt.AsTime(), parsedClaims.ExpiresAt.Time, time.Second)
@@ -114,8 +111,6 @@ func TestBotAccessServiceRejectsRequestedScopesOutsideGrantedSet(t *testing.T) {
 		&model.Bot{},
 		&model.BotToken{},
 		&model.BotIdentity{},
-		&model.PlatformAccountRef{},
-		&model.BotAccountGrant{},
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
@@ -125,7 +120,7 @@ func TestBotAccessServiceRejectsRequestedScopesOutsideGrantedSet(t *testing.T) {
 	bot, _, ref := seedBotAccessGRPCTestData(t, db)
 	grantJSON, err := json.Marshal([]string{"daily.sign"})
 	require.NoError(t, err)
-	require.NoError(t, db.Model(&model.BotAccountGrant{}).Where("bot_id = ? AND platform_account_ref_id = ?", bot.ID, ref.ID).Update("scopes", string(grantJSON)).Error)
+	require.NoError(t, db.Model(&model.ConsumerGrant{}).Where("binding_id = ? AND consumer = ?", ref.ID, "paigram-bot").Update("scopes_json", string(grantJSON)).Error)
 
 	conn := newBotAccessBufconnClient(t, db)
 	defer conn.Close()
@@ -155,8 +150,6 @@ func TestBotAccessServiceRejectsRevokedConsumerGrantOnTicketIssue(t *testing.T) 
 		&model.Bot{},
 		&model.BotToken{},
 		&model.BotIdentity{},
-		&model.PlatformAccountRef{},
-		&model.BotAccountGrant{},
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
@@ -192,8 +185,8 @@ func TestBotAccessServiceRejectsMissingAuthorization(t *testing.T) {
 		&model.Bot{},
 		&model.BotToken{},
 		&model.BotIdentity{},
-		&model.PlatformAccountRef{},
-		&model.BotAccountGrant{},
+		&model.PlatformAccountBinding{},
+		&model.ConsumerGrant{},
 	)
 
 	_, _, _ = seedBotAccessGRPCTestData(t, db)
@@ -248,17 +241,11 @@ func seedBotAccessGRPCTestData(t *testing.T, db *gorm.DB) (model.Bot, model.User
 	}
 	require.NoError(t, db.Create(&ref).Error)
 	require.NoError(t, db.Create(&model.ConsumerGrant{
-		BindingID: ref.ID,
-		Consumer:  "paigram-bot",
-		Status:    model.ConsumerGrantStatusActive,
-		GrantedAt: time.Now().UTC(),
-	}).Error)
-	require.NoError(t, db.Create(&model.BotAccountGrant{
-		UserID:               identityUser.ID,
-		BotID:                bot.ID,
-		PlatformAccountRefID: ref.ID,
-		Scopes:               `["daily.sign","daily.note.read"]`,
-		GrantedAt:            time.Now().UTC(),
+		BindingID:  ref.ID,
+		Consumer:   "paigram-bot",
+		Status:     model.ConsumerGrantStatusActive,
+		ScopesJSON: `["daily.sign","daily.note.read"]`,
+		GrantedAt:  time.Now().UTC(),
 	}).Error)
 
 	return bot, identityUser, ref

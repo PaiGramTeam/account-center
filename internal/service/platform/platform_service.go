@@ -63,15 +63,14 @@ type PlatformService struct {
 
 func buildPlatformServiceTicketClaims(actorType, actorID string, ownerUserID, platformAccountRefID uint64, platform, platformAccountID string, scopes []string) ServiceTicketClaims {
 	return ServiceTicketClaims{
-		ActorType:            actorType,
-		ActorID:              actorID,
-		OwnerUserID:          ownerUserID,
-		UserID:               ownerUserID,
-		Platform:             platform,
-		BindingID:            platformAccountRefID,
-		PlatformAccountRefID: platformAccountRefID,
-		PlatformAccountID:    platformAccountID,
-		Scopes:               scopes,
+		ActorType:         actorType,
+		ActorID:           actorID,
+		OwnerUserID:       ownerUserID,
+		UserID:            ownerUserID,
+		Platform:          platform,
+		BindingID:         platformAccountRefID,
+		PlatformAccountID: platformAccountID,
+		Scopes:            scopes,
 	}
 }
 

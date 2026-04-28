@@ -15,7 +15,7 @@ type AccountRefService struct {
 	db *gorm.DB
 }
 
-type LinkPlatformAccountParams struct {
+type UpsertPlatformBindingParams struct {
 	BotID              string
 	ExternalUserID     string
 	Platform           string
@@ -38,82 +38,86 @@ func (s *AccountRefService) ResolveBotUser(botID, externalUserID string) (*model
 	return &identity, nil
 }
 
-func (s *AccountRefService) LinkPlatformAccount(params LinkPlatformAccountParams) (*model.PlatformAccountRef, bool, error) {
+func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingParams) (*model.PlatformAccountBinding, bool, error) {
 	identity, err := s.ResolveBotUser(params.BotID, params.ExternalUserID)
+	if err != nil {
+		return nil, false, err
+	}
+	consumer, err := consumerName(params.BotID)
 	if err != nil {
 		return nil, false, err
 	}
 
 	scopeJSON, err := json.Marshal(params.GrantScopes)
 	if err != nil {
-		return nil, false, fmt.Errorf("link platform account: marshal scopes: %w", err)
+		return nil, false, fmt.Errorf("upsert platform binding: marshal scopes: %w", err)
 	}
 
 	created := false
-	var ref model.PlatformAccountRef
+	var binding model.PlatformAccountBinding
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		lookup := tx.Where("platform = ? AND platform_account_id = ?", params.Platform, params.PlatformAccountID).First(&ref)
+		lookup := tx.Where("platform = ? AND external_account_key = ?", params.Platform, params.PlatformAccountID).First(&binding)
 		if lookup.Error != nil {
 			if lookup.Error != gorm.ErrRecordNotFound {
 				return lookup.Error
 			}
 
-			ref = model.PlatformAccountRef{
-				UserID:             identity.UserID,
+			binding = model.PlatformAccountBinding{
+				OwnerUserID:        identity.UserID,
 				Platform:           params.Platform,
 				PlatformServiceKey: params.PlatformServiceKey,
-				PlatformAccountID:  params.PlatformAccountID,
+				ExternalAccountKey: nullString(params.PlatformAccountID),
 				DisplayName:        params.DisplayName,
-				Status:             model.PlatformAccountRefStatusActive,
-				MetaJSON:           nullString(params.MetaJSON),
+				Status:             model.PlatformAccountBindingStatusActive,
 			}
-			if err := tx.Create(&ref).Error; err != nil {
+			if err := tx.Create(&binding).Error; err != nil {
 				return err
 			}
 			created = true
 		} else {
-			if ref.UserID != identity.UserID {
+			if binding.OwnerUserID != identity.UserID {
 				return ErrPlatformAccountOwnedByOtherUser
 			}
-			ref.PlatformServiceKey = params.PlatformServiceKey
-			ref.DisplayName = params.DisplayName
-			ref.Status = model.PlatformAccountRefStatusActive
-			ref.MetaJSON = nullString(params.MetaJSON)
-			if err := tx.Save(&ref).Error; err != nil {
+			binding.PlatformServiceKey = params.PlatformServiceKey
+			binding.DisplayName = params.DisplayName
+			binding.Status = model.PlatformAccountBindingStatusActive
+			binding.ExternalAccountKey = nullString(params.PlatformAccountID)
+			if err := tx.Save(&binding).Error; err != nil {
 				return err
 			}
 		}
 
-		var grant model.BotAccountGrant
-		grantLookup := tx.Where("bot_id = ? AND platform_account_ref_id = ?", params.BotID, ref.ID).First(&grant)
+		var grant model.ConsumerGrant
+		grantLookup := tx.Where("binding_id = ? AND consumer = ?", binding.ID, consumer).First(&grant)
 		if grantLookup.Error != nil {
 			if grantLookup.Error != gorm.ErrRecordNotFound {
 				return grantLookup.Error
 			}
 
-			grant = model.BotAccountGrant{
-				UserID:               identity.UserID,
-				BotID:                params.BotID,
-				PlatformAccountRefID: ref.ID,
-				Scopes:               string(scopeJSON),
-				GrantedAt:            time.Now().UTC(),
+			grant = model.ConsumerGrant{
+				BindingID:  binding.ID,
+				Consumer:   consumer,
+				Status:     model.ConsumerGrantStatusActive,
+				ScopesJSON: string(scopeJSON),
+				GrantedAt:  time.Now().UTC(),
 			}
 			return tx.Create(&grant).Error
 		}
 
-		grant.UserID = identity.UserID
-		grant.Scopes = string(scopeJSON)
+		grant.Status = model.ConsumerGrantStatusActive
+		grant.ScopesJSON = string(scopeJSON)
+		grant.GrantedAt = time.Now().UTC()
 		grant.RevokedAt = sql.NullTime{}
 		return tx.Save(&grant).Error
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("link platform account: %w", err)
+		return nil, false, fmt.Errorf("upsert platform binding: %w", err)
 	}
 
-	return &ref, created, nil
+	return &binding, created, nil
 }
 
-func (s *AccountRefService) ListAccessibleAccounts(botID, externalUserID, platform string) ([]model.PlatformAccountRef, error) {
+func (s *AccountRefService) ListAccessibleBindings(botID, externalUserID, platform string) ([]model.PlatformAccountBinding, error) {
 	identity, err := s.ResolveBotUser(botID, externalUserID)
 	if err != nil {
 		return nil, err
@@ -140,12 +144,7 @@ func (s *AccountRefService) ListAccessibleAccounts(botID, externalUserID, platfo
 		return nil, fmt.Errorf("list accessible accounts: %w", err)
 	}
 
-	refs := make([]model.PlatformAccountRef, 0, len(bindings))
-	for _, binding := range bindings {
-		refs = append(refs, bindingToPlatformAccountRef(binding))
-	}
-
-	return refs, nil
+	return bindings, nil
 }
 
 func (s *AccountRefService) GetGrantedBinding(botID, externalUserID string, bindingID, profileID uint64) (*model.BotIdentity, *model.PlatformAccountBinding, *model.ConsumerGrant, error) {
@@ -193,20 +192,25 @@ func (s *AccountRefService) GetGrantedBinding(botID, externalUserID string, bind
 }
 
 func (s *AccountRefService) GetGrantedScopes(botID string, bindingID uint64) ([]string, error) {
-	var grant model.BotAccountGrant
-	if err := s.db.Where("bot_id = ? AND platform_account_ref_id = ?", botID, bindingID).First(&grant).Error; err != nil {
+	consumer, err := consumerName(botID)
+	if err != nil {
+		return nil, err
+	}
+
+	var grant model.ConsumerGrant
+	if err := s.db.Where("binding_id = ? AND consumer = ?", bindingID, consumer).First(&grant).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, ErrBotGrantNotFound
 		}
-		return nil, fmt.Errorf("get bot account grant scopes: %w", err)
+		return nil, fmt.Errorf("get consumer grant scopes: %w", err)
 	}
-	if grant.RevokedAt.Valid {
+	if grant.Status != model.ConsumerGrantStatusActive || grant.RevokedAt.Valid {
 		return nil, ErrBotGrantRevoked
 	}
 
 	scopes, err := DecodeGrantScopes(grant)
 	if err != nil {
-		return nil, fmt.Errorf("decode bot account grant scopes: %w", err)
+		return nil, fmt.Errorf("decode consumer grant scopes: %w", err)
 	}
 
 	return scopes, nil
@@ -227,31 +231,6 @@ func consumerName(botID string) (string, error) {
 	}
 
 	return consumer, nil
-}
-
-func bindingToPlatformAccountRef(binding model.PlatformAccountBinding) model.PlatformAccountRef {
-	return model.PlatformAccountRef{
-		ID:                 binding.ID,
-		UserID:             binding.OwnerUserID,
-		Platform:           binding.Platform,
-		PlatformServiceKey: binding.PlatformServiceKey,
-		PlatformAccountID:  nullableBindingExternalAccountKey(binding.ExternalAccountKey),
-		DisplayName:        binding.DisplayName,
-		Status:             bindingStatusToLegacyStatus(binding.Status),
-		CreatedAt:          binding.CreatedAt,
-		UpdatedAt:          binding.UpdatedAt,
-	}
-}
-
-func bindingStatusToLegacyStatus(status model.PlatformAccountBindingStatus) model.PlatformAccountRefStatus {
-	switch status {
-	case model.PlatformAccountBindingStatusActive:
-		return model.PlatformAccountRefStatusActive
-	case model.PlatformAccountBindingStatusDeleted, model.PlatformAccountBindingStatusDeleting:
-		return model.PlatformAccountRefStatusRevoked
-	default:
-		return model.PlatformAccountRefStatusInactive
-	}
 }
 
 func nullableBindingExternalAccountKey(value sql.NullString) string {

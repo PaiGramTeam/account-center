@@ -12,18 +12,17 @@ import (
 )
 
 type ServiceTicketClaims struct {
-	ActorType            string   `json:"actor_type,omitempty"`
-	ActorID              string   `json:"actor_id,omitempty"`
-	Consumer             string   `json:"consumer,omitempty"`
-	OwnerUserID          uint64   `json:"owner_user_id,omitempty"`
-	BotID                string   `json:"bot_id"`
-	UserID               uint64   `json:"user_id"`
-	Platform             string   `json:"platform"`
-	PlatformServiceKey   string   `json:"platform_service_key"`
-	BindingID            uint64   `json:"binding_id,omitempty"`
-	PlatformAccountRefID uint64   `json:"platform_account_ref_id"`
-	PlatformAccountID    string   `json:"platform_account_id,omitempty"`
-	Scopes               []string `json:"scopes"`
+	ActorType          string   `json:"actor_type,omitempty"`
+	ActorID            string   `json:"actor_id,omitempty"`
+	Consumer           string   `json:"consumer,omitempty"`
+	OwnerUserID        uint64   `json:"owner_user_id,omitempty"`
+	BotID              string   `json:"bot_id"`
+	UserID             uint64   `json:"user_id"`
+	Platform           string   `json:"platform"`
+	PlatformServiceKey string   `json:"platform_service_key"`
+	BindingID          uint64   `json:"binding_id,omitempty"`
+	PlatformAccountID  string   `json:"platform_account_id,omitempty"`
+	Scopes             []string `json:"scopes"`
 	jwt.RegisteredClaims
 }
 
@@ -61,18 +60,17 @@ func (s *TicketService) Issue(botID, consumer string, binding *model.PlatformAcc
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.ttl)
 	claims := ServiceTicketClaims{
-		ActorType:            "consumer",
-		ActorID:              consumer,
-		Consumer:             consumer,
-		OwnerUserID:          binding.OwnerUserID,
-		BotID:                botID,
-		UserID:               binding.OwnerUserID,
-		Platform:             binding.Platform,
-		PlatformServiceKey:   binding.PlatformServiceKey,
-		BindingID:            binding.ID,
-		PlatformAccountRefID: binding.ID,
-		PlatformAccountID:    nullableBindingExternalAccountKey(binding.ExternalAccountKey),
-		Scopes:               scopes,
+		ActorType:          "consumer",
+		ActorID:            consumer,
+		Consumer:           consumer,
+		OwnerUserID:        binding.OwnerUserID,
+		BotID:              botID,
+		UserID:             binding.OwnerUserID,
+		Platform:           binding.Platform,
+		PlatformServiceKey: binding.PlatformServiceKey,
+		BindingID:          binding.ID,
+		PlatformAccountID:  nullableBindingExternalAccountKey(binding.ExternalAccountKey),
+		Scopes:             scopes,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   fmt.Sprintf("user:%d", binding.OwnerUserID),
@@ -92,13 +90,13 @@ func (s *TicketService) Issue(botID, consumer string, binding *model.PlatformAcc
 	return signed, expiresAt, nil
 }
 
-func DecodeGrantScopes(grant model.BotAccountGrant) ([]string, error) {
-	if grant.Scopes == "" {
+func DecodeGrantScopes(grant model.ConsumerGrant) ([]string, error) {
+	if grant.ScopesJSON == "" {
 		return []string{}, nil
 	}
 
 	var scopes []string
-	if err := json.Unmarshal([]byte(grant.Scopes), &scopes); err != nil {
+	if err := json.Unmarshal([]byte(grant.ScopesJSON), &scopes); err != nil {
 		return nil, err
 	}
 

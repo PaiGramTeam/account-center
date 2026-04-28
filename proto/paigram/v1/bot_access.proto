@@ -8,8 +8,8 @@ import "google/protobuf/timestamp.proto";
 
 service BotAccessService {
   rpc ResolveBotUser(ResolveBotUserRequest) returns (ResolveBotUserResponse);
-  rpc LinkPlatformAccount(LinkPlatformAccountRequest) returns (LinkPlatformAccountResponse);
-  rpc ListAccessibleAccounts(ListAccessibleAccountsRequest) returns (ListAccessibleAccountsResponse);
+  rpc UpsertPlatformBinding(UpsertPlatformBindingRequest) returns (UpsertPlatformBindingResponse);
+  rpc ListAccessibleBindings(ListAccessibleBindingsRequest) returns (ListAccessibleBindingsResponse);
   rpc IssueServiceTicket(IssueServiceTicketRequest) returns (IssueServiceTicketResponse);
 }
 
@@ -20,7 +20,7 @@ enum PlatformAccountStatus {
   PLATFORM_ACCOUNT_STATUS_REVOKED = 3;
 }
 
-message PlatformAccountRef {
+message PlatformAccountBinding {
   uint64 id = 1;
   uint64 user_id = 2;
   string platform = 3;
@@ -44,7 +44,7 @@ message ResolveBotUserResponse {
   string external_username = 4;
 }
 
-message LinkPlatformAccountRequest {
+message UpsertPlatformBindingRequest {
   string external_user_id = 1;
   string platform = 2;
   string platform_service_key = 3;
@@ -54,18 +54,18 @@ message LinkPlatformAccountRequest {
   repeated string grant_scopes = 7;
 }
 
-message LinkPlatformAccountResponse {
-  PlatformAccountRef account = 1;
+message UpsertPlatformBindingResponse {
+  PlatformAccountBinding binding = 1;
   bool created = 2;
 }
 
-message ListAccessibleAccountsRequest {
+message ListAccessibleBindingsRequest {
   string external_user_id = 1;
   string platform = 2;
 }
 
-message ListAccessibleAccountsResponse {
-  repeated PlatformAccountRef accounts = 1;
+message ListAccessibleBindingsResponse {
+  repeated PlatformAccountBinding bindings = 1;
 }
 
 message IssueServiceTicketRequest {
@@ -80,5 +80,5 @@ message IssueServiceTicketResponse {
   string ticket = 1;
   string audience = 2;
   google.protobuf.Timestamp expires_at = 3;
-  PlatformAccountRef account = 4;
+  PlatformAccountBinding binding = 4;
 }

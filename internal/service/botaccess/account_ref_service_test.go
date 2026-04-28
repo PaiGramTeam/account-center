@@ -20,8 +20,6 @@ func setupBotAccessServiceTestDB(t *testing.T) *gorm.DB {
 		&model.User{},
 		&model.Bot{},
 		&model.BotIdentity{},
-		&model.PlatformAccountRef{},
-		&model.BotAccountGrant{},
 		&model.PlatformAccountBinding{},
 		&model.PlatformAccountProfile{},
 		&model.ConsumerGrant{},
@@ -58,13 +56,13 @@ func TestAccountRefService_ResolveBotUser(t *testing.T) {
 	assert.Nil(t, missing)
 }
 
-func TestAccountRefService_LinkPlatformAccountCreatesGrant(t *testing.T) {
+func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
 	identity := seedBotIdentity(t, db, "bot-link", "external-link", 1)
 
-	ref, created, err := service.LinkPlatformAccount(LinkPlatformAccountParams{
+	binding, created, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
 		BotID:              identity.BotID,
 		ExternalUserID:     identity.ExternalUserID,
 		Platform:           "telegram",
@@ -76,31 +74,42 @@ func TestAccountRefService_LinkPlatformAccountCreatesGrant(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, created)
-	assert.Equal(t, identity.UserID, ref.UserID)
-	assert.Equal(t, model.PlatformAccountRefStatusActive, ref.Status)
-	assert.Equal(t, "tg-main", ref.PlatformServiceKey)
-	assert.True(t, ref.MetaJSON.Valid)
-	assert.JSONEq(t, `{"lang":"en"}`, ref.MetaJSON.String)
+	assert.Equal(t, identity.UserID, binding.OwnerUserID)
+	assert.Equal(t, model.PlatformAccountBindingStatusActive, binding.Status)
+	assert.Equal(t, "tg-main", binding.PlatformServiceKey)
 
-	var grant model.BotAccountGrant
-	require.NoError(t, db.Where("bot_id = ? AND platform_account_ref_id = ?", identity.BotID, ref.ID).First(&grant).Error)
-	assert.Equal(t, identity.UserID, grant.UserID)
-	assert.Equal(t, ref.ID, grant.PlatformAccountRefID)
+	var persisted model.PlatformAccountBinding
+	require.NoError(t, db.First(&persisted, binding.ID).Error)
+	assert.Equal(t, identity.UserID, persisted.OwnerUserID)
+	assert.Equal(t, model.PlatformAccountBindingStatusActive, persisted.Status)
+	assert.True(t, persisted.ExternalAccountKey.Valid)
+	assert.Equal(t, "acct-1001", persisted.ExternalAccountKey.String)
+
+	var grant model.ConsumerGrant
+	consumer, err := consumerName(identity.BotID)
+	require.NoError(t, err)
+	require.NoError(t, db.Where("binding_id = ? AND consumer = ?", binding.ID, consumer).First(&grant).Error)
+	assert.Equal(t, binding.ID, grant.BindingID)
+	assert.Equal(t, consumer, grant.Consumer)
+	assert.Equal(t, model.ConsumerGrantStatusActive, grant.Status)
 	assert.True(t, grant.RevokedAt.Time.IsZero())
 
 	scopes, err := DecodeGrantScopes(grant)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"messages:read", "messages:write"}, scopes)
+
+	assert.False(t, db.Migrator().HasTable("platform_account_refs"))
+	assert.False(t, db.Migrator().HasTable("bot_account_grants"))
 }
 
-func TestAccountRefService_LinkPlatformAccountRejectsOtherUserOwnership(t *testing.T) {
+func TestAccountRefService_UpsertPlatformBindingRejectsOtherUserOwnership(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
 	identityA := seedBotIdentity(t, db, "bot-owner-a", "external-owner-a", 21)
 	identityB := seedBotIdentity(t, db, "bot-owner-b", "external-owner-b", 22)
 
-	_, _, err := service.LinkPlatformAccount(LinkPlatformAccountParams{
+	_, _, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
 		BotID:              identityA.BotID,
 		ExternalUserID:     identityA.ExternalUserID,
 		Platform:           "telegram",
@@ -111,7 +120,7 @@ func TestAccountRefService_LinkPlatformAccountRejectsOtherUserOwnership(t *testi
 	})
 	require.NoError(t, err)
 
-	_, _, err = service.LinkPlatformAccount(LinkPlatformAccountParams{
+	_, _, err = service.UpsertPlatformBinding(UpsertPlatformBindingParams{
 		BotID:              identityB.BotID,
 		ExternalUserID:     identityB.ExternalUserID,
 		Platform:           "telegram",
@@ -123,7 +132,7 @@ func TestAccountRefService_LinkPlatformAccountRejectsOtherUserOwnership(t *testi
 	require.ErrorIs(t, err, ErrPlatformAccountOwnedByOtherUser)
 }
 
-func TestAccountRefService_ListAccessibleAccountsFiltersByConsumerGrant(t *testing.T) {
+func TestAccountRefService_ListAccessibleBindingsFiltersByConsumerGrant(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
@@ -196,14 +205,14 @@ func TestAccountRefService_ListAccessibleAccountsFiltersByConsumerGrant(t *testi
 	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: revoked.ID, Consumer: consumer, Status: model.ConsumerGrantStatusRevoked, GrantedAt: time.Now().UTC(), RevokedAt: sql.NullTime{Time: time.Now().UTC(), Valid: true}}).Error)
 	require.NoError(t, db.Create(&model.ConsumerGrant{BindingID: otherOwner.ID, Consumer: consumer, Status: model.ConsumerGrantStatusActive, GrantedAt: time.Now().UTC()}).Error)
 
-	accounts, err := service.ListAccessibleAccounts(identity.BotID, identity.ExternalUserID, "telegram")
+	accounts, err := service.ListAccessibleBindings(identity.BotID, identity.ExternalUserID, "telegram")
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
 	assert.Equal(t, activeVisible.ID, accounts[0].ID)
-	assert.Equal(t, activeVisible.OwnerUserID, accounts[0].UserID)
-	assert.Equal(t, "acct-visible", accounts[0].PlatformAccountID)
+	assert.Equal(t, activeVisible.OwnerUserID, accounts[0].OwnerUserID)
+	assert.Equal(t, "acct-visible", accounts[0].ExternalAccountKey.String)
 
-	otherBotAccounts, err := service.ListAccessibleAccounts(otherBot.ID, "external-list-other-bot", "telegram")
+	otherBotAccounts, err := service.ListAccessibleBindings(otherBot.ID, "external-list-other-bot", "telegram")
 	require.NoError(t, err)
 	assert.Empty(t, otherBotAccounts)
 }
@@ -277,13 +286,42 @@ func TestAccountRefService_GetGrantedBindingRejectsProfileFromOtherBinding(t *te
 	assert.Nil(t, resolvedGrant)
 }
 
-func TestAccountRefService_ListAccessibleAccountsRejectsUnsupportedBot(t *testing.T) {
+func TestAccountRefService_GetGrantedScopesReadsConsumerGrantScopes(t *testing.T) {
+	db := setupBotAccessServiceTestDB(t)
+	service := &AccountRefService{db: db}
+
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-grant-scopes", 34)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        identity.UserID,
+		Platform:           "telegram",
+		ExternalAccountKey: sql.NullString{String: "acct-scope", Valid: true},
+		PlatformServiceKey: "tg-main",
+		DisplayName:        "Scoped",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+	consumer, err := consumerName(identity.BotID)
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.ConsumerGrant{
+		BindingID:  binding.ID,
+		Consumer:   consumer,
+		Status:     model.ConsumerGrantStatusActive,
+		ScopesJSON: `["messages:read","messages:write"]`,
+		GrantedAt:  time.Now().UTC(),
+	}).Error)
+
+	scopes, err := service.GetGrantedScopes(identity.BotID, binding.ID)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"messages:read", "messages:write"}, scopes)
+}
+
+func TestAccountRefService_ListAccessibleBindingsRejectsUnsupportedBot(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
 
 	identity := seedBotIdentity(t, db, "bot-unsupported", "external-unsupported", 33)
 
-	accounts, err := service.ListAccessibleAccounts(identity.BotID, identity.ExternalUserID, "telegram")
+	accounts, err := service.ListAccessibleBindings(identity.BotID, identity.ExternalUserID, "telegram")
 	require.ErrorIs(t, err, ErrConsumerNotSupported)
 	assert.Nil(t, accounts)
 }

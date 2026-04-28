@@ -18,7 +18,7 @@ import (
 	"paigram/internal/service/botaccess"
 )
 
-// BotAccessService exposes bot account reference operations over generated gRPC bindings.
+// BotAccessService exposes bot binding operations over generated gRPC bindings.
 type BotAccessService struct {
 	pb.UnimplementedBotAccessServiceServer
 
@@ -57,7 +57,7 @@ func (s *BotAccessService) ResolveBotUser(ctx context.Context, req *pb.ResolveBo
 	}, nil
 }
 
-func (s *BotAccessService) LinkPlatformAccount(ctx context.Context, req *pb.LinkPlatformAccountRequest) (*pb.LinkPlatformAccountResponse, error) {
+func (s *BotAccessService) UpsertPlatformBinding(ctx context.Context, req *pb.UpsertPlatformBindingRequest) (*pb.UpsertPlatformBindingResponse, error) {
 	bot, err := botFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -66,7 +66,7 @@ func (s *BotAccessService) LinkPlatformAccount(ctx context.Context, req *pb.Link
 		return nil, status.Error(codes.InvalidArgument, "external_user_id, platform, platform_service_key, platform_account_id, and display_name are required")
 	}
 
-	ref, created, err := s.accountRefService.LinkPlatformAccount(botaccess.LinkPlatformAccountParams{
+	binding, created, err := s.accountRefService.UpsertPlatformBinding(botaccess.UpsertPlatformBindingParams{
 		BotID:              bot.Id,
 		ExternalUserID:     req.GetExternalUserId(),
 		Platform:           req.GetPlatform(),
@@ -77,13 +77,13 @@ func (s *BotAccessService) LinkPlatformAccount(ctx context.Context, req *pb.Link
 		GrantScopes:        req.GetGrantScopes(),
 	})
 	if err != nil {
-		return nil, mapBotAccessError("link platform account", err)
+		return nil, mapBotAccessError("upsert platform binding", err)
 	}
 
-	return &pb.LinkPlatformAccountResponse{Account: platformAccountRefToProto(*ref), Created: created}, nil
+	return &pb.UpsertPlatformBindingResponse{Binding: platformBindingToProto(*binding), Created: created}, nil
 }
 
-func (s *BotAccessService) ListAccessibleAccounts(ctx context.Context, req *pb.ListAccessibleAccountsRequest) (*pb.ListAccessibleAccountsResponse, error) {
+func (s *BotAccessService) ListAccessibleBindings(ctx context.Context, req *pb.ListAccessibleBindingsRequest) (*pb.ListAccessibleBindingsResponse, error) {
 	bot, err := botFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -92,17 +92,17 @@ func (s *BotAccessService) ListAccessibleAccounts(ctx context.Context, req *pb.L
 		return nil, status.Error(codes.InvalidArgument, "external_user_id is required")
 	}
 
-	refs, err := s.accountRefService.ListAccessibleAccounts(bot.Id, req.GetExternalUserId(), req.GetPlatform())
+	bindings, err := s.accountRefService.ListAccessibleBindings(bot.Id, req.GetExternalUserId(), req.GetPlatform())
 	if err != nil {
-		return nil, mapBotAccessError("list accessible accounts", err)
+		return nil, mapBotAccessError("list accessible bindings", err)
 	}
 
-	accounts := make([]*pb.PlatformAccountRef, 0, len(refs))
-	for _, ref := range refs {
-		accounts = append(accounts, platformAccountRefToProto(ref))
+	items := make([]*pb.PlatformAccountBinding, 0, len(bindings))
+	for _, binding := range bindings {
+		items = append(items, platformBindingToProto(binding))
 	}
 
-	return &pb.ListAccessibleAccountsResponse{Accounts: accounts}, nil
+	return &pb.ListAccessibleBindingsResponse{Bindings: items}, nil
 }
 
 func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.IssueServiceTicketRequest) (*pb.IssueServiceTicketResponse, error) {
@@ -145,7 +145,7 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 		Ticket:    ticket,
 		Audience:  req.GetAudience(),
 		ExpiresAt: timestamppb.New(expiresAt),
-		Account:   platformAccountBindingToProto(*binding),
+		Binding:   platformBindingToProto(*binding),
 	}, nil
 }
 
@@ -158,32 +158,7 @@ func botFromContext(ctx context.Context) (*Bot, error) {
 	return bot, nil
 }
 
-func platformAccountRefToProto(ref model.PlatformAccountRef) *pb.PlatformAccountRef {
-	status := pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_UNSPECIFIED
-	switch ref.Status {
-	case model.PlatformAccountRefStatusActive:
-		status = pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_ACTIVE
-	case model.PlatformAccountRefStatusInactive:
-		status = pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_INACTIVE
-	case model.PlatformAccountRefStatusRevoked:
-		status = pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_REVOKED
-	}
-
-	return &pb.PlatformAccountRef{
-		Id:                 ref.ID,
-		UserId:             ref.UserID,
-		Platform:           ref.Platform,
-		PlatformServiceKey: ref.PlatformServiceKey,
-		PlatformAccountId:  ref.PlatformAccountID,
-		DisplayName:        ref.DisplayName,
-		Status:             status,
-		MetaJson:           nullStringValue(ref.MetaJSON),
-		CreatedAt:          timestamppb.New(ref.CreatedAt),
-		UpdatedAt:          timestamppb.New(ref.UpdatedAt),
-	}
-}
-
-func platformAccountBindingToProto(binding model.PlatformAccountBinding) *pb.PlatformAccountRef {
+func platformBindingToProto(binding model.PlatformAccountBinding) *pb.PlatformAccountBinding {
 	status := pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_UNSPECIFIED
 	switch binding.Status {
 	case model.PlatformAccountBindingStatusActive:
@@ -194,7 +169,7 @@ func platformAccountBindingToProto(binding model.PlatformAccountBinding) *pb.Pla
 		status = pb.PlatformAccountStatus_PLATFORM_ACCOUNT_STATUS_INACTIVE
 	}
 
-	return &pb.PlatformAccountRef{
+	return &pb.PlatformAccountBinding{
 		Id:                 binding.ID,
 		UserId:             binding.OwnerUserID,
 		Platform:           binding.Platform,
@@ -239,7 +214,7 @@ func mapBotAccessError(operation string, err error) error {
 	case errors.Is(err, botaccess.ErrBotIdentityNotFound):
 		return status.Error(codes.NotFound, "bot identity not found")
 	case errors.Is(err, botaccess.ErrPlatformAccountMissing):
-		return status.Error(codes.NotFound, "platform account ref not found")
+		return status.Error(codes.NotFound, "platform account binding not found")
 	case errors.Is(err, botaccess.ErrBotGrantNotFound):
 		return status.Error(codes.PermissionDenied, "consumer grant required for binding")
 	case errors.Is(err, botaccess.ErrBotGrantRevoked):
@@ -251,7 +226,7 @@ func mapBotAccessError(operation string, err error) error {
 	case errors.Is(err, botaccess.ErrPlatformAccountOwnedByOtherUser):
 		return status.Error(codes.AlreadyExists, "platform account already bound")
 	case errors.Is(err, botaccess.ErrInactiveAccountRef):
-		return status.Error(codes.FailedPrecondition, "platform account ref is not active")
+		return status.Error(codes.FailedPrecondition, "platform account binding is not active")
 	case errors.Is(err, botaccess.ErrInvalidTicketConfig):
 		return status.Error(codes.FailedPrecondition, "invalid service ticket config")
 	default:

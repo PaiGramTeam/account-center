@@ -332,7 +332,13 @@ func TestHandler_CreateUserWritesUnifiedAuditEvent(t *testing.T) {
 	assert.Equal(t, "user", event.TargetType)
 	assert.Equal(t, "success", event.Result)
 	assert.Equal(t, "req-admin-user-create", event.RequestID)
-	assert.Contains(t, event.MetadataJSON, "owner")
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(event.MetadataJSON), &metadata))
+	owner, ok := metadata["owner"].(map[string]any)
+	require.True(t, ok)
+	targetID, err := strconv.ParseUint(event.TargetID, 10, 64)
+	require.NoError(t, err)
+	assert.Equal(t, float64(targetID), owner["user_id"])
 }
 
 func TestHandler_ListUsers(t *testing.T) {

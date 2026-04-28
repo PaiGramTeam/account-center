@@ -2,6 +2,7 @@ package platformbinding
 
 import (
 	"database/sql"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -160,8 +161,9 @@ func TestGrantServiceUpsertWritesUnifiedAuditEvent(t *testing.T) {
 	assert.Equal(t, "binding", event.TargetType)
 	assert.Equal(t, "success", event.Result)
 	assert.Equal(t, int64(binding.ID), event.BindingID.Int64)
-	assert.Contains(t, event.MetadataJSON, ConsumerPaiGramBot)
-	assert.Contains(t, event.MetadataJSON, "grant_enabled")
+	metadata := requireGrantAuditMetadata(t, event.MetadataJSON)
+	assert.Equal(t, ConsumerPaiGramBot, metadata["consumer"])
+	assert.Equal(t, true, metadata["grant_enabled"])
 }
 
 func TestGrantServiceRevokeWritesAdminActorAttribution(t *testing.T) {
@@ -201,5 +203,17 @@ func TestGrantServiceRevokeWritesAdminActorAttribution(t *testing.T) {
 	assert.Equal(t, "admin", event.ActorType)
 	assert.True(t, event.ActorUserID.Valid)
 	assert.Equal(t, int64(admin.ID), event.ActorUserID.Int64)
-	assert.Contains(t, event.MetadataJSON, `"grant_enabled":false`)
+	metadata := requireGrantAuditMetadata(t, event.MetadataJSON)
+	assert.Equal(t, ConsumerPaiGramBot, metadata["consumer"])
+	assert.Equal(t, false, metadata["grant_enabled"])
+	actor, ok := metadata["actor"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "admin", actor["type"])
+}
+
+func requireGrantAuditMetadata(t *testing.T, metadataJSON string) map[string]any {
+	t.Helper()
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(metadataJSON), &metadata))
+	return metadata
 }

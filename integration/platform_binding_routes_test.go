@@ -185,6 +185,7 @@ func TestPlatformBindingRoutes(t *testing.T) {
 		}},
 	}
 	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, createStub))
+	seedEnabledPlatformServiceWithKey(t, stack, "platform-mihomo-service-v2", startPlatformBindingRouteServer(t, createStub))
 
 	t.Run("me routes support list create get profiles grants put grant and delete", func(t *testing.T) {
 		listResp := performJSONRequest(t, stack.Router, http.MethodGet, "/api/v1/me/platform-accounts", nil, authHeaders(ownerAccessToken))
@@ -361,6 +362,7 @@ func TestPlatformBindingRoutes(t *testing.T) {
 
 func TestPlatformBindingConsumerGrantRoutesSupportRegistryConsumersAndIdempotentDisable(t *testing.T) {
 	stack := newIntegrationStack(t)
+	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, &platformBindingRouteStub{}))
 
 	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-consumer-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
 	adminID, adminAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-consumer-admin-%d@example.com", time.Now().UnixNano()), "AdminPass123!")
@@ -419,6 +421,7 @@ func TestPlatformBindingConsumerGrantRoutesSupportRegistryConsumersAndIdempotent
 
 func TestPlatformBindingConsumerGrantDisableIsIdempotentWhenGrantIsMissing(t *testing.T) {
 	stack := newIntegrationStack(t)
+	seedEnabledPlatformService(t, stack, startPlatformBindingRouteServer(t, &platformBindingRouteStub{}))
 
 	ownerID, ownerAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-grant-missing-owner-%d@example.com", time.Now().UnixNano()), "OwnerPass123!")
 	adminID, adminAccessToken, _, _, _ := registerAndLogin(t, stack, fmt.Sprintf("binding-grant-missing-admin-%d@example.com", time.Now().UnixNano()), "AdminPass123!")
@@ -938,6 +941,10 @@ func (s *platformBindingRouteStub) DeleteCredential(_ context.Context, req *plat
 	return &platformv1.DeleteCredentialResponse{Success: true}, nil
 }
 
+func (s *platformBindingRouteStub) InvalidateConsumerGrant(context.Context, *platformv1.InvalidateConsumerGrantRequest) (*platformv1.InvalidateConsumerGrantResponse, error) {
+	return &platformv1.InvalidateConsumerGrantResponse{Success: true}, nil
+}
+
 func (s *platformBindingRouteStub) ConfirmPrimaryProfile(context.Context, *emptypb.Empty) (*emptypb.Empty, error) {
 	if s.confirmPrimaryProfileErr != nil {
 		return nil, s.confirmPrimaryProfileErr
@@ -991,12 +998,16 @@ func startPlatformBindingRouteServer(t *testing.T, stub *platformBindingRouteStu
 }
 
 func seedEnabledPlatformService(t *testing.T, stack *integrationStack, endpoint string) {
+	seedEnabledPlatformServiceWithKey(t, stack, "platform-mihomo-service", endpoint)
+}
+
+func seedEnabledPlatformServiceWithKey(t *testing.T, stack *integrationStack, serviceKey string, endpoint string) {
 	t.Helper()
 	require.NoError(t, stack.DB.Create(&model.PlatformService{
 		PlatformKey:          "mihomo",
 		DisplayName:          "Mihomo",
-		ServiceKey:           "platform-mihomo-service",
-		ServiceAudience:      "platform-mihomo-service",
+		ServiceKey:           serviceKey,
+		ServiceAudience:      serviceKey,
 		DiscoveryType:        "static",
 		Endpoint:             endpoint,
 		Enabled:              true,

@@ -185,6 +185,7 @@ func TestBotAccessServiceRejectsLegacyBindingWriteWithoutCapability(t *testing.T
 		&model.Bot{},
 		&model.BotToken{},
 		&model.BotIdentity{},
+		&model.PlatformService{},
 		&model.PlatformAccountBinding{},
 		&model.ConsumerGrant{},
 		&model.AuditEvent{},
@@ -215,7 +216,8 @@ func TestBotAccessServiceRejectsLegacyBindingWriteWithoutCapability(t *testing.T
 	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "legacy_binding_write_reject").Order("id DESC").First(&event).Error)
 	assert.Equal(t, "failure", event.Result)
 	assert.Equal(t, "legacy_binding_write_not_allowed", event.ReasonCode)
-	assert.Contains(t, event.MetadataJSON, `"legacy_migration":true`)
+	metadata := requireBotAccessMetadata(t, event.MetadataJSON)
+	assert.Equal(t, true, metadata["legacy_migration"])
 }
 
 func TestBotAccessServiceAllowsLegacyBindingWriteWithCapability(t *testing.T) {
@@ -225,11 +227,13 @@ func TestBotAccessServiceAllowsLegacyBindingWriteWithCapability(t *testing.T) {
 		&model.Bot{},
 		&model.BotToken{},
 		&model.BotIdentity{},
+		&model.PlatformService{},
 		&model.PlatformAccountBinding{},
 		&model.ConsumerGrant{},
 		&model.AuditEvent{},
 	)
 
+	seedBotAccessPlatformService(t, db)
 	bot, _, _ := seedBotAccessGRPCTestData(t, db)
 	require.NoError(t, db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("allow_legacy_binding_write", true).Error)
 
@@ -255,7 +259,8 @@ func TestBotAccessServiceAllowsLegacyBindingWriteWithCapability(t *testing.T) {
 	var event model.AuditEvent
 	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "legacy_binding_write").Order("id DESC").First(&event).Error)
 	assert.Equal(t, "success", event.Result)
-	assert.Contains(t, event.MetadataJSON, `"legacy_migration":true`)
+	metadata := requireBotAccessMetadata(t, event.MetadataJSON)
+	assert.Equal(t, true, metadata["legacy_migration"])
 }
 
 func TestBotAccessServiceRejectsMissingAuthorization(t *testing.T) {
@@ -329,6 +334,28 @@ func seedBotAccessGRPCTestData(t *testing.T, db *gorm.DB) (model.Bot, model.User
 	}).Error)
 
 	return bot, identityUser, ref
+}
+
+func seedBotAccessPlatformService(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "127.0.0.1:1",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{"type":"object"}`,
+	}).Error)
+}
+
+func requireBotAccessMetadata(t *testing.T, raw string) map[string]any {
+	t.Helper()
+	var metadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &metadata))
+	return metadata
 }
 
 func seedBotAccessToken(t *testing.T, db *gorm.DB, botID string) string {

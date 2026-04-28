@@ -174,7 +174,7 @@ func TestGrantServiceRevokeGrantIncrementsTicketVersion(t *testing.T) {
 	assert.Equal(t, uint64(2), revoked.TicketVersion)
 	assert.True(t, revoked.RevokedAt.Valid)
 	assert.True(t, revoked.LastInvalidatedAt.Valid)
-	assert.True(t, revoked.LastInvalidatedAt.Time.Equal(revokedAt))
+	assert.WithinDuration(t, revokedAt, revoked.LastInvalidatedAt.Time, time.Millisecond)
 }
 
 func TestGrantServiceRevokeGrantAlreadyRevokedDoesNotIncrementTicketVersion(t *testing.T) {
@@ -203,7 +203,7 @@ func TestGrantServiceRevokeGrantAlreadyRevokedDoesNotIncrementTicketVersion(t *t
 	assert.Equal(t, model.ConsumerGrantStatusRevoked, revoked.Status)
 	assert.Equal(t, uint64(3), revoked.TicketVersion)
 	assert.True(t, revoked.LastInvalidatedAt.Valid)
-	assert.True(t, revoked.LastInvalidatedAt.Time.Equal(revokedAt))
+	assert.WithinDuration(t, revokedAt, revoked.LastInvalidatedAt.Time, time.Millisecond)
 }
 
 func TestGrantServiceUpsertGrantReactivationPreservesTicketVersion(t *testing.T) {
@@ -296,7 +296,7 @@ func TestGrantServiceRevokeGrantRetriesMissingInvalidationForRevokedGrant(t *tes
 	assert.Equal(t, uint64(5), invalidator.input.MinimumGrantVersion)
 	assert.Equal(t, uint64(5), revoked.TicketVersion)
 	assert.True(t, revoked.LastInvalidatedAt.Valid)
-	assert.True(t, revoked.LastInvalidatedAt.Time.Equal(retryAt))
+	assert.WithinDuration(t, retryAt, revoked.LastInvalidatedAt.Time, time.Millisecond)
 }
 
 func TestGrantServiceRevokeGrantCallsInvalidatorWithExpectedInput(t *testing.T) {

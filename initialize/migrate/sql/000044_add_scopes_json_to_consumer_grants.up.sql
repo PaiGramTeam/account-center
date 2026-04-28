@@ -10,7 +10,7 @@ SET @has_legacy_bot_account_grants := EXISTS(
 
 SET @backfill_consumer_grant_scopes_sql := IF(
     @has_legacy_bot_account_grants,
-    'UPDATE `consumer_grants` cg JOIN `bot_account_grants` bg ON bg.`platform_account_ref_id` = cg.`binding_id` SET cg.`scopes_json` = bg.`scopes` WHERE cg.`consumer` = CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END AND bg.`deleted_at` IS NULL',
+    'UPDATE `consumer_grants` cg JOIN `bot_account_grants` bg JOIN `platform_account_refs` par ON par.`id` = bg.`platform_account_ref_id` JOIN `platform_account_bindings` pab ON pab.`platform` = par.`platform` AND pab.`external_account_key` = par.`platform_account_id` AND par.`user_id` = pab.`owner_user_id` SET cg.`scopes_json` = bg.`scopes` WHERE cg.`binding_id` = pab.`id` AND cg.`consumer` = CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END AND bg.`deleted_at` IS NULL',
     'SELECT 1'
 );
 
@@ -20,7 +20,7 @@ DEALLOCATE PREPARE backfill_consumer_grant_scopes_stmt;
 
 SET @insert_missing_consumer_grants_sql := IF(
     @has_legacy_bot_account_grants,
-    'INSERT INTO `consumer_grants` (`binding_id`, `consumer`, `status`, `scopes_json`, `granted_at`, `revoked_at`, `created_at`, `updated_at`) SELECT bg.`platform_account_ref_id`, CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END, CASE WHEN bg.`revoked_at` IS NULL THEN ''active'' ELSE ''revoked'' END, bg.`scopes`, bg.`granted_at`, bg.`revoked_at`, bg.`created_at`, bg.`updated_at` FROM `bot_account_grants` bg LEFT JOIN `consumer_grants` cg ON cg.`binding_id` = bg.`platform_account_ref_id` AND cg.`consumer` = CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END WHERE bg.`deleted_at` IS NULL AND CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END <> '''' AND cg.`id` IS NULL',
+    'INSERT INTO `consumer_grants` (`binding_id`, `consumer`, `status`, `scopes_json`, `granted_at`, `revoked_at`, `created_at`, `updated_at`) SELECT pab.`id`, CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END, CASE WHEN bg.`revoked_at` IS NULL THEN ''active'' ELSE ''revoked'' END, bg.`scopes`, bg.`granted_at`, bg.`revoked_at`, bg.`created_at`, bg.`updated_at` FROM `bot_account_grants` bg JOIN `platform_account_refs` par ON par.`id` = bg.`platform_account_ref_id` JOIN `platform_account_bindings` pab ON pab.`platform` = par.`platform` AND pab.`external_account_key` = par.`platform_account_id` AND par.`user_id` = pab.`owner_user_id` LEFT JOIN `consumer_grants` cg ON cg.`binding_id` = pab.`id` AND cg.`consumer` = CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END WHERE bg.`deleted_at` IS NULL AND CASE WHEN bg.`bot_id` IN (''bot-paigram'', ''paigram-bot'') THEN ''paigram-bot'' WHEN bg.`bot_id` IN (''bot-pamgram'', ''pamgram'') THEN ''pamgram'' ELSE '''' END <> '''' AND cg.`id` IS NULL',
     'SELECT 1'
 );
 

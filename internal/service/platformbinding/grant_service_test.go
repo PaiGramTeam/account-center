@@ -50,6 +50,15 @@ func TestListGrantsPaginatesResults(t *testing.T) {
 	require.Len(t, ownerItems, 2)
 }
 
+func TestPlatformBindingServiceGroupWiresGrantInvalidator(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	platformService := &serviceGroupPlatformServiceStub{}
+
+	group := NewServiceGroup(db, platformService)
+
+	require.Same(t, platformService, group.GrantService.invalidator)
+}
+
 func TestGrantServiceSupportsRegistryConsumers(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	service := NewGrantService(db)
@@ -286,6 +295,7 @@ func TestGrantServiceRevokeGrantCallsInvalidatorWithExpectedInput(t *testing.T) 
 	assert.Same(t, ctx, invalidator.ctx)
 	assert.Equal(t, GrantInvalidationInput{
 		BindingID:           binding.ID,
+		OwnerUserID:         binding.OwnerUserID,
 		Platform:            "mihomo",
 		PlatformServiceKey:  "mihomo",
 		Consumer:            ConsumerPaiGramBot,
@@ -447,5 +457,27 @@ func (c *capturingGrantInvalidator) InvalidateConsumerGrant(ctx context.Context,
 	c.calls++
 	c.ctx = ctx
 	c.input = input
+	return nil
+}
+
+type serviceGroupPlatformServiceStub struct{}
+
+func (s *serviceGroupPlatformServiceStub) GetEnabledPlatform(string) (*model.PlatformService, error) {
+	return &model.PlatformService{ServiceKey: "platform-mihomo-service", ServiceAudience: "platform-mihomo-service"}, nil
+}
+
+func (s *serviceGroupPlatformServiceStub) IssueBindingScopedTicket(string, string, *model.PlatformAccountBinding, []string) (string, time.Time, error) {
+	return "ticket", time.Now().UTC(), nil
+}
+
+func (s *serviceGroupPlatformServiceStub) ConfirmBindingPrimaryProfile(context.Context, string, string, *model.PlatformAccountBinding, string) error {
+	return nil
+}
+
+func (s *serviceGroupPlatformServiceStub) GetBindingRuntimeSummary(context.Context, string, string, *model.PlatformAccountBinding, []string) (map[string]any, error) {
+	return nil, nil
+}
+
+func (s *serviceGroupPlatformServiceStub) InvalidateConsumerGrant(context.Context, GrantInvalidationInput) error {
 	return nil
 }

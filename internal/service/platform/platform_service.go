@@ -8,23 +8,27 @@ import (
 	"fmt"
 	"time"
 
+	platformv1 "github.com/PaiGramTeam/proto-contracts/platform/v1"
 	"github.com/golang-jwt/jwt/v5"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/encoding"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
 	"gorm.io/gorm"
 
 	"paigram/internal/config"
 	"paigram/internal/model"
 	"paigram/internal/service/botaccess"
+	"paigram/internal/service/platformbinding"
 )
 
 var (
 	ErrInvalidTicketConfig             = errors.New("invalid service ticket config")
-	ErrPlatformSummaryProxyUnavailable = errors.New("platform summary proxy is unavailable")
-	ErrPlatformServiceUnavailable      = errors.New("platform service is unavailable")
+	ErrPlatformSummaryProxyUnavailable = platformbinding.ErrPlatformSummaryProxyUnavailable
+	ErrPlatformServiceUnavailable      = platformbinding.ErrPlatformServiceUnavailable
 )
 
 // ServiceTicketClaims carries actor-scoped platform access metadata.
@@ -251,6 +255,103 @@ func (s *PlatformService) IssueBindingScopedTicket(actorType, actorID string, bi
 	}
 
 	return signed, expiresAt, nil
+}
+
+func (s *PlatformService) InvalidateConsumerGrant(ctx context.Context, input platformbinding.GrantInvalidationInput) error {
+	if len(s.signingKey) == 0 || s.ttl <= 0 {
+		return ErrInvalidTicketConfig
+	}
+	if input.BindingID == 0 || input.Platform == "" || input.PlatformServiceKey == "" || input.Consumer == "" || input.MinimumGrantVersion == 0 {
+		return ErrInvalidTicketConfig
+	}
+
+	platformRow, err := s.getEnabledPlatformService(input.Platform, input.PlatformServiceKey)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrPlatformServiceUnavailable
+		}
+		return err
+	}
+
+	actorType := input.ActorType
+	actorID := input.ActorID
+	if actorType == "" || actorID == "" {
+		actorType = "user"
+		actorID = "system:grant-revoke"
+	}
+	if !isSupportedInternalActorType(actorType) {
+		return ErrInvalidTicketConfig
+	}
+
+	now := time.Now().UTC()
+	expiresAt := now.Add(s.ttl)
+	claims := buildBindingScopedTicketClaims(actorType, actorID, input.OwnerUserID, input.BindingID, input.Platform, input.PlatformServiceKey, "", []string{"mihomo.consumer_grant.invalidate"})
+	claims.RegisteredClaims = jwt.RegisteredClaims{
+		Issuer:    s.issuer,
+		Subject:   fmt.Sprintf("user:%d", input.OwnerUserID),
+		Audience:  jwt.ClaimStrings{platformRow.ServiceAudience},
+		IssuedAt:  jwt.NewNumericDate(now),
+		ExpiresAt: jwt.NewNumericDate(expiresAt),
+		ID:        fmt.Sprintf("%s:%s:%d:%d", actorType, actorID, input.BindingID, now.UnixNano()),
+	}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.signingKey)
+	if err != nil {
+		return err
+	}
+
+	dial := s.dial
+	if dial == nil {
+		dial = func(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+
+			return grpc.DialContext(ctx, endpoint,
+				grpc.WithTransportCredentials(insecure.NewCredentials()),
+				grpc.WithBlock(),
+			)
+		}
+	}
+
+	conn, err := dial(ctx, platformRow.Endpoint)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrPlatformServiceUnavailable, err)
+	}
+	defer conn.Close()
+
+	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	_, err = platformv1.NewPlatformServiceClient(conn).InvalidateConsumerGrant(callCtx, &platformv1.InvalidateConsumerGrantRequest{
+		ServiceTicket:       signed,
+		BindingId:           input.BindingID,
+		Consumer:            input.Consumer,
+		MinimumGrantVersion: input.MinimumGrantVersion,
+	})
+	if err != nil && isPlatformUnavailableRPCError(err) {
+		return fmt.Errorf("%w: %v", ErrPlatformServiceUnavailable, err)
+	}
+	return err
+}
+
+func (s *PlatformService) getEnabledPlatformService(platformKey, serviceKey string) (*model.PlatformService, error) {
+	var platform model.PlatformService
+	if err := s.db.Where("platform_key = ? AND service_key = ? AND enabled = ?", platformKey, serviceKey, true).First(&platform).Error; err != nil {
+		return nil, err
+	}
+	return &platform, nil
+}
+
+func isPlatformUnavailableRPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if st, ok := grpcstatus.FromError(err); ok {
+		return st.Code() == codes.Unavailable || st.Code() == codes.DeadlineExceeded
+	}
+	return false
 }
 
 func (s *PlatformService) SetSummaryProxy(proxy platformSummaryProxy) {

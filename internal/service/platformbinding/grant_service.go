@@ -254,6 +254,7 @@ func (s *GrantService) invalidateGrant(ctx context.Context, binding *model.Platf
 	}
 	return s.invalidator.InvalidateConsumerGrant(ctx, GrantInvalidationInput{
 		BindingID:           binding.ID,
+		OwnerUserID:         binding.OwnerUserID,
 		Platform:            binding.Platform,
 		PlatformServiceKey:  binding.PlatformServiceKey,
 		Consumer:            input.Consumer,

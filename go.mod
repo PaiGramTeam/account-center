@@ -3,7 +3,7 @@ module paigram
 go 1.25.7
 
 require (
-	github.com/PaiGramTeam/proto-contracts v0.0.0-20260419070719-80366e162dcf
+	github.com/PaiGramTeam/proto-contracts v0.0.0-20260428062016-25b0c943e834
 	github.com/casbin/casbin/v2 v2.77.2
 	github.com/casbin/gorm-adapter/v3 v3.20.0
 	github.com/getsentry/sentry-go v0.43.0

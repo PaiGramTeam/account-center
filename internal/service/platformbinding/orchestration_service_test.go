@@ -17,7 +17,6 @@ import (
 
 	"paigram/internal/model"
 	serviceaudit "paigram/internal/service/audit"
-	serviceplatform "paigram/internal/service/platform"
 )
 
 type fakeOrchestrationAuditWriter struct {
@@ -355,7 +354,7 @@ func TestRuntimeSummaryNormalizesGRPCProxyOutage(t *testing.T) {
 	svc := NewRuntimeSummaryService(fake, reader)
 
 	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	require.ErrorIs(t, err, ErrPlatformSummaryProxyUnavailable)
 	assert.Nil(t, summary)
 }
 
@@ -371,7 +370,7 @@ func TestRuntimeSummaryNormalizesDialFailure(t *testing.T) {
 	svc := NewRuntimeSummaryService(fake, reader)
 
 	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	require.ErrorIs(t, err, ErrPlatformSummaryProxyUnavailable)
 	assert.Nil(t, summary)
 }
 
@@ -383,13 +382,13 @@ func TestRuntimeSummaryPreservesWrappedPlatformServiceUnavailable(t *testing.T) 
 		ExternalAccountKey: sql.NullString{String: "cn:10001", Valid: true},
 	}
 	reader := &fakeRuntimeSummaryBindingReader{binding: binding}
-	fake := &fakeRuntimeSummaryPlatformService{err: fmt.Errorf("wrapped: %w", serviceplatform.ErrPlatformServiceUnavailable)}
+	fake := &fakeRuntimeSummaryPlatformService{err: fmt.Errorf("wrapped: %w", ErrPlatformServiceUnavailable)}
 	svc := NewRuntimeSummaryService(fake, reader)
 
 	summary, err := svc.GetRuntimeSummary(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformServiceUnavailable)
+	require.ErrorIs(t, err, ErrPlatformServiceUnavailable)
 	assert.Nil(t, summary)
-	require.NotErrorIs(t, err, serviceplatform.ErrPlatformSummaryProxyUnavailable)
+	require.NotErrorIs(t, err, ErrPlatformSummaryProxyUnavailable)
 }
 
 func TestRuntimeSummaryReturnsBindingNotReadyWhenExternalAccountKeyUnresolved(t *testing.T) {
@@ -573,7 +572,7 @@ func TestDeleteBindingForOwnerNormalizesMissingPlatformServiceAsUnavailable(t *t
 	svc := NewOrchestrationService(reader, platformSvc, gateway)
 
 	err := svc.DeleteBindingForOwner(context.Background(), 7, 101)
-	require.ErrorIs(t, err, serviceplatform.ErrPlatformServiceUnavailable)
+	require.ErrorIs(t, err, ErrPlatformServiceUnavailable)
 	assert.True(t, reader.updated)
 	assert.Equal(t, model.PlatformAccountBindingStatusDeleteFailed, reader.binding.Status)
 	assert.Equal(t, "credential_delete_failed", reader.updatedReason)

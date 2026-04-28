@@ -38,6 +38,15 @@ func (s *AccountRefService) ResolveBotUser(botID, externalUserID string) (*model
 	return &identity, nil
 }
 
+func (s *AccountRefService) BotAllowsLegacyBindingWrite(botID string) (bool, error) {
+	var bot model.Bot
+	if err := s.db.Select("id", "allow_legacy_binding_write").Where("id = ?", botID).First(&bot).Error; err != nil {
+		return false, fmt.Errorf("load bot legacy binding write capability: %w", err)
+	}
+
+	return bot.AllowLegacyBindingWrite, nil
+}
+
 func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingParams) (*model.PlatformAccountBinding, bool, error) {
 	identity, err := s.ResolveBotUser(params.BotID, params.ExternalUserID)
 	if err != nil {

@@ -178,6 +178,86 @@ func TestBotAccessServiceRejectsRevokedConsumerGrantOnTicketIssue(t *testing.T) 
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
+func TestBotAccessServiceRejectsLegacyBindingWriteWithoutCapability(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_legacy_gate",
+		&model.User{},
+		&model.UserEmail{},
+		&model.Bot{},
+		&model.BotToken{},
+		&model.BotIdentity{},
+		&model.PlatformAccountBinding{},
+		&model.ConsumerGrant{},
+		&model.AuditEvent{},
+	)
+
+	bot, _, _ := seedBotAccessGRPCTestData(t, db)
+	require.NoError(t, db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("allow_legacy_binding_write", false).Error)
+
+	conn := newBotAccessBufconnClient(t, db)
+	defer conn.Close()
+	accessToken := seedBotAccessToken(t, db, bot.ID)
+	client := pb.NewBotAccessServiceClient(conn)
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+accessToken)
+
+	_, err := client.UpsertPlatformBinding(ctx, &pb.UpsertPlatformBindingRequest{
+		ExternalUserId:     "tg-123",
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountId:  "binding_100_123456789",
+		DisplayName:        "Migrated account",
+		GrantScopes:        []string{"mihomo.status.read"},
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "legacy_binding_write_reject").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "failure", event.Result)
+	assert.Equal(t, "legacy_binding_write_not_allowed", event.ReasonCode)
+	assert.Contains(t, event.MetadataJSON, `"legacy_migration":true`)
+}
+
+func TestBotAccessServiceAllowsLegacyBindingWriteWithCapability(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_legacy_allowed",
+		&model.User{},
+		&model.UserEmail{},
+		&model.Bot{},
+		&model.BotToken{},
+		&model.BotIdentity{},
+		&model.PlatformAccountBinding{},
+		&model.ConsumerGrant{},
+		&model.AuditEvent{},
+	)
+
+	bot, _, _ := seedBotAccessGRPCTestData(t, db)
+	require.NoError(t, db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("allow_legacy_binding_write", true).Error)
+
+	conn := newBotAccessBufconnClient(t, db)
+	defer conn.Close()
+	accessToken := seedBotAccessToken(t, db, bot.ID)
+	client := pb.NewBotAccessServiceClient(conn)
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+accessToken)
+
+	resp, err := client.UpsertPlatformBinding(ctx, &pb.UpsertPlatformBindingRequest{
+		ExternalUserId:     "tg-123",
+		Platform:           "mihomo",
+		PlatformServiceKey: "platform-mihomo-service",
+		PlatformAccountId:  "binding_100_123456789",
+		DisplayName:        "Migrated account",
+		GrantScopes:        []string{"mihomo.status.read"},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetBinding())
+	assert.Equal(t, "binding_100_123456789", resp.GetBinding().GetPlatformAccountId())
+
+	var event model.AuditEvent
+	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "legacy_binding_write").Order("id DESC").First(&event).Error)
+	assert.Equal(t, "success", event.Result)
+	assert.Contains(t, event.MetadataJSON, `"legacy_migration":true`)
+}
+
 func TestBotAccessServiceRejectsMissingAuthorization(t *testing.T) {
 	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_noauth",
 		&model.User{},

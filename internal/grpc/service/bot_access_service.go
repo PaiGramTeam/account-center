@@ -62,6 +62,14 @@ func (s *BotAccessService) UpsertPlatformBinding(ctx context.Context, req *pb.Up
 	if err != nil {
 		return nil, err
 	}
+	allowed, err := s.accountRefService.BotAllowsLegacyBindingWrite(bot.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "load bot capability: %v", err)
+	}
+	if !allowed {
+		s.recordLegacyBindingAudit(ctx, bot, req, "legacy_binding_write_reject", "failure", "legacy_binding_write_not_allowed")
+		return nil, status.Error(codes.PermissionDenied, "legacy platform binding write is migration-only")
+	}
 	if req.GetExternalUserId() == "" || req.GetPlatform() == "" || req.GetPlatformServiceKey() == "" || req.GetPlatformAccountId() == "" || req.GetDisplayName() == "" {
 		return nil, status.Error(codes.InvalidArgument, "external_user_id, platform, platform_service_key, platform_account_id, and display_name are required")
 	}
@@ -79,6 +87,7 @@ func (s *BotAccessService) UpsertPlatformBinding(ctx context.Context, req *pb.Up
 	if err != nil {
 		return nil, mapBotAccessError("upsert platform binding", err)
 	}
+	s.recordLegacyBindingAudit(ctx, bot, req, "legacy_binding_write", "success", "")
 
 	return &pb.UpsertPlatformBindingResponse{Binding: platformBindingToProto(*binding), Created: created}, nil
 }
@@ -262,6 +271,30 @@ func (s *BotAccessService) recordTicketAudit(ctx context.Context, bot *Bot, bind
 		ReasonCode:  reasonCode,
 		RequestID:   requestIDFromGRPCContext(ctx),
 		Metadata:    writeMetadata,
+	})
+}
+
+func (s *BotAccessService) recordLegacyBindingAudit(ctx context.Context, bot *Bot, req *pb.UpsertPlatformBindingRequest, action, result, reasonCode string) {
+	if s == nil || s.db == nil || bot == nil || req == nil {
+		return
+	}
+
+	_ = serviceaudit.Record(ctx, s.db, serviceaudit.WriteInput{
+		Category:   "bot_access",
+		ActorType:  "consumer",
+		Action:     action,
+		TargetType: "platform_binding",
+		TargetID:   req.GetPlatformAccountId(),
+		Result:     result,
+		ReasonCode: reasonCode,
+		RequestID:  requestIDFromGRPCContext(ctx),
+		Metadata: map[string]any{
+			"bot_id":               bot.Id,
+			"external_user_id":     req.GetExternalUserId(),
+			"platform":             req.GetPlatform(),
+			"platform_service_key": req.GetPlatformServiceKey(),
+			"legacy_migration":     true,
+		},
 	})
 }
 

@@ -71,6 +71,7 @@ func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(
 		DisplayName:        "Primary Telegram",
 		MetaJSON:           `{"lang":"en"}`,
 		GrantScopes:        []string{"messages:read", "messages:write"},
+		GrantMode:          PlatformBindingGrantModeLegacyMigration,
 	})
 	require.NoError(t, err)
 	assert.True(t, created)
@@ -102,6 +103,33 @@ func TestAccountRefService_UpsertPlatformBindingCreatesGrantWithoutLegacyWrites(
 	assert.False(t, db.Migrator().HasTable("bot_account_grants"))
 }
 
+func TestAccountRefService_UpsertPlatformBindingCanSkipConsumerGrant(t *testing.T) {
+	db := setupBotAccessServiceTestDB(t)
+	service := &AccountRefService{db: db}
+
+	identity := seedBotIdentity(t, db, "bot-paigram", "external-link-no-grant", 2)
+
+	binding, created, err := service.UpsertPlatformBinding(UpsertPlatformBindingParams{
+		BotID:              identity.BotID,
+		ExternalUserID:     identity.ExternalUserID,
+		Platform:           "telegram",
+		PlatformServiceKey: "tg-main",
+		PlatformAccountID:  "acct-1002",
+		DisplayName:        "Primary Telegram",
+		MetaJSON:           `{"lang":"en"}`,
+		GrantScopes:        []string{"messages:read"},
+	})
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, identity.UserID, binding.OwnerUserID)
+
+	consumer, err := consumerName(identity.BotID)
+	require.NoError(t, err)
+	var count int64
+	require.NoError(t, db.Model(&model.ConsumerGrant{}).Where("binding_id = ? AND consumer = ?", binding.ID, consumer).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestAccountRefService_UpsertPlatformBindingRejectsOtherUserOwnership(t *testing.T) {
 	db := setupBotAccessServiceTestDB(t)
 	service := &AccountRefService{db: db}
@@ -117,6 +145,7 @@ func TestAccountRefService_UpsertPlatformBindingRejectsOtherUserOwnership(t *tes
 		PlatformAccountID:  "acct-shared",
 		DisplayName:        "Shared",
 		GrantScopes:        []string{"messages:read"},
+		GrantMode:          PlatformBindingGrantModeLegacyMigration,
 	})
 	require.NoError(t, err)
 

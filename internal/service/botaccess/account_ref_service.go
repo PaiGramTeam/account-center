@@ -24,7 +24,15 @@ type UpsertPlatformBindingParams struct {
 	DisplayName        string
 	MetaJSON           string
 	GrantScopes        []string
+	GrantMode          PlatformBindingGrantMode
 }
+
+type PlatformBindingGrantMode int
+
+const (
+	PlatformBindingGrantModeNone PlatformBindingGrantMode = iota
+	PlatformBindingGrantModeLegacyMigration
+)
 
 func (s *AccountRefService) ResolveBotUser(botID, externalUserID string) (*model.BotIdentity, error) {
 	var identity model.BotIdentity
@@ -52,14 +60,18 @@ func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingPa
 	if err != nil {
 		return nil, false, err
 	}
-	consumer, err := consumerName(params.BotID)
-	if err != nil {
-		return nil, false, err
-	}
+	consumer := ""
+	scopeJSON := []byte("[]")
+	if params.GrantMode == PlatformBindingGrantModeLegacyMigration {
+		consumer, err = consumerName(params.BotID)
+		if err != nil {
+			return nil, false, err
+		}
 
-	scopeJSON, err := json.Marshal(params.GrantScopes)
-	if err != nil {
-		return nil, false, fmt.Errorf("upsert platform binding: marshal scopes: %w", err)
+		scopeJSON, err = json.Marshal(params.GrantScopes)
+		if err != nil {
+			return nil, false, fmt.Errorf("upsert platform binding: marshal scopes: %w", err)
+		}
 	}
 
 	created := false
@@ -94,6 +106,10 @@ func (s *AccountRefService) UpsertPlatformBinding(params UpsertPlatformBindingPa
 			if err := tx.Save(&binding).Error; err != nil {
 				return err
 			}
+		}
+
+		if params.GrantMode != PlatformBindingGrantModeLegacyMigration {
+			return nil
 		}
 
 		var grant model.ConsumerGrant

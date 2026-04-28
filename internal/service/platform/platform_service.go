@@ -26,9 +26,10 @@ import (
 )
 
 var (
-	ErrInvalidTicketConfig             = errors.New("invalid service ticket config")
-	ErrPlatformSummaryProxyUnavailable = platformbinding.ErrPlatformSummaryProxyUnavailable
-	ErrPlatformServiceUnavailable      = platformbinding.ErrPlatformServiceUnavailable
+	ErrInvalidTicketConfig               = errors.New("invalid service ticket config")
+	ErrPlatformSummaryProxyUnavailable   = platformbinding.ErrPlatformSummaryProxyUnavailable
+	ErrPlatformServiceUnavailable        = platformbinding.ErrPlatformServiceUnavailable
+	ErrConsumerGrantInvalidationRejected = errors.New("consumer grant invalidation rejected by platform service")
 )
 
 // ServiceTicketClaims carries actor-scoped platform access metadata.
@@ -276,11 +277,11 @@ func (s *PlatformService) InvalidateConsumerGrant(ctx context.Context, input pla
 
 	actorType := input.ActorType
 	actorID := input.ActorID
-	if actorType == "" || actorID == "" {
+	if actorType == "" || actorID == "" || actorType == "consumer" {
 		actorType = "user"
 		actorID = "system:grant-revoke"
 	}
-	if !isSupportedInternalActorType(actorType) {
+	if actorType != "user" && actorType != "admin" {
 		return ErrInvalidTicketConfig
 	}
 
@@ -322,7 +323,7 @@ func (s *PlatformService) InvalidateConsumerGrant(ctx context.Context, input pla
 	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	_, err = platformv1.NewPlatformServiceClient(conn).InvalidateConsumerGrant(callCtx, &platformv1.InvalidateConsumerGrantRequest{
+	resp, err := platformv1.NewPlatformServiceClient(conn).InvalidateConsumerGrant(callCtx, &platformv1.InvalidateConsumerGrantRequest{
 		ServiceTicket:       signed,
 		BindingId:           input.BindingID,
 		Consumer:            input.Consumer,
@@ -331,7 +332,13 @@ func (s *PlatformService) InvalidateConsumerGrant(ctx context.Context, input pla
 	if err != nil && isPlatformUnavailableRPCError(err) {
 		return fmt.Errorf("%w: %v", ErrPlatformServiceUnavailable, err)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if resp == nil || !resp.GetSuccess() {
+		return ErrConsumerGrantInvalidationRejected
+	}
+	return nil
 }
 
 func (s *PlatformService) getEnabledPlatformService(platformKey, serviceKey string) (*model.PlatformService, error) {

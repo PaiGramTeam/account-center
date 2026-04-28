@@ -9,6 +9,7 @@ import (
 
 	platformv1 "github.com/PaiGramTeam/proto-contracts/platform/v1"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -274,6 +275,121 @@ func TestPlatformServiceInvalidateConsumerGrantCallsPlatformService(t *testing.T
 	require.Equal(t, "platform-mihomo-service", parsed.PlatformServiceKey)
 	require.Equal(t, []string{"mihomo.consumer_grant.invalidate"}, parsed.Scopes)
 	require.Equal(t, []string{"platform-mihomo-service"}, []string(parsed.Audience))
+}
+
+func TestPlatformServiceInvalidateConsumerGrantReturnsErrorWhenPlatformRejects(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "platform_registry_grant_invalidation_rejected", &model.PlatformService{})
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "bufnet",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{}`,
+	}).Error)
+
+	stub := &grantInvalidationPlatformServiceStub{response: &platformv1.InvalidateConsumerGrantResponse{Success: false}}
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	platformv1.RegisterPlatformServiceServer(server, stub)
+	go server.Serve(listener)
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	svc := NewServiceGroup(db).PlatformService
+	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+	svc.dial = func(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
+		require.Equal(t, "bufnet", endpoint)
+		return grpc.DialContext(ctx, "passthrough:///bufnet",
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+	}
+
+	err := svc.InvalidateConsumerGrant(context.Background(), platformbinding.GrantInvalidationInput{
+		BindingID:           42,
+		OwnerUserID:         7,
+		Platform:            "mihomo",
+		PlatformServiceKey:  "platform-mihomo-service",
+		Consumer:            platformbinding.ConsumerPaiGramBot,
+		MinimumGrantVersion: 8,
+		ActorType:           "admin",
+		ActorID:             "admin:7",
+	})
+	require.ErrorIs(t, err, ErrConsumerGrantInvalidationRejected)
+}
+
+func TestPlatformServiceInvalidateConsumerGrantNormalizesConsumerActorToUser(t *testing.T) {
+	db := testutil.OpenMySQLTestDB(t, "platform_registry_grant_invalidation_actor", &model.PlatformService{})
+	require.NoError(t, db.Create(&model.PlatformService{
+		PlatformKey:          "mihomo",
+		DisplayName:          "Mihomo",
+		ServiceKey:           "platform-mihomo-service",
+		ServiceAudience:      "platform-mihomo-service",
+		DiscoveryType:        "static",
+		Endpoint:             "bufnet",
+		Enabled:              true,
+		SupportedActionsJSON: `[]`,
+		CredentialSchemaJSON: `{}`,
+	}).Error)
+
+	stub := &grantInvalidationPlatformServiceStub{response: &platformv1.InvalidateConsumerGrantResponse{Success: true}}
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	platformv1.RegisterPlatformServiceServer(server, stub)
+	go server.Serve(listener)
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	svc := NewServiceGroup(db).PlatformService
+	require.NoError(t, svc.ConfigureAuth(config.AuthConfig{
+		ServiceTicketTTLSeconds: 300,
+		ServiceTicketIssuer:     "account-center",
+		ServiceTicketSigningKey: "0123456789abcdef0123456789abcdef",
+	}))
+	svc.dial = func(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
+		require.Equal(t, "bufnet", endpoint)
+		return grpc.DialContext(ctx, "passthrough:///bufnet",
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		)
+	}
+
+	err := svc.InvalidateConsumerGrant(context.Background(), platformbinding.GrantInvalidationInput{
+		BindingID:           42,
+		OwnerUserID:         7,
+		Platform:            "mihomo",
+		PlatformServiceKey:  "platform-mihomo-service",
+		Consumer:            platformbinding.ConsumerPaiGramBot,
+		MinimumGrantVersion: 8,
+		ActorType:           "consumer",
+		ActorID:             platformbinding.ConsumerPaiGramBot,
+	})
+	require.NoError(t, err)
+
+	parsed := &ServiceTicketClaims{}
+	token, err := jwt.ParseWithClaims(stub.lastRequest.GetServiceTicket(), parsed, func(token *jwt.Token) (any, error) {
+		return []byte("0123456789abcdef0123456789abcdef"), nil
+	})
+	require.NoError(t, err)
+	require.True(t, token.Valid)
+	assert.Equal(t, "user", parsed.ActorType)
+	assert.Equal(t, "system:grant-revoke", parsed.ActorID)
 }
 
 func TestPlatformServiceListPlatformViews(t *testing.T) {

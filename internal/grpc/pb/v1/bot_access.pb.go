@@ -302,6 +302,9 @@ func (x *ResolveBotUserResponse) GetExternalUsername() string {
 	return ""
 }
 
+// Legacy migration-only endpoint for importing platform bindings from bot services.
+// New callers must use account-center binding/grant APIs instead. This RPC may
+// create a legacy migration ConsumerGrant for the caller bot and is capability-gated.
 type UpsertPlatformBindingRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	ExternalUserId     string                 `protobuf:"bytes,1,opt,name=external_user_id,json=externalUserId,proto3" json:"external_user_id,omitempty"`

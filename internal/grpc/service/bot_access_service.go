@@ -83,6 +83,7 @@ func (s *BotAccessService) UpsertPlatformBinding(ctx context.Context, req *pb.Up
 		DisplayName:        req.GetDisplayName(),
 		MetaJSON:           req.GetMetaJson(),
 		GrantScopes:        req.GetGrantScopes(),
+		GrantMode:          botaccess.PlatformBindingGrantModeLegacyMigration,
 	})
 	if err != nil {
 		return nil, mapBotAccessError("upsert platform binding", err)

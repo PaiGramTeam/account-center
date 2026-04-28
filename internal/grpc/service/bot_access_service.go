@@ -143,7 +143,7 @@ func (s *BotAccessService) IssueServiceTicket(ctx context.Context, req *pb.Issue
 		return nil, mapBotAccessError("validate requested scopes", err)
 	}
 
-	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, scopes, req.GetAudience())
+	ticket, expiresAt, err := s.ticketService.Issue(bot.Id, grant.Consumer, binding, scopes, req.GetAudience(), req.GetProfileId(), grant.TicketVersion)
 	if err != nil {
 		s.recordTicketAudit(ctx, bot, binding, req, "ticket_reject", "failure", reasonCodeFromBotAccessErr(err), map[string]any{"consumer": grant.Consumer})
 		return nil, mapBotAccessError("issue service ticket", err)

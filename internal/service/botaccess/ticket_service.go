@@ -21,6 +21,8 @@ type ServiceTicketClaims struct {
 	Platform           string   `json:"platform"`
 	PlatformServiceKey string   `json:"platform_service_key"`
 	BindingID          uint64   `json:"binding_id,omitempty"`
+	ProfileID          uint64   `json:"profile_id,omitempty"`
+	GrantVersion       uint64   `json:"grant_version,omitempty"`
 	PlatformAccountID  string   `json:"platform_account_id,omitempty"`
 	Scopes             []string `json:"scopes"`
 	jwt.RegisteredClaims
@@ -49,11 +51,14 @@ func NewTicketService(authCfg config.AuthConfig) (*TicketService, error) {
 	}, nil
 }
 
-func (s *TicketService) Issue(botID, consumer string, binding *model.PlatformAccountBinding, scopes []string, audience string) (string, time.Time, error) {
+func (s *TicketService) Issue(botID, consumer string, binding *model.PlatformAccountBinding, scopes []string, audience string, profileID, grantVersion uint64) (string, time.Time, error) {
 	if binding == nil || binding.Status != model.PlatformAccountBindingStatusActive {
 		return "", time.Time{}, ErrInactiveAccountRef
 	}
 	if consumer == "" || audience == "" {
+		return "", time.Time{}, ErrInvalidTicketConfig
+	}
+	if grantVersion == 0 {
 		return "", time.Time{}, ErrInvalidTicketConfig
 	}
 
@@ -69,6 +74,8 @@ func (s *TicketService) Issue(botID, consumer string, binding *model.PlatformAcc
 		Platform:           binding.Platform,
 		PlatformServiceKey: binding.PlatformServiceKey,
 		BindingID:          binding.ID,
+		ProfileID:          profileID,
+		GrantVersion:       grantVersion,
 		PlatformAccountID:  nullableBindingExternalAccountKey(binding.ExternalAccountKey),
 		Scopes:             scopes,
 		RegisteredClaims: jwt.RegisteredClaims{

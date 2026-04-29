@@ -28,14 +28,19 @@ func TestAuthFlowRegisterVerifyLoginRefreshLogout(t *testing.T) {
 		"locale":       "en_US",
 	}, nil)
 	require.Equal(t, http.StatusCreated, registerRes.Code, registerRes.Body.String())
-	registerData := decodeResponseData(t, registerRes)
-	verificationToken, ok := registerData["verification_token"].(string)
-	require.True(t, ok)
-	require.NotEmpty(t, verificationToken)
+
+	// V14: registration response no longer leaks the verification token.
+	// To exercise the /verify-email endpoint we replace the stored token
+	// hash with the hash of a known plaintext, then call verify-email
+	// with that plaintext.
+	knownToken := "integration-known-verification-token-1234"
+	require.NoError(t, stack.DB.Model(&model.UserEmail{}).
+		Where("email = ?", "integration@example.com").
+		Update("verification_token", hashTokenForTest(knownToken)).Error)
 
 	verifyRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/verify-email", map[string]any{
 		"email": "integration@example.com",
-		"token": verificationToken,
+		"token": knownToken,
 	}, nil)
 	require.Equal(t, http.StatusOK, verifyRes.Code, verifyRes.Body.String())
 

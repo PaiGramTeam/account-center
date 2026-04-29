@@ -17,6 +17,7 @@ import (
 	"paigram/internal/response"
 	"paigram/internal/service"
 	"paigram/internal/sessioncache"
+	"paigram/internal/utils/secsubtle"
 )
 
 const defaultSessionUpdateAge = 24 * time.Hour
@@ -94,7 +95,7 @@ func AuthMiddleware(sessionCache sessioncache.Store, authCfg config.AuthConfig) 
 
 				currentAccessHash, err := sessionCache.Get(ctx, sessioncache.CurrentAccessTokenHashKey(sessionData.SessionID))
 				if err == nil {
-					if string(currentAccessHash) != accessTokenHash {
+					if !secsubtle.StringEqual(string(currentAccessHash), accessTokenHash) {
 						log.Printf("[auth] cached access token hash mismatch for session %d, falling back to database validation", sessionData.SessionID)
 					} else {
 						// Check revocation from cache

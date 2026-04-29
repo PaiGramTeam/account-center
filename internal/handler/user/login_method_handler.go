@@ -77,7 +77,7 @@ func (h *Handler) PatchUserPrimaryLoginMethod(c *gin.Context) {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			response.NotFound(c, "user not found")
 		case errors.Is(err, serviceme.ErrProviderNotBound):
-			response.NotFound(c, err.Error())
+			response.NotFound(c, "provider not bound to this account")
 		default:
 			response.InternalServerError(c, "failed to set primary login method")
 		}

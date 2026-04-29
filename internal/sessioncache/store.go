@@ -2,6 +2,8 @@ package sessioncache
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -202,11 +204,30 @@ func (s *RedisStore) IsRevoked(ctx context.Context, tokenType TokenType, token s
 }
 
 func (s *RedisStore) tokenKey(tokenType TokenType, token string) string {
-	return fmt.Sprintf("%s:session:%s:%s", s.prefix, tokenType, token)
+	return fmt.Sprintf("%s:session:%s:%s", s.prefix, tokenType, hashTokenForKey(token))
 }
 
 func (s *RedisStore) revokedKey(tokenType TokenType, token string) string {
-	return fmt.Sprintf("%s:session:revoked:%s:%s", s.prefix, tokenType, token)
+	return fmt.Sprintf("%s:session:revoked:%s:%s", s.prefix, tokenType, hashTokenForKey(token))
+}
+
+// hashTokenForKey returns the SHA-256 hex digest of token. The package uses
+// it to derive Redis keys so that a Redis snapshot, MEMORY/KEYS leak, or
+// slowlog entry never exposes raw access/refresh tokens. The transform is
+// applied transparently inside the package; callers continue to pass the
+// original token to the public API (V4 hardening).
+//
+// hashTokenForKey is a pure SHA-256 hex transform: it does NOT special-case
+// the empty string. Public methods on RedisStore guard against empty tokens
+// before reaching the key builders, so an empty input here is already a
+// caller bug. We deliberately let it produce the well-known empty-input
+// digest (e3b0c4...) rather than returning "" -- the latter would silently
+// collide every empty-input bug onto the same Redis key shape (`prefix:session:access:`)
+// and create a cache-poisoning failure mode that's indistinguishable from
+// real traffic. Code-review feedback on commit 7e420e0.
+func hashTokenForKey(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // RevokedSessionMarkerKey returns the generic cache key used to invalidate a session by ID.

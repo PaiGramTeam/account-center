@@ -19,7 +19,7 @@ func TestFreshBootstrapSeedsUsableCasbinPoliciesForDefaultAdmin(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "BootstrapPass123!")
 	t.Setenv("ADMIN_NAME", "Bootstrap Admin")
 
-	initializer := initialize.NewInitializer(stack.DB, nil, config.DatabaseConfig{AutoSeed: true})
+	initializer := initialize.NewInitializer(stack.DB, nil, config.DatabaseConfig{AutoSeed: true}, config.SecurityConfig{BcryptCost: 12})
 	require.NoError(t, initializer.Run())
 
 	loginRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{

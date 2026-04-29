@@ -13,6 +13,7 @@ import (
 
 	"paigram/internal/model"
 	"paigram/internal/sessioncache"
+	"paigram/internal/utils/secsubtle"
 )
 
 // SessionView represents the /me session payload.
@@ -72,7 +73,7 @@ func (s *SessionService) ListSessions(ctx context.Context, userID uint64, page, 
 			CreatedAt:     session.CreatedAt,
 			AccessExpiry:  session.AccessExpiry,
 			RefreshExpiry: session.RefreshExpiry,
-			IsCurrent:     currentTokenHash != "" && session.AccessTokenHash == currentTokenHash,
+			IsCurrent:     currentTokenHash != "" && secsubtle.StringEqual(session.AccessTokenHash, currentTokenHash),
 		}
 		deviceID := buildDeviceID(session.UserAgent, session.ClientIP)
 		if device, ok := deviceMap[deviceID]; ok {

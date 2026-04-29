@@ -3,18 +3,45 @@
 package integration
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"paigram/internal/model"
 )
 
 func decodeJSON(t *testing.T, recorder *httptest.ResponseRecorder, target any) {
 	t.Helper()
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), target))
+}
+
+// markEmailVerified bypasses the email-verification HTTP flow by directly
+// flipping verified_at on the user_emails row. V14 removed the
+// verification_token from the registration HTTP response, so integration
+// tests that need a verified user can no longer round-trip through
+// /verify-email; they verify against the DB instead. This is acceptable
+// because the goal of those tests is the post-verification flow, not the
+// verification mechanism itself (which has its own targeted tests).
+func markEmailVerified(t *testing.T, stack *integrationStack, email string) {
+	t.Helper()
+	now := time.Now().UTC()
+	require.NoError(t, stack.DB.Model(&model.UserEmail{}).
+		Where("email = ?", email).
+		Updates(map[string]any{
+			"verified_at":         sql.NullTime{Time: now, Valid: true},
+			"verification_token":  "",
+			"verification_expiry": sql.NullTime{},
+		}).Error)
+	require.NoError(t, stack.DB.Model(&model.User{}).
+		Where("id = (SELECT user_id FROM user_emails WHERE email = ?)", email).
+		Where("status = ?", model.UserStatusPending).
+		Update("status", model.UserStatusActive).Error)
 }
 
 func registerAndLogin(t *testing.T, stack *integrationStack, email, password string) (uint64, string, string, string, string) {
@@ -27,14 +54,8 @@ func registerAndLogin(t *testing.T, stack *integrationStack, email, password str
 		"locale":       "en_US",
 	}, nil)
 	require.Equal(t, http.StatusCreated, registerRes.Code, registerRes.Body.String())
-	registerData := decodeResponseData(t, registerRes)
-	verificationToken := registerData["verification_token"].(string)
 
-	verifyRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/verify-email", map[string]any{
-		"email": email,
-		"token": verificationToken,
-	}, nil)
-	require.Equal(t, http.StatusOK, verifyRes.Code, verifyRes.Body.String())
+	markEmailVerified(t, stack, email)
 
 	loginRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"email":    email,

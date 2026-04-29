@@ -16,10 +16,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"paigram/internal/config"
 	"paigram/internal/handler/shared"
+	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/response"
@@ -27,6 +30,8 @@ import (
 	serviceme "paigram/internal/service/me"
 	"paigram/internal/service/user"
 	"paigram/internal/sessioncache"
+	"paigram/internal/utils/safeerror"
+	"paigram/internal/utils/secsubtle"
 )
 
 // Handler exposes REST handlers for user resources.
@@ -34,7 +39,8 @@ type Handler struct {
 	userService  UserServiceInterface
 	loginMethods LoginMethodService
 	sessionCache sessioncache.Store
-	db           *gorm.DB // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
+	securityCfg  config.SecurityConfig // bcrypt cost source for admin-create / admin-reset paths (V8)
+	db           *gorm.DB              // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
 }
 
 // LoginMethodService defines reusable login-method operations shared with /me.
@@ -84,6 +90,28 @@ func NewHandlerWithDBAndCache(userService UserServiceInterface, db *gorm.DB, cac
 		sessionCache: cache,
 		db:           db,
 	}
+}
+
+// NewHandlerWithDBCacheAndSecurity is the preferred constructor for the
+// production wiring: it accepts the security config so admin-managed
+// password operations hash at the operator-configured cost (V8).
+func NewHandlerWithDBCacheAndSecurity(userService UserServiceInterface, db *gorm.DB, cache sessioncache.Store, security config.SecurityConfig) *Handler {
+	h := NewHandlerWithDBAndCache(userService, db, cache)
+	h.securityCfg = security
+	return h
+}
+
+// bcryptCost returns the operator-configured cost clamped to [10, 14],
+// falling back to 12 (OWASP minimum) when not set.
+func (h *Handler) bcryptCost() int {
+	cost := h.securityCfg.BcryptCost
+	if cost < 10 {
+		return 12
+	}
+	if cost > 14 {
+		return 14
+	}
+	return cost
 }
 
 // RegisterRoutes binds user routes to the router group.
@@ -147,7 +175,8 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	})
 
 	if err != nil {
-		response.InternalServerError(c, err.Error())
+		logging.Error("list users failed", zap.Error(err))
+		response.InternalServerError(c, safeerror.UserMessage(err))
 		return
 	}
 
@@ -158,7 +187,8 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	}
 	rolesByUserID, err := h.loadRoleNamesByUserIDs(h.db, userIDs)
 	if err != nil {
-		response.InternalServerError(c, "failed to load roles: "+err.Error())
+		logging.Error("list users: failed to load roles", zap.Error(err), zap.Int("user_count", len(userIDs)))
+		response.InternalServerError(c, "failed to load roles")
 		return
 	}
 
@@ -217,7 +247,8 @@ func (h *Handler) GetUser(c *gin.Context) {
 	// Build full user detail with roles, permissions, security metadata
 	userData, err := h.buildUserDetail(h.db, user)
 	if err != nil {
-		response.InternalServerError(c, "failed to build user detail: "+err.Error())
+		logging.Error("get user: failed to build user detail", zap.Error(err), zap.Uint64("user_id", userID))
+		response.InternalServerError(c, "failed to build user detail")
 		return
 	}
 
@@ -467,7 +498,7 @@ func (h *Handler) GetUserSessions(c *gin.Context) {
 			CreatedAt:     session.CreatedAt,
 			AccessExpiry:  session.AccessExpiry,
 			RefreshExpiry: session.RefreshExpiry,
-			IsCurrent:     session.AccessTokenHash == currentTokenHash && currentTokenHash != "",
+			IsCurrent:     currentTokenHash != "" && secsubtle.StringEqual(session.AccessTokenHash, currentTokenHash),
 		}
 
 		deviceID := buildDeviceID(session.UserAgent, session.ClientIP)
@@ -641,7 +672,8 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("create user: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 	if req.Roles != nil {
@@ -681,8 +713,8 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	// Hash password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	// Hash password using the operator-configured cost (V8).
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), h.bcryptCost())
 	if err != nil {
 		response.InternalServerError(c, "failed to hash password")
 		return
@@ -732,25 +764,30 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	})
 
 	if err != nil {
+		// Inspecting err.Error() here is internal logic, not a response leak;
+		// the user-facing message stays static.
 		if strings.Contains(err.Error(), "duplicate") || strings.Contains(err.Error(), "unique") {
 			response.Conflict(c, "email already registered")
 			return
 		}
-		response.InternalServerError(c, err.Error())
+		logging.Error("create user transaction failed", zap.Error(err), zap.String("email", email))
+		response.InternalServerError(c, safeerror.UserMessage(err))
 		return
 	}
 
 	// Load full user details with all associations
 	var fullUser model.User
 	if err := h.db.Preload("Profile").Preload("Emails").First(&fullUser, user.ID).Error; err != nil {
-		response.InternalServerError(c, "failed to load created user: "+err.Error())
+		logging.Error("create user: failed to load created user", zap.Error(err), zap.Uint64("user_id", user.ID))
+		response.InternalServerError(c, "failed to load created user")
 		return
 	}
 
 	// Build complete user detail response
 	userData, err := h.buildUserDetail(h.db, fullUser)
 	if err != nil {
-		response.InternalServerError(c, "failed to build user detail: "+err.Error())
+		logging.Error("create user: failed to build user detail", zap.Error(err), zap.Uint64("user_id", fullUser.ID))
+		response.InternalServerError(c, "failed to build user detail")
 		return
 	}
 
@@ -801,7 +838,8 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	}
 
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("update user: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 	if req.Roles != nil {
@@ -845,29 +883,35 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	})
 
 	if err != nil {
+		// The transaction returns errors.New("user not found") and similar
+		// hand-written sentinels; we branch on the inner string to keep the
+		// existing routing but echo only static, audited prose to the client.
 		if strings.Contains(err.Error(), "not found") {
-			response.NotFound(c, err.Error())
+			response.NotFound(c, "user not found")
 			return
 		}
 		if strings.Contains(err.Error(), "already taken") {
-			response.Conflict(c, err.Error())
+			response.Conflict(c, "value already taken")
 			return
 		}
-		response.InternalServerError(c, err.Error())
+		logging.Error("update user transaction failed", zap.Error(err), zap.Uint64("user_id", userID))
+		response.InternalServerError(c, safeerror.UserMessage(err))
 		return
 	}
 
 	// Load full user details with all associations
 	var fullUser model.User
 	if err := h.db.Preload("Profile").Preload("Emails").First(&fullUser, userID).Error; err != nil {
-		response.InternalServerError(c, "failed to load updated user: "+err.Error())
+		logging.Error("update user: failed to load updated user", zap.Error(err), zap.Uint64("user_id", userID))
+		response.InternalServerError(c, "failed to load updated user")
 		return
 	}
 
 	// Build complete user detail response
 	userData, err := h.buildUserDetail(h.db, fullUser)
 	if err != nil {
-		response.InternalServerError(c, "failed to build user detail: "+err.Error())
+		logging.Error("update user: failed to build user detail", zap.Error(err), zap.Uint64("user_id", userID))
+		response.InternalServerError(c, "failed to build user detail")
 		return
 	}
 
@@ -915,7 +959,8 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		// Hard delete: bypass service layer, use direct DB access with Unscoped
 		result := h.db.Unscoped().Delete(&model.User{}, userID)
 		if result.Error != nil {
-			response.InternalServerError(c, "failed to delete user: "+result.Error.Error())
+			logging.Error("hard delete user failed", zap.Error(result.Error), zap.Uint64("user_id", userID))
+			response.InternalServerError(c, "failed to delete user")
 			return
 		}
 		if result.RowsAffected == 0 {
@@ -926,10 +971,11 @@ func (h *Handler) DeleteUser(c *gin.Context) {
 		// Soft delete: use service layer
 		if err := h.userService.DeleteUser(userID); err != nil {
 			if strings.Contains(err.Error(), "not found") {
-				response.NotFound(c, err.Error())
+				response.NotFound(c, "user not found")
 				return
 			}
-			response.InternalServerError(c, err.Error())
+			logging.Error("soft delete user failed", zap.Error(err), zap.Uint64("user_id", userID))
+			response.InternalServerError(c, safeerror.UserMessage(err))
 			return
 		}
 	}
@@ -961,9 +1007,10 @@ func (h *Handler) UpdateUserStatus(c *gin.Context) {
 
 	var req UpdateUserStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", map[string]string{
-			"error": err.Error(),
-		})
+		// V13: do not surface raw binding error text to clients (it can
+		// embed reflected internal type names); log it for operators.
+		logging.Error("update user status: invalid request body", zap.Error(err), zap.Uint64("target_id", id))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 
@@ -1038,9 +1085,9 @@ func (h *Handler) ResetUserPassword(c *gin.Context) {
 
 	var req ResetPasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", map[string]string{
-			"error": err.Error(),
-		})
+		// V13: do not surface raw binding error text to clients.
+		logging.Error("reset user password: invalid request body", zap.Error(err), zap.Uint64("target_id", id))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 
@@ -1066,8 +1113,8 @@ func (h *Handler) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	// Hash new password
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	// Hash new password using the operator-configured cost (V8).
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), h.bcryptCost())
 	if err != nil {
 		response.InternalServerErrorWithCode(c, response.ErrCodeInternalError, "failed to hash password", nil)
 		return

@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS user_oauth_states (
     redirect_to VARCHAR(512) NULL,
     nonce VARCHAR(255) NULL,
     code_verifier VARCHAR(255) NULL COMMENT 'PKCE code verifier for secure authorization code exchange',
+    client_ip VARCHAR(64) NOT NULL DEFAULT '',
+    user_agent VARCHAR(255) NOT NULL DEFAULT '',
     expires_at DATETIME(3) NOT NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     UNIQUE KEY uniq_state (state),
@@ -316,6 +318,7 @@ CREATE TABLE IF NOT EXISTS bots (
 CREATE TABLE IF NOT EXISTS bot_tokens (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
     bot_id VARCHAR(64) NOT NULL,
+    family_id CHAR(36) NOT NULL,
     access_token_hash VARCHAR(64) NOT NULL,
     refresh_token_hash VARCHAR(64) NOT NULL,
     rate_limit_enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -327,11 +330,15 @@ CREATE TABLE IF NOT EXISTS bot_tokens (
     expires_at DATETIME(3) NOT NULL,
     created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     revoked_at DATETIME(3) NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
+    revoked_reason VARCHAR(64) NOT NULL DEFAULT '',
     UNIQUE KEY uniq_access_token_hash (access_token_hash),
     UNIQUE KEY uniq_refresh_token_hash (refresh_token_hash),
     KEY idx_bot_id (bot_id),
     KEY idx_bot_tokens_expires_at (expires_at),
     KEY idx_last_request (last_request),
+    KEY idx_bot_tokens_family_id (family_id),
+    KEY idx_bot_tokens_status (status),
     CONSTRAINT fk_bot_tokens_bot FOREIGN KEY (bot_id) REFERENCES bots (id) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

@@ -39,6 +39,15 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	}
 	engine.Use(gin.Recovery(), gin.Logger())
 
+	// V10: emit baseline security response headers BEFORE CORS so they
+	// are present even on CORS-rejected and error responses.
+	engine.Use(middleware.SecurityHeaders(middleware.SecurityHeadersConfig{
+		HSTSMaxAgeSeconds: cfg.Security.SecurityHeaders.HSTSMaxAgeSeconds,
+		HSTSIncludeSub:    cfg.Security.SecurityHeaders.HSTSIncludeSub,
+		CSP:               cfg.Security.SecurityHeaders.CSP,
+		AssumeHTTPS:       cfg.Security.SecurityHeaders.AssumeHTTPS,
+	}))
+
 	corsMiddleware, err := newCORSMiddleware(appCfg.CORS)
 	if err != nil {
 		log.Printf("[SECURITY WARNING] Failed to configure CORS middleware: %v", err)
@@ -47,21 +56,26 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 		log.Printf("[SECURITY] CORS enabled for %v", appCfg.CORS.AllowOrigins)
 	}
 
-	// SECURITY: Configure trusted proxies to prevent IP spoofing
-	// This is critical for rate limiting based on IP address
+	// SECURITY: Configure trusted proxies to prevent IP spoofing.
+	// V21: trusted_proxies defaults to empty (fail-safe). Operators
+	// behind a reverse proxy MUST configure their proxy IP/CIDR or
+	// X-Forwarded-For-based rate limiting will be spoofable.
 	if len(appCfg.TrustedProxies) > 0 {
 		if err := engine.SetTrustedProxies(appCfg.TrustedProxies); err != nil {
 			log.Printf("[SECURITY WARNING] Failed to set trusted proxies: %v", err)
 			log.Printf("Rate limiting by IP may be vulnerable to spoofing!")
 		} else {
-			log.Printf("[SECURITY] Trusted proxies configured: %v", appCfg.TrustedProxies)
+			log.Printf("[security] app.trusted_proxies = %v", appCfg.TrustedProxies)
 		}
 	} else {
-		// No trusted proxies - trust direct connections only
+		// No trusted proxies — gin will use the direct connection IP.
+		// Correct for direct deployments; operators behind a reverse
+		// proxy must set app.trusted_proxies explicitly.
 		if err := engine.SetTrustedProxies(nil); err != nil {
 			log.Printf("[SECURITY WARNING] Failed to disable trusted proxies: %v", err)
 		}
-		log.Printf("[SECURITY] No trusted proxies - only direct connections trusted")
+		log.Printf("[security] app.trusted_proxies is empty — gin will trust only the direct client connection IP. " +
+			"If running behind a reverse proxy, set app.trusted_proxies to its real IP/CIDR.")
 	}
 
 	registerSwagger(engine)
@@ -90,10 +104,10 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	geoService := geolocation.NewService()
 
 	// Initialize handler groups with dependencies
-	if err := handler.InitializeApiGroups(db, cache, authCfg); err != nil {
+	if err := handler.InitializeApiGroups(db, cache, authCfg, cfg.Security); err != nil {
 		return nil, fmt.Errorf("initialize api groups: %w", err)
 	}
-	handler.ApiGroupApp.AuthApiGroup = *authhandler.NewApiGroup(db, authCfg, emailService, cfg.Security, cache, geoService)
+	handler.ApiGroupApp.AuthApiGroup = *authhandler.NewApiGroup(db, authCfg, cfg.Frontend, emailService, cfg.Security, cache, geoService)
 
 	// Public routes - no authentication required
 	authHandler := &handler.ApiGroupApp.AuthApiGroup.Handler

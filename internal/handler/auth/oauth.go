@@ -14,18 +14,25 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"paigram/internal/config"
 	"paigram/internal/handler/shared"
+	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
+	"paigram/internal/oidc"
 	"paigram/internal/response"
 	"paigram/internal/service"
+	piiutil "paigram/internal/utils/pii"
+	"paigram/internal/utils/secsubtle"
 )
 
 var (
@@ -37,6 +44,85 @@ var (
 	errBindAuthRequired       = errors.New("bind callback requires authenticated user")
 	errBindUserMismatch       = errors.New("bind callback authenticated user mismatch")
 )
+
+// knownOIDCProviderDefaults supplies issuer + JWKS URL fall-backs for
+// well-known OIDC providers when the operator did not configure them
+// explicitly. We deliberately do not include Telegram here — Telegram's
+// flow runs through verifyTelegramIDToken (separate path).
+//
+// These values are intentionally hard-coded rather than discovered via
+// /.well-known/openid-configuration so a misconfigured DNS / proxy cannot
+// silently steer verification to an attacker-controlled server.
+var knownOIDCProviderDefaults = map[string]struct {
+	Issuer  string
+	JWKSURL string
+}{
+	"google": {
+		Issuer:  "https://accounts.google.com",
+		JWKSURL: "https://www.googleapis.com/oauth2/v3/certs",
+	},
+	"microsoft": {
+		Issuer:  "https://login.microsoftonline.com/common/v2.0",
+		JWKSURL: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+	},
+}
+
+// oidcVerifierCache lazily builds and caches an *oidc.Verifier per provider
+// name. Verifiers themselves cache JWKS internally, so this map exists only
+// to avoid allocating a new verifier (and its underlying JWKS cache) on
+// every callback. It is safe for concurrent use.
+type oidcVerifierCache struct {
+	mu        sync.Mutex
+	verifiers map[string]*oidc.Verifier
+}
+
+func newOIDCVerifierCache() *oidcVerifierCache {
+	return &oidcVerifierCache{verifiers: map[string]*oidc.Verifier{}}
+}
+
+// verifierFor returns a verifier for the given provider, building it lazily.
+// Returns an error if the provider has insufficient configuration to verify
+// id_tokens (issuer/jwks/audience all required). The error is intentionally
+// returned rather than nil + skip — V3 fails closed.
+func (c *oidcVerifierCache) verifierFor(provider string, providerCfg config.OAuthProviderConfig) (*oidc.Verifier, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if v, ok := c.verifiers[provider]; ok {
+		return v, nil
+	}
+
+	issuer := strings.TrimSpace(providerCfg.Issuer)
+	jwksURL := strings.TrimSpace(providerCfg.JWKSURL)
+	if defaults, ok := knownOIDCProviderDefaults[strings.ToLower(provider)]; ok {
+		if issuer == "" {
+			issuer = defaults.Issuer
+		}
+		if jwksURL == "" {
+			jwksURL = defaults.JWKSURL
+		}
+	}
+	audience := strings.TrimSpace(providerCfg.ClientID)
+
+	if issuer == "" || jwksURL == "" || audience == "" {
+		return nil, fmt.Errorf(
+			"oidc verifier not configured for provider %q: issuer=%q jwks_url=%q client_id_set=%t",
+			provider, issuer, jwksURL, audience != "",
+		)
+	}
+
+	v, err := oidc.NewVerifier(oidc.Config{
+		Issuer:   issuer,
+		Audience: audience,
+		JWKSURL:  jwksURL,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	c.verifiers[provider] = v
+	return v, nil
+}
 
 type initiateOAuthRequest struct {
 	RedirectTo string `json:"redirect_to"`
@@ -106,7 +192,8 @@ func (h *Handler) initiateOAuth(c *gin.Context, purpose model.OAuthPurpose, user
 	var req initiateOAuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if !errors.Is(err, io.EOF) {
-			response.BadRequest(c, err.Error())
+			logging.Error("initiate oauth: invalid request body", zap.Error(err), zap.String("provider", provider))
+			response.BadRequest(c, "invalid request body")
 			return
 		}
 	}
@@ -150,6 +237,8 @@ func (h *Handler) initiateOAuth(c *gin.Context, purpose model.OAuthPurpose, user
 		RedirectTo:   redirectURL,
 		Nonce:        nonce,
 		CodeVerifier: codeVerifier, // Store for later verification
+		ClientIP:     c.ClientIP(),
+		UserAgent:    truncateUserAgent(c.GetHeader("User-Agent")),
 		ExpiresAt:    expiry,
 	}
 	if userID != nil {
@@ -219,7 +308,8 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 
 	var req oauthCallbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("oauth callback: invalid request body", zap.Error(err), zap.String("provider", provider))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -227,44 +317,36 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	clientIP := c.ClientIP()
 	userAgent := c.GetHeader("User-Agent")
 
-	// Step 1: Validate OAuth state
-	var stateRecord model.UserOAuthState
-	if err := h.db.Where("state = ? AND provider = ?", req.State, provider).First(&stateRecord).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	// Step 1: Atomically consume the OAuth state. This single transaction
+	// covers SELECT (FOR UPDATE), expiry check, IP/UA binding check, bind
+	// pre-authorization, and DELETE — preventing the TOCTOU window the
+	// previous separate-statement implementation allowed (V23).
+	stateRecordPtr, err := h.consumeOAuthState(c, provider, req.State, now)
+	if err != nil {
+		switch {
+		case errors.Is(err, errStateNotFound):
 			response.BadRequest(c, "invalid oauth state")
-		} else {
+		case errors.Is(err, errStateExpired):
+			response.BadRequest(c, "oauth state expired")
+		case errors.Is(err, errStateClientChanged):
+			// Don't reveal which dimension (IP vs UA) mismatched — the
+			// generic "invalid oauth state" matches what an unrelated state
+			// would return, denying the attacker an oracle.
+			response.BadRequest(c, "invalid oauth state")
+		case errors.Is(err, errBindAuthRequired):
+			response.UnauthorizedWithCode(c, "UNAUTHORIZED", "bind callback requires authentication", nil)
+		case errors.Is(err, errBindUserMismatch):
+			response.ForbiddenWithCode(c, "FORBIDDEN", "authenticated user does not match bind state", nil)
+		case errors.Is(err, errMissingBindUser):
+			response.BadRequest(c, "invalid oauth state")
+		default:
 			response.InternalServerError(c, "database error")
 		}
 		return
 	}
-
-	if now.After(stateRecord.ExpiresAt) {
-		_ = h.db.Delete(&stateRecord)
-		response.BadRequest(c, "oauth state expired")
-		return
-	}
+	stateRecord := *stateRecordPtr
 
 	purpose := oauthPurposeFromState(stateRecord)
-	if purpose == model.OAuthPurposeBindLoginMethod {
-		if err := h.authorizeBindCallback(c, stateRecord); err != nil {
-			if errors.Is(err, errBindAuthRequired) {
-				response.UnauthorizedWithCode(c, "UNAUTHORIZED", "bind callback requires authentication", nil)
-				return
-			}
-			if errors.Is(err, errBindUserMismatch) {
-				response.ForbiddenWithCode(c, "FORBIDDEN", "authenticated user does not match bind state", nil)
-				return
-			}
-			response.InternalServerErrorWithCode(c, "AUTH_ERROR", "authentication failed", nil)
-			return
-		}
-	}
-
-	// Delete state (one-time use)
-	if err := h.db.Delete(&stateRecord).Error; err != nil {
-		response.InternalServerError(c, "failed to delete oauth state")
-		return
-	}
 
 	// Step 2: Exchange authorization code for tokens (BACKEND ONLY) with PKCE
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -277,7 +359,7 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	}
 
 	// Step 2.5: Verify ID token claims (OIDC)
-	idTokenClaims, err := verifyIDToken(ctx, provider, tokenResp.IDToken, providerCfg, stateRecord.Nonce)
+	idTokenClaims, err := h.verifyIDToken(ctx, provider, tokenResp.IDToken, providerCfg, stateRecord.Nonce)
 	if err != nil {
 		response.BadRequest(c, fmt.Sprintf("ID token validation failed: %v", err))
 		return
@@ -314,7 +396,8 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 				response.BadRequest(c, "invalid oauth state")
 				return
 			}
-			response.BadRequest(c, err.Error())
+			logging.Error("oauth bind failed", zap.Error(err), zap.String("provider", provider))
+			response.BadRequest(c, "oauth bind failed")
 			return
 		}
 
@@ -331,7 +414,8 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	result, err := h.completeOAuthLogin(provider, userInfo, tokenResp, now, clientIP, userAgent)
 
 	if err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("oauth login completion failed", zap.Error(err), zap.String("provider", provider))
+		response.BadRequest(c, "oauth login failed")
 		return
 	}
 
@@ -344,6 +428,176 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 		"email":          emailValue(result.emailRecord),
 	}
 	response.Success(c, responseData)
+}
+
+var (
+	errStateNotFound      = errors.New("oauth state not found")
+	errStateExpired       = errors.New("oauth state expired")
+	errStateClientChanged = errors.New("oauth state client binding mismatch")
+)
+
+// consumeOAuthState atomically validates and deletes a one-time OAuth state
+// row. The lookup, IP/UA binding check, expiry check, and DELETE all happen
+// inside a single transaction with a row-level lock (FOR UPDATE), so two
+// concurrent callbacks cannot both succeed for the same state value (V23).
+//
+// On success the returned record carries the original Nonce/CodeVerifier so
+// the caller can finish the OAuth code exchange. The row is already gone
+// from the DB by the time this function returns.
+//
+// Failure modes and their state-row side effects:
+//
+//   - errStateNotFound: row missing (already consumed, never existed). No-op.
+//   - errStateExpired:  row is expired. We DELETE it (committed) so it can't
+//     be retried.
+//   - errStateClientChanged: IP and/or UA does not match the value captured
+//     at state creation. We DELETE it (committed). Strict full-IP equality
+//     is documented in the schema migration; mobile NAT can cause false
+//     positives, which we accept for now.
+//   - errBindAuthRequired / errBindUserMismatch: bind-purpose pre-check
+//     failed; the row is PRESERVED so the legitimate user can retry the
+//     callback after authenticating. (This matches the historical contract
+//     documented by TestHandleOAuthCallbackDoesNotConsumeStateWhenBindCallbackIsUnauthorized.)
+//
+// Implementation notes: the SELECT below uses
+// `Clauses(clause.Locking{Strength: "UPDATE"})` to inject `FOR UPDATE` —
+// this is the GORM v2 idiom. The pre-fix v1 idiom
+// `Set("gorm:query_option", "FOR UPDATE")` is silently ignored in v2 and
+// emits a plain SELECT, which would defeat V23 atomicity entirely. A
+// regression test (TestConsumeOAuthState_EmitsForUpdateInSelect) captures
+// the rendered SQL and asserts the lock clause is present.
+//
+// Concurrent consume attempts therefore serialize at the SELECT FOR UPDATE.
+// The success-path DELETE additionally checks RowsAffected == 1 so that if
+// (despite the lock) two transactions ever both reached the DELETE, only
+// one wins; the loser sees RowsAffected == 0 and returns errStateNotFound,
+// matching the "row already consumed" semantics expected by the caller.
+func (h *Handler) consumeOAuthState(c *gin.Context, provider, state string, now time.Time) (*model.UserOAuthState, error) {
+	clientIP := c.ClientIP()
+	userAgent := truncateUserAgent(c.GetHeader("User-Agent"))
+
+	tx := h.db.Begin()
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var record model.UserOAuthState
+	// Critical: clause.Locking{Strength: "UPDATE"} is the GORM v2 way to
+	// emit `FOR UPDATE`. Do NOT regress to `Set("gorm:query_option", ...)`
+	// — that is a v1 idiom and is a no-op in v2 (verified empirically by
+	// TestConsumeOAuthState_EmitsForUpdateInSelect; the previous code path
+	// emitted a plain SELECT with no lock).
+	if err := tx.
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("state = ? AND provider = ?", state, provider).
+		First(&record).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errStateNotFound
+		}
+		return nil, err
+	}
+
+	if now.After(record.ExpiresAt) {
+		if delErr := tx.Delete(&record).Error; delErr != nil {
+			return nil, delErr
+		}
+		if commitErr := tx.Commit().Error; commitErr != nil {
+			return nil, commitErr
+		}
+		committed = true
+		return nil, errStateExpired
+	}
+
+	// Bind-purpose pre-authorization MUST run before the strict IP/UA
+	// client-binding check below.
+	//
+	// Rationale (regression-tested by
+	// TestHandleOAuthCallbackBindAuthMissingTakesPrecedenceOverUserAgentMismatch
+	// and integration-tested by
+	// TestOAuthBindFlowRequiresAuthenticatedSessionForCallback):
+	//
+	//   - A bind-purpose callback hit with a missing/expired session is
+	//     the normal "session lost during the OAuth roundtrip" recovery
+	//     path. The user must see 401 + a preserved state row so they can
+	//     re-authenticate and retry without re-running the provider flow.
+	//   - The IP/UA strict-binding check is a defense-in-depth signal,
+	//     not a substitute for authentication. Running it first turned a
+	//     401-recoverable case into a 400 with the row deleted — hostile
+	//     UX and contractually wrong.
+	//   - For login-purpose states (no bind owner) we skip this branch
+	//     entirely and fall through to the IP/UA gate, preserving V23's
+	//     anti-replay coverage for unauthenticated login flows.
+	//
+	// authorizeBindCallback returns errBindAuthRequired / errBindUserMismatch
+	// / errMissingBindUser without touching the row; the deferred rollback
+	// preserves it for the user's retry.
+	if oauthPurposeFromState(record) == model.OAuthPurposeBindLoginMethod {
+		if authErr := h.authorizeBindCallback(c, record); authErr != nil {
+			return nil, authErr
+		}
+	}
+
+	// Strict client-binding check. Use constant-time equality (V18) for
+	// values an attacker could plausibly manipulate via header injection.
+	// Empty stored values are treated as mismatch — production state rows
+	// always carry a non-empty IP, and accepting "" would let pre-fix rows
+	// pass the check.
+	//
+	// For bind-purpose states this runs only after authorizeBindCallback
+	// confirmed the caller is the bind owner; an IP/UA mismatch at that
+	// point is a stronger signal of a hijacked session and we DO consume
+	// the row.
+	if !secsubtle.StringEqual(record.ClientIP, clientIP) || !secsubtle.StringEqual(record.UserAgent, userAgent) {
+		if delErr := tx.Delete(&record).Error; delErr != nil {
+			return nil, delErr
+		}
+		if commitErr := tx.Commit().Error; commitErr != nil {
+			return nil, commitErr
+		}
+		committed = true
+		return nil, errStateClientChanged
+	}
+
+	// All checks passed; consume the row inside the same tx so a concurrent
+	// caller cannot also succeed.
+	//
+	// Defense-in-depth: GORM v2's Delete returns nil error even when zero
+	// rows match (i.e., the row was already deleted by a concurrent
+	// transaction we somehow didn't serialize against). Insist on
+	// RowsAffected == 1 so a "lost the race" caller cannot silently proceed
+	// to the OAuth code exchange a second time.
+	res := tx.Delete(&record)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected != 1 {
+		return nil, errStateNotFound
+	}
+	if commitErr := tx.Commit().Error; commitErr != nil {
+		return nil, commitErr
+	}
+	committed = true
+	return &record, nil
+}
+
+// truncateUserAgent caps a User-Agent header at the storage column width
+// (255). We truncate by byte rather than by rune because the column is
+// VARCHAR(255) in utf8mb4 — runes are not the right unit. The few bytes of
+// truncation we may perform on multi-byte UA strings is acceptable; the UA
+// is only used for state binding equality, and we apply the same truncation
+// at both creation and consumption time.
+func truncateUserAgent(ua string) string {
+	const max = 255
+	if len(ua) <= max {
+		return ua
+	}
+	return ua[:max]
 }
 
 func (h *Handler) resolveProvider(provider string) (config.OAuthProviderConfig, bool) {
@@ -558,7 +812,7 @@ func (h *Handler) completeOAuthLogin(provider string, userInfo *oauthUserInfo, t
 				emailExists := tx.Where("email = ?", email).First(&existingEmail).Error == nil
 
 				if emailExists {
-					log.Printf("[OAuth] Email conflict: %s from %s provider already exists for user_id=%d", email, provider, existingEmail.UserID)
+					log.Printf("[OAuth] Email conflict: %s from %s provider already exists for user_id=%d", piiutil.MaskEmail(email), provider, existingEmail.UserID)
 				} else {
 					emailModel := model.UserEmail{
 						UserID:    result.user.ID,
@@ -610,7 +864,7 @@ func (h *Handler) completeOAuthLogin(provider string, userInfo *oauthUserInfo, t
 						conflict := tx.Where("email = ?", email).First(&conflictEmail).Error == nil
 
 						if conflict {
-							log.Printf("[OAuth] Email conflict on update: %s from %s provider already exists for user_id=%d (current user_id=%d)", email, provider, conflictEmail.UserID, result.user.ID)
+							log.Printf("[OAuth] Email conflict on update: %s from %s provider already exists for user_id=%d (current user_id=%d)", piiutil.MaskEmail(email), provider, conflictEmail.UserID, result.user.ID)
 						} else {
 							userEmail = model.UserEmail{
 								UserID:    result.user.ID,
@@ -872,9 +1126,16 @@ func (h *Handler) fetchUserInfo(ctx context.Context, provider, accessToken strin
 }
 
 // verifyIDToken validates an OIDC ID token and returns its claims.
-func verifyIDToken(ctx context.Context, provider, idToken string, cfg config.OAuthProviderConfig, expectedNonce string) (*oidcIDTokenClaims, error) {
+//
+// Telegram has its own legacy verification path (verifyTelegramIDToken) and
+// is preserved for backward compatibility. Every other provider goes through
+// the strict internal/oidc.Verifier — there is NO ParseUnverified fallback,
+// missing OIDC config fails closed at this call site (see V3 hardening).
+func (h *Handler) verifyIDToken(ctx context.Context, provider, idToken string, cfg config.OAuthProviderConfig, expectedNonce string) (*oidcIDTokenClaims, error) {
 	if idToken == "" {
-		// Not all providers return ID tokens (e.g., GitHub doesn't)
+		// Not all providers return ID tokens (e.g., GitHub doesn't); the caller
+		// handles that case via fetchUserInfo. Returning nil here is safe ONLY
+		// because subsequent code does not trust nil claims for identity.
 		return nil, nil
 	}
 
@@ -882,27 +1143,35 @@ func verifyIDToken(ctx context.Context, provider, idToken string, cfg config.OAu
 		return verifyTelegramIDToken(ctx, idToken, cfg.ClientID, expectedNonce)
 	}
 
-	return parseUnverifiedIDToken(idToken, expectedNonce)
+	if h == nil || h.oidcVerifiers == nil {
+		return nil, errors.New("oidc verifier cache not initialized")
+	}
+	verifier, err := h.oidcVerifiers.verifierFor(provider, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("oidc verifier unavailable: %w", err)
+	}
+	claims, err := verifier.Verify(ctx, idToken, expectedNonce)
+	if err != nil {
+		return nil, err
+	}
+	return convertOIDCClaims(claims), nil
 }
 
-func parseUnverifiedIDToken(idToken, expectedNonce string) (*oidcIDTokenClaims, error) {
-	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
-	claims := &oidcIDTokenClaims{}
-	token, _, err := parser.ParseUnverified(idToken, claims)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse ID token: %w", err)
+// convertOIDCClaims maps internal/oidc.Claims to the legacy
+// oidcIDTokenClaims used by the rest of the auth handler. Keeping the legacy
+// shape avoids a sweeping rename across fetchUserInfo etc. — those code paths
+// can be unified in a follow-up task.
+func convertOIDCClaims(c *oidc.Claims) *oidcIDTokenClaims {
+	if c == nil {
+		return nil
 	}
-
-	parsedClaims, ok := token.Claims.(*oidcIDTokenClaims)
-	if !ok {
-		return nil, fmt.Errorf("invalid ID token claims")
+	return &oidcIDTokenClaims{
+		RegisteredClaims:  c.RegisteredClaims,
+		Nonce:             c.Nonce,
+		Name:              c.Name,
+		PreferredUsername: c.PreferredUsername,
+		Picture:           c.Picture,
 	}
-
-	if expectedNonce != "" && parsedClaims.Nonce != "" && parsedClaims.Nonce != expectedNonce {
-		return nil, fmt.Errorf("ID token nonce mismatch: expected %s, got %s", expectedNonce, parsedClaims.Nonce)
-	}
-
-	return parsedClaims, nil
 }
 
 func verifyTelegramIDToken(ctx context.Context, idToken, clientID, expectedNonce string) (*oidcIDTokenClaims, error) {
@@ -926,8 +1195,20 @@ func verifyTelegramIDToken(ctx context.Context, idToken, clientID, expectedNonce
 		return nil, fmt.Errorf("invalid ID token")
 	}
 
-	if expectedNonce != "" && claims.Nonce != "" && claims.Nonce != expectedNonce {
-		return nil, fmt.Errorf("ID token nonce mismatch: expected %s, got %s", expectedNonce, claims.Nonce)
+	// Strict nonce policy, matching internal/oidc.Verifier.validateClaims.
+	//
+	// The pre-fix condition `expectedNonce != "" && claims.Nonce != "" &&
+	// !secsubtle.StringEqual(...)` had a bypass: a token with NO nonce
+	// claim made the middle conjunct false and the whole check passed.
+	// That let an attacker replay a no-nonce id_token across sessions even
+	// when the server had bound a specific nonce to the OAuth state. The
+	// V3 OIDC verifier closes this for non-Telegram providers; preserving
+	// the bypass on the Telegram path defeats the hardening, so we mirror
+	// the strict policy here.
+	if expectedNonce != "" {
+		if claims.Nonce == "" || !secsubtle.StringEqual(claims.Nonce, expectedNonce) {
+			return nil, errors.New("ID token nonce mismatch")
+		}
 	}
 	if claims.Subject == "" {
 		return nil, fmt.Errorf("missing subject in ID token")

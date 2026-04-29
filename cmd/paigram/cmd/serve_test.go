@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,4 +80,22 @@ func TestShutdownServicesAggregatesErrors(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, httpErr)
 	require.ErrorIs(t, err, emailErr)
+}
+
+// TestHTTPServerHasTimeouts verifies that the HTTP server constructed
+// for production use has Slowloris-resistant timeouts and a bounded
+// header size. V16: HTTP server has no timeouts.
+func TestHTTPServerHasTimeouts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+
+	srv := buildHTTPServer("127.0.0.1:0", engine)
+
+	require.NotNil(t, srv)
+	require.Equal(t, "127.0.0.1:0", srv.Addr)
+	require.NotZero(t, srv.ReadHeaderTimeout, "ReadHeaderTimeout must be set to mitigate Slowloris")
+	require.NotZero(t, srv.ReadTimeout, "ReadTimeout must be set")
+	require.NotZero(t, srv.WriteTimeout, "WriteTimeout must be set")
+	require.NotZero(t, srv.IdleTimeout, "IdleTimeout must be set")
+	require.Greater(t, srv.MaxHeaderBytes, 0, "MaxHeaderBytes must be bounded")
 }

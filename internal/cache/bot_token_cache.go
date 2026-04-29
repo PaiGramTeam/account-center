@@ -9,6 +9,18 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// BotTokenCacheStore is the subset of bot-token cache behavior consumed by
+// callers. Defined as an interface so tests can substitute an in-memory fake
+// without spinning up Redis. Production code uses *BotTokenCache.
+type BotTokenCacheStore interface {
+	Get(ctx context.Context, tokenHash string) (*BotTokenCacheData, error)
+	Set(ctx context.Context, tokenHash string, data *BotTokenCacheData) error
+	UpdateRateLimit(ctx context.Context, tokenHash string, requestCount int, lastRequest time.Time) error
+	Delete(ctx context.Context, tokenHash string) error
+	IsRevoked(ctx context.Context, tokenHash string) (bool, error)
+	MarkRevoked(ctx context.Context, tokenHash string, expiresAt time.Time) error
+}
+
 // BotTokenCache provides Redis caching for bot token validation
 type BotTokenCache struct {
 	client *redis.Client

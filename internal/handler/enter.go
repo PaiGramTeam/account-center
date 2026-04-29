@@ -45,7 +45,7 @@ type ApiGroup struct {
 var ApiGroupApp = new(ApiGroup)
 
 // InitializeApiGroups sets up all handler groups with dependencies.
-func InitializeApiGroups(db *gorm.DB, cache sessioncache.Store, authCfg config.AuthConfig) error {
+func InitializeApiGroups(db *gorm.DB, cache sessioncache.Store, authCfg config.AuthConfig, securityCfg config.SecurityConfig) error {
 	if db == nil {
 		return errors.New("initialize api groups: db is nil")
 	}
@@ -74,7 +74,7 @@ func InitializeApiGroups(db *gorm.DB, cache sessioncache.Store, authCfg config.A
 	ApiGroupApp.AuthorityApiGroup = *handlerAuthority.NewApiGroup(&service.ServiceGroupApp.AuthorityServiceGroup)
 	ApiGroupApp.PlatformApiGroup = *handlerPlatform.NewApiGroup(&service.ServiceGroupApp.PlatformServiceGroup)
 	ApiGroupApp.PlatformBindingApiGroup = *handlerPlatformBinding.NewApiGroup(&service.ServiceGroupApp.PlatformBindingGroup)
-	ApiGroupApp.UserApiGroup = *handlerUser.NewApiGroup(&service.ServiceGroupApp.UserServiceGroup, db, cache)
+	ApiGroupApp.UserApiGroup = *handlerUser.NewApiGroup(&service.ServiceGroupApp.UserServiceGroup, db, cache, securityCfg)
 	ApiGroupApp.MeApiGroup = *handlerMe.NewApiGroup(&service.ServiceGroupApp.MeServiceGroup)
 	ApiGroupApp.AdminSystemApiGroup = *handlerAdminSystem.NewApiGroup(&service.ServiceGroupApp.SystemConfigGroup, &service.ServiceGroupApp.PlatformServiceGroup)
 	ApiGroupApp.AdminAuditApiGroup = *handlerAdminAudit.NewApiGroup(&service.ServiceGroupApp.AuditGroup)

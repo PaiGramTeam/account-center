@@ -28,6 +28,19 @@ import (
 	"paigram/internal/service"
 )
 
+// testHTTPRequestClientIP / testHTTPRequestUserAgent are the values we
+// expect c.ClientIP()/c.GetHeader("User-Agent") to return for a request
+// constructed via httptest.NewRequest with no explicit overrides.
+//
+// httptest.NewRequest sets RemoteAddr="192.0.2.1:1234" by default and we
+// don't set a User-Agent header in these tests. State rows seeded for the
+// callback handler MUST carry these same values, otherwise V23's strict
+// IP/UA binding will reject them as tampered.
+const (
+	testHTTPRequestClientIP  = "192.0.2.1"
+	testHTTPRequestUserAgent = ""
+)
+
 func TestStartBindLoginMethodPersistsBindPurposeAndUserID(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
@@ -89,6 +102,8 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderAlreadyBelongsToAn
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -156,6 +171,8 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderWouldReplaceExisti
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -199,6 +216,8 @@ func TestHandleOAuthCallbackRequiresAuthenticatedSessionForBindPurpose(t *testin
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -236,6 +255,8 @@ func TestHandleOAuthCallbackRejectsBindPurposeForDifferentAuthenticatedUser(t *t
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -273,6 +294,8 @@ func TestHandleOAuthCallbackDoesNotConsumeStateWhenBindCallbackIsUnauthorized(t 
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -291,6 +314,74 @@ func TestHandleOAuthCallbackDoesNotConsumeStateWhenBindCallbackIsUnauthorized(t 
 	assertOAuthStateExists(t, db, state.State)
 }
 
+// TestHandleOAuthCallbackBindAuthMissingTakesPrecedenceOverUserAgentMismatch
+// is a regression for the integration-test failure surfaced by
+// TestOAuthBindFlowRequiresAuthenticatedSessionForCallback in
+// integration/oauth_identity_center_test.go.
+//
+// Scenario (the real failure): a binder initiates StartBindLoginMethod with
+// User-Agent "IntegrationSecurityRoutes/1.0" (so the state row stores that
+// UA), then a SECOND request hits the callback endpoint with NO
+// Authorization header AND no User-Agent header (Go's httptest helper does
+// not auto-inject one). Same client IP — only the UA differs.
+//
+// V23's strict client-binding check (consumeOAuthState IP/UA equality test)
+// previously ran BEFORE the bind-purpose authorization gate. That ordering
+// caused the request to be rejected as a client-binding mismatch (400
+// "invalid oauth state") AND the state row to be DELETED — both wrong:
+//
+//  1. A bind-purpose state with a missing access token is a normal
+//     "session lost during OAuth roundtrip" scenario, not an attack;
+//     the user must be told to re-authenticate (401), not handed a
+//     misleading "invalid oauth state".
+//  2. Deleting the row forces the user to restart the entire OAuth
+//     flow with the provider, which is hostile UX and breaks the
+//     integration test contract that bind-callback failures preserve
+//     the row (assertOAuthStatePresent on the integration side).
+//
+// Fix: in consumeOAuthState, run the bind-purpose authorization check
+// BEFORE the IP/UA strict-binding check. Auth-missing must NOT delete the
+// row; only an actual IP/UA mismatch (i.e., we already know the caller is
+// authorized as the bind owner but the network identity changed) should
+// consume the state.
+func TestHandleOAuthCallbackBindAuthMissingTakesPrecedenceOverUserAgentMismatch(t *testing.T) {
+	db := setupTestDB(t)
+	ensureUserOAuthStatesTable(t, db)
+	h := setupOAuthTestHandler(t, db)
+
+	binder := createTestUser(t, db, "binder-ua-mismatch@example.com", "Password123!", true)
+	state := model.UserOAuthState{
+		Provider:     "telegram",
+		State:        "bind-ua-mismatch-no-auth",
+		Purpose:      string(model.OAuthPurposeBindLoginMethod),
+		UserID:       sql.NullInt64{Int64: int64(binder.ID), Valid: true},
+		RedirectTo:   "https://app.example.com/settings/login-methods",
+		Nonce:        "expected-nonce",
+		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,            // matches httptest default
+		UserAgent:    "IntegrationSecurityRoutes/1.0",    // intentionally != callback UA
+		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
+	}
+	require.NoError(t, db.Create(&state).Error)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	body := bytes.NewBufferString(`{"state":"bind-ua-mismatch-no-auth","code":"provider-code"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/telegram/callback", body)
+	c.Request.Header.Set("Content-Type", "application/json")
+	// Deliberately DO NOT set User-Agent (mirrors integration helper) and
+	// DO NOT call middleware.SetUserID (mirrors no Authorization header).
+	c.Params = gin.Params{{Key: "provider", Value: "telegram"}}
+
+	h.HandleOAuthCallback(c)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code, w.Body.String())
+	assert.Equal(t, "UNAUTHORIZED", decodeOAuthErrorCode(t, w))
+	// State row must be PRESERVED — bind-auth-required is a user-recoverable
+	// error, not a client-binding violation.
+	assertOAuthStateExists(t, db, state.State)
+}
+
 func ensureUserOAuthStatesTable(t *testing.T, db *gorm.DB) {
 	t.Helper()
 	require.NoError(t, db.Exec(`
@@ -303,6 +394,8 @@ func ensureUserOAuthStatesTable(t *testing.T, db *gorm.DB) {
 			redirect_to VARCHAR(512) NULL,
 			nonce VARCHAR(255) NULL,
 			code_verifier VARCHAR(255) NULL,
+			client_ip VARCHAR(64) NOT NULL DEFAULT '',
+			user_agent VARCHAR(255) NOT NULL DEFAULT '',
 			expires_at DATETIME(3) NOT NULL,
 			created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 			UNIQUE KEY uniq_state (state),
@@ -536,7 +629,8 @@ func TestVerifyIDTokenTelegramValidatesSignatureAndClaims(t *testing.T) {
 	idToken, err := token.SignedString(privateKey)
 	require.NoError(t, err)
 
-	claims, err := verifyIDToken(context.Background(), "telegram", idToken, config.OAuthProviderConfig{ClientID: "123456789"}, "expected-nonce")
+	h := &Handler{oidcVerifiers: newOIDCVerifierCache()}
+	claims, err := h.verifyIDToken(context.Background(), "telegram", idToken, config.OAuthProviderConfig{ClientID: "123456789"}, "expected-nonce")
 	require.NoError(t, err)
 	require.NotNil(t, claims)
 	assert.Equal(t, "telegram-user-123", claims.Subject)

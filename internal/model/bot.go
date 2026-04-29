@@ -42,5 +42,17 @@ type BotToken struct {
 	CreatedAt           time.Time
 	RevokedAt           sql.NullTime `gorm:"type:datetime(3)"`
 
+	// FamilyID groups all rotated tokens that descend from a single login. Reuse
+	// detection on RefreshBotToken revokes the entire family. Allocated by
+	// BotLogin and preserved verbatim across rotations performed by RefreshBotToken.
+	FamilyID string `gorm:"column:family_id;size:36;not null;default:'';index"`
+	// Status tracks the lifecycle of this row: 'active' (current), 'rotated'
+	// (legitimately superseded by a newer row in the same family) or 'revoked'
+	// (invalidated, typically by reuse detection on the family).
+	Status string `gorm:"column:status;size:32;not null;default:'active';index"`
+	// RevokedReason captures *why* a row moved to 'revoked'. Populated alongside
+	// RevokedAt; empty for 'active' / 'rotated' rows.
+	RevokedReason string `gorm:"column:revoked_reason;size:64;not null;default:''"`
+
 	Bot Bot `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 }

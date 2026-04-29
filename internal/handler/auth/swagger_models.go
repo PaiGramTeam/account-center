@@ -54,12 +54,6 @@ type RegisterEmailResponse struct {
 		// Email address
 		// example: user@example.com
 		Email string `json:"email"`
-		// Email verification token
-		// example: abcd1234efgh5678
-		VerificationToken string `json:"verification_token"`
-		// Verification token expiration
-		// example: 2024-01-23T12:00:00Z
-		VerificationExpiresAt string `json:"verification_expires_at"`
 		// Whether email verification is required
 		// example: true
 		RequiresEmailVerification bool `json:"requires_email_verification"`

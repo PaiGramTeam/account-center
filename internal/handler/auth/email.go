@@ -14,14 +14,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"paigram/internal/crypto"
 	"paigram/internal/handler/shared"
+	"paigram/internal/logging"
 	"paigram/internal/model"
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
+	piiutil "paigram/internal/utils/pii"
+	"paigram/internal/utils/secsubtle"
 )
 
 var errRefreshTokenRotated = errors.New("refresh token already rotated")
@@ -52,10 +56,27 @@ type registerEmailRequest struct {
 //	500: authErrorResponse
 //
 // RegisterEmail handles registration via email + password.
+//
+// KNOWN GAP (tracked as a security follow-up): this handler stores a
+// hashed verification token on the user_emails row but does NOT
+// dispatch the verification email containing the plaintext token. The
+// emailService.SendVerificationEmail method exists
+// (internal/email/email.go) but no caller wires it into the
+// registration flow. Until that wiring lands:
+//   - users registered through this endpoint cannot self-verify;
+//   - operators who set auth.require_verified_email_login=true will
+//     lock new users out of login because no plaintext token ever
+//     leaves the server. config.warnIfVerificationEmailDispatchMissing
+//     emits a startup warning when this combination is detected.
+//
+// Do NOT plug the gap by re-introducing the V14 response leak — the
+// token must arrive only via email so it proves ownership of the
+// address.
 func (h *Handler) RegisterEmail(c *gin.Context) {
 	var req registerEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("register email: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -170,11 +191,28 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 		return
 	}
 
+	// V14 + KNOWN-GAP: the verification token's plaintext is no longer
+	// returned in this response. The intended dispatch path is
+	// h.emailService.SendVerificationEmail(ctx, email, verificationToken,
+	// h.frontendCfg.BaseURL) — but that wiring does not exist yet (see
+	// the package-level note above RegisterEmail). Until it lands, a
+	// freshly registered user has NO way to obtain the plaintext
+	// verification token, and operators who set
+	// auth.require_verified_email_login = true will lock new users out
+	// of login. config.warnIfVerificationEmailDispatchMissing emits a
+	// startup warning when this combination is detected. Tracked as a
+	// follow-up; do NOT silently re-add the response leak as a
+	// workaround.
+	_ = verificationToken     // surfaced via the email path once wired
+	_ = verificationTokenHash // already persisted on emailRecord above
+	_ = verificationExpiry    // already persisted on emailRecord above
+
+	// V14: do NOT include the verification token or its expiry in the
+	// HTTP response. The token must reach the user only through the
+	// verification email — returning it here defeats proof-of-ownership.
 	responseData := map[string]interface{}{
 		"user_id":                     user.ID,
 		"email":                       email,
-		"verification_token":          verificationToken,
-		"verification_expires_at":     verificationExpiry.Format(time.RFC3339),
 		"requires_email_verification": h.cfg.RequireEmailVerificationLogin,
 	}
 	response.Created(c, responseData)
@@ -210,7 +248,8 @@ type loginEmailRequest struct {
 func (h *Handler) LoginWithEmail(c *gin.Context) {
 	var req loginEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("login email: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -270,7 +309,9 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 
 	// Verify password
 	if err := comparePassword(credential.PasswordHash, req.Password); err != nil {
-		log.Printf("[auth] password verification failed for email=%s: %v", email, err)
+		// V7: never log the plaintext email; preserve a masked diagnostic so
+		// operators can still correlate events without leaking the address.
+		log.Printf("[auth] password verification failed for email_masked=%s: %v", piiutil.MaskEmail(email), err)
 		h.recordFailedLoginAudit(sql.NullInt64{Int64: int64(user.ID), Valid: true}, c.ClientIP(), c.GetHeader("User-Agent"), "invalid credentials")
 		response.Unauthorized(c, "invalid credentials")
 		return
@@ -513,7 +554,8 @@ type refreshTokenRequest struct {
 func (h *Handler) RefreshToken(c *gin.Context) {
 	var req refreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("refresh token: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -540,7 +582,7 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		err = h.db.First(&session, sessionID).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
-		} else if err == nil && session.RefreshTokenHash != refreshTokenHash {
+		} else if err == nil && !secsubtle.StringEqual(session.RefreshTokenHash, refreshTokenHash) {
 			err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
 		}
 	} else {
@@ -734,7 +776,8 @@ type logoutRequest struct {
 func (h *Handler) Logout(c *gin.Context) {
 	var req logoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("logout: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -789,7 +832,8 @@ type verifyEmailRequest struct {
 func (h *Handler) VerifyEmail(c *gin.Context) {
 	var req verifyEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("verify email: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -808,8 +852,10 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 			return fmt.Errorf("no verification token present")
 		}
 
-		// Hash the provided token and compare with stored hash (secure comparison)
-		if hashToken(req.Token) != emailRecord.VerificationToken {
+		// Hash the provided token and compare with stored hash (constant-time
+		// equality — V12/V18: SHA-256 outputs leak nothing useful, but we use
+		// the constant-time helper for consistency with the rest of the codebase).
+		if !secsubtle.StringEqual(hashToken(req.Token), emailRecord.VerificationToken) {
 			return fmt.Errorf("invalid token")
 		}
 
@@ -836,7 +882,27 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 			response.NotFound(c, "email not found")
 			return
 		}
-		response.BadRequest(c, err.Error())
+		// V13 — sanitize error responses but keep two sentinel messages
+		// that are part of the user-visible verification UX contract:
+		//
+		//   - "invalid token"               → user mistyped or tampered link
+		//   - "verification token expired"  → user must request a new email
+		//
+		// These come from in-handler `fmt.Errorf` calls above (NOT from
+		// gorm/MySQL), so surfacing them does not leak internals. Anything
+		// else falls through to the generic message + structured log.
+		// Regression: TestVerifyEmail_InvalidToken_ReturnsBadRequest /
+		// TestVerifyEmail_ExpiredToken_ReturnsBadRequest.
+		msg := err.Error()
+		if msg == "invalid token" || msg == "verification token expired" {
+			logging.Error("verify email transaction failed", zap.Error(err))
+			response.BadRequest(c, msg)
+			return
+		}
+		// Any other error (db / unexpected business state): generic 400 +
+		// log the cause for operators.
+		logging.Error("verify email transaction failed", zap.Error(err))
+		response.BadRequest(c, "email verification failed")
 		return
 	}
 
@@ -1036,7 +1102,14 @@ func (h *Handler) logTwoFactorAudit(tx *gorm.DB, userID uint64, success bool, me
 }
 
 // is2FALocked checks if user is temporarily locked out due to failed 2FA attempts
-// Returns true and remaining time if locked, false otherwise
+// Returns true and remaining time if locked, false otherwise.
+//
+// V22: when Redis is unavailable and the operator-configured policy
+// requires Redis (the default), this fails CLOSED — returning locked=true
+// for h.securityCfg.TwoFAFailClosedTTL — rather than silently falling
+// back to a per-instance in-memory counter that would multiply the
+// effective threshold by N instances. Operators can opt into the memory
+// fallback by setting security.require_redis_for_2fa = false.
 func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Duration) {
 	// Try Redis first (preferred for distributed systems)
 	if h.sessionCache != nil {
@@ -1045,13 +1118,20 @@ func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Du
 		// Get current failure count
 		failCount, err := h.sessionCache.IncrementCounter(ctx, key, 0)
 		if err != nil {
-			// Redis failed - log warning and fall back to memory
-			log.Printf("[SECURITY WARNING] Redis unavailable for 2FA rate limiting (user_id=%d): %v", userID, err)
-			log.Printf("[SECURITY] Falling back to in-memory 2FA rate limiting")
+			log.Printf("[SECURITY] Redis unavailable for 2FA rate limit (user_id=%d): %v", userID, err)
+			if h.securityCfg.RequireRedisFor2FA {
+				ttl := h.securityCfg.TwoFAFailClosedTTL
+				if ttl <= 0 {
+					ttl = time.Minute
+				}
+				log.Printf("[SECURITY] FAIL-CLOSED: locking 2FA for user_id=%d for %v (policy require_redis_for_2fa=true)", userID, ttl)
+				return true, ttl
+			}
+			log.Printf("[SECURITY] policy allows in-memory fallback; using local 2FA counter for user_id=%d", userID)
+			// Fall through to in-memory limiter below.
 		} else {
 			// Redis is working - use it
 			const lockThreshold = 5
-			const lockDuration = 15 * time.Minute
 
 			if failCount >= lockThreshold {
 				// Get TTL to determine how long until unlock
@@ -1067,9 +1147,8 @@ func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Du
 		}
 	}
 
-	// CRITICAL SECURITY: Use in-memory fallback when Redis is unavailable
-	// This prevents 2FA brute force attacks even when Redis fails
-	// WARNING: In multi-instance deployments, each instance has separate limits
+	// In-memory fallback. Per-instance counters; only safe in single-
+	// instance deployments or when policy explicitly allows it.
 	if h.memory2FALimiter != nil {
 		locked, ttl := h.memory2FALimiter.isLocked(userID)
 		if locked {
@@ -1078,12 +1157,17 @@ func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Du
 		return locked, ttl
 	}
 
-	// Both Redis and memory limiter unavailable - this should never happen
+	// Neither path is available - this should never happen.
 	log.Printf("[SECURITY CRITICAL] No 2FA rate limiting available for user_id=%d!", userID)
 	return false, 0
 }
 
-// track2FAFailure increments the failed 2FA attempt counter
+// track2FAFailure increments the failed 2FA attempt counter.
+//
+// V22: when Redis is unavailable and policy requires Redis, this returns
+// an error rather than recording in the per-instance memory counter (so
+// the caller can surface a fail-closed lockout). When policy allows the
+// memory fallback, the in-memory counter is incremented as before.
 func (h *Handler) track2FAFailure(ctx context.Context, userID uint64) error {
 	const lockDuration = 15 * time.Minute
 
@@ -1094,8 +1178,12 @@ func (h *Handler) track2FAFailure(ctx context.Context, userID uint64) error {
 		// Increment counter with 15 minute expiry
 		count, err := h.sessionCache.IncrementCounter(ctx, key, lockDuration)
 		if err != nil {
-			log.Printf("[SECURITY WARNING] Redis unavailable for tracking 2FA failure (user_id=%d): %v", userID, err)
-			log.Printf("[SECURITY] Falling back to in-memory tracking")
+			log.Printf("[SECURITY] Redis unavailable for tracking 2FA failure (user_id=%d): %v", userID, err)
+			if h.securityCfg.RequireRedisFor2FA {
+				return fmt.Errorf("2FA rate limiting unavailable (Redis down, policy requires Redis): %w", err)
+			}
+			log.Printf("[SECURITY] policy allows in-memory fallback for tracking 2FA failure")
+			// Fall through to memory limiter below.
 		} else {
 			log.Printf("[auth] 2FA failure count (Redis) for user_id=%d: %d/5", userID, count)
 			return nil

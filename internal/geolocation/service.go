@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -41,8 +42,29 @@ type Service struct {
 	httpClient *http.Client
 }
 
-// NewService creates a new geolocation service
+// ipAPIWarningOnce guarantees the V19 plain-HTTP warning is logged
+// once per process, no matter how many times NewService is invoked
+// (the constructor runs in serve.go for the worker handler and again
+// in router.New for HTTP handlers).
+var ipAPIWarningOnce sync.Once
+
+// NewService creates a new geolocation service.
+//
+// V19 — known limitation: the free ip-api.com tier is HTTP-only. Each
+// call leaks the queried IP to any on-path observer, and an active
+// MITM can tamper with the response, e.g. to mislabel a login as
+// originating from a trusted location. For this pre-production cut we
+// keep ip-api.com (option c from the V19 review) and emit a one-shot
+// startup warning so operators can plan a provider migration. Replace
+// the upstream URL in fetchFromAPI with an HTTPS-supported provider
+// (ipinfo.io, ipapi.co, paid pro.ip-api.com) when wiring up
+// configurable providers.
 func NewService() *Service {
+	ipAPIWarningOnce.Do(func() {
+		log.Printf("[security] WARNING: ip-api.com is queried over plain HTTP; " +
+			"geolocation results can be tampered with by MITM. " +
+			"Configure a TLS-supporting provider when available (V19).")
+	})
 	return &Service{
 		cache: make(map[string]*Location),
 		httpClient: &http.Client{
@@ -89,7 +111,14 @@ func (s *Service) Lookup(ip string) (*Location, error) {
 	return loc, nil
 }
 
-// fetchFromAPI queries the IP-API.com free service
+// fetchFromAPI queries the IP-API.com free service.
+//
+// SECURITY (V19): the free tier of ip-api.com only supports plain HTTP.
+// HTTPS requires a paid pro.ip-api.com plan. The MITM risk is bounded:
+// the queried IP is already known to the service, and tampered
+// responses degrade only the geolocation-based audit signal — auth and
+// session decisions are not gated on this output. See NewService for
+// the loud startup warning.
 func (s *Service) fetchFromAPI(ip string) (*Location, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

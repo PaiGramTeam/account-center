@@ -372,7 +372,7 @@ type ResetPasswordRequest struct {
 	// New password (8-72 characters)
 	// required: true
 	// example: NewSecurePassword123
-	NewPassword string `json:"new_password"`
+	NewPassword string `json:"new_password" binding:"required,min=8,max=72"`
 	// Whether to invalidate all user sessions
 	// example: true
 	InvalidateSessions bool `json:"invalidate_sessions,omitempty"`

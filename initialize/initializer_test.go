@@ -37,7 +37,7 @@ func TestInitializerRunAutoSeedCreatesAdminAndCasbinPolicies(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "BootstrapPass123!")
 	t.Setenv("ADMIN_NAME", "Bootstrap Admin")
 
-	initializer := NewInitializer(db, nil, config.DatabaseConfig{AutoSeed: true})
+	initializer := NewInitializer(db, nil, config.DatabaseConfig{AutoSeed: true}, config.SecurityConfig{BcryptCost: 12})
 	require.NoError(t, initializer.Run())
 
 	var adminRole model.Role

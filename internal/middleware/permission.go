@@ -19,26 +19,20 @@ const (
 )
 
 // getUserIDFromContext extracts the user ID from the gin context.
+//
+// V20: this function previously fell back to reading X-User-ID from
+// the request headers or user_id from the query string when the
+// authenticated user ID was absent from the context. That fallback
+// trusts client-supplied input and would let any caller impersonate
+// any user if invoked from authenticated code. The fallback has been
+// stripped; only values written into the gin context by the auth
+// middleware (via SetUserID) are accepted.
 func getUserIDFromContext(c *gin.Context) uint64 {
-	// Try to get from context first
 	if val, exists := c.Get(ContextKeyUserID); exists {
 		if userID, ok := val.(uint64); ok {
 			return userID
 		}
 	}
-
-	// Try from header or query parameter as fallback
-	userIDStr := c.GetHeader("X-User-ID")
-	if userIDStr == "" {
-		userIDStr = c.Query("user_id")
-	}
-
-	if userIDStr != "" {
-		if userID, err := strconv.ParseUint(userIDStr, 10, 64); err == nil {
-			return userID
-		}
-	}
-
 	return 0
 }
 

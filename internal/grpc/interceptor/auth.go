@@ -25,7 +25,12 @@ func NewAuthInterceptor(db *gorm.DB, redisClient *redis.Client, redisPrefix stri
 	return &AuthInterceptor{
 		botAuthService: service.NewBotAuthService(db, redisClient, redisPrefix),
 		publicMethods: map[string]bool{
-			"/paigram.v1.BotAuthService/RegisterBot":     true,
+			// RegisterBot was previously public — that allowed an attacker to provision
+			// a bot under any user's email and request arbitrary scopes (including
+			// admin.all), then immediately log in to get a fully privileged token.
+			// V1 hardening: RegisterBot now requires a valid bot access token, and
+			// the service-layer enforces that the caller may only register bots for
+			// their own owner-user.
 			"/paigram.v1.BotAuthService/BotLogin":        true,
 			"/paigram.v1.BotAuthService/RefreshBotToken": true,
 		},

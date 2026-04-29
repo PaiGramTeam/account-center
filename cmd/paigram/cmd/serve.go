@@ -135,7 +135,7 @@ func runServer() {
 		log.Printf("2FA will not work properly. Please set ENCRYPTION_KEY environment variable.")
 	}
 
-	db, err := database.Connect(cfg.Database)
+	db, err := database.Connect(cfg.Database, cfg.Security)
 	if err != nil {
 		fatalStartup(cfg.Sentry, "database connection failed: %v", err)
 	}
@@ -243,7 +243,7 @@ func runServer() {
 	if cfg.Redis.Enabled {
 		// Create auth handler for worker
 		geoService := geolocation.NewService()
-		authHandler := authhandler.NewHandler(db, cfg.Auth, emailService, cfg.Security, sessionStore, geoService)
+		authHandler := authhandler.NewHandler(db, cfg.Auth, cfg.Frontend, emailService, cfg.Security, sessionStore, geoService)
 
 		asynqServer, asynqScheduler, err = worker.StartAsynqServer(cfg, redisClient, db, authHandler)
 		if err != nil {
@@ -258,10 +258,7 @@ func runServer() {
 		fatalStartup(cfg.Sentry, "http router initialization failed: %v", err)
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.App.Host, cfg.App.Port)
-	httpServer = &http.Server{
-		Addr:    addr,
-		Handler: engine,
-	}
+	httpServer = buildHTTPServer(addr, engine)
 
 	wg.Add(1)
 	go func() {
@@ -283,11 +280,30 @@ func runServer() {
 	wg.Wait()
 }
 
+// buildHTTPServer constructs the production HTTP server with
+// Slowloris-resistant timeouts and a bounded header size.
+//
+// V16: previously the server used Go's zero-value timeouts, which
+// disable timeouts entirely. A slow-reader can hold a connection open
+// indefinitely and exhaust the listener. The values below are
+// conservative defaults; expose them via config later if needed.
+func buildHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+	}
+}
+
 // getDB helper function to get database connection for CLI commands
 func getDB() *gorm.DB {
 	cfg := config.MustLoad("config")
 	// Disable auto initialization for CLI commands
 	cfg.Database.AutoMigrate = false
 	cfg.Database.AutoSeed = false
-	return database.MustConnect(cfg.Database)
+	return database.MustConnect(cfg.Database, cfg.Security)
 }

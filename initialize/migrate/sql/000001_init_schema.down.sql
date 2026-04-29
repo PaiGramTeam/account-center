@@ -1,11 +1,7 @@
--- 1.0 release initial schema rollback.
---
--- Drops all tables created by the 1.0 init migration. Order matters because of
--- foreign keys; we drop dependent tables before their parents and remove the
--- circular FK on users before dropping user_roles.
+-- 1.0 release schema rollback.
+-- Drops all tables in reverse dependency order.
 
-ALTER TABLE platform_account_bindings DROP FOREIGN KEY fk_platform_account_bindings_primary_profile;
-ALTER TABLE users DROP FOREIGN KEY fk_users_primary_role_assignment;
+SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS audit_events;
 DROP TABLE IF EXISTS legal_documents;
@@ -36,3 +32,5 @@ DROP TABLE IF EXISTS user_emails;
 DROP TABLE IF EXISTS user_credentials;
 DROP TABLE IF EXISTS user_profiles;
 DROP TABLE IF EXISTS users;
+
+SET FOREIGN_KEY_CHECKS = 1;

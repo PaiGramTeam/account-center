@@ -14,7 +14,7 @@ func main() {
 	cfg := config.MustLoad("config")
 
 	// 连接数据库
-	db := database.MustConnect(cfg.Database)
+	db := database.MustConnect(cfg.Database, cfg.Security)
 
 	fmt.Println("=== 测试种子数据初始化 ===")
 	fmt.Println()
@@ -29,7 +29,7 @@ func main() {
 
 	// 创建管理员账号
 	fmt.Println("2. 创建管理员账号...")
-	if err := seed.CreateDefaultAdmin(db); err != nil {
+	if err := seed.CreateDefaultAdmin(db, cfg.GetBcryptCost()); err != nil {
 		log.Fatalf("Failed to create admin: %v", err)
 	}
 	fmt.Println("✓ 管理员账号创建成功")
@@ -38,8 +38,8 @@ func main() {
 	fmt.Println("=== 初始化完成 ===")
 	fmt.Println()
 	fmt.Println("默认管理员账号信息：")
-	fmt.Println("- Email: admin@paigram.local")
-	fmt.Println("- Password: admin123456")
+	fmt.Println("- Email: 见上方日志输出（默认 admin@paigram.local，可通过 ADMIN_EMAIL 覆盖）")
+	fmt.Println("- Password: 由你通过 ADMIN_PASSWORD 环境变量设置")
 	fmt.Println()
-	fmt.Println("⚠️  请立即登录并更改默认密码！")
+	fmt.Println("⚠️  请尽快通过管理后台轮换该密码。")
 }

@@ -49,7 +49,7 @@ func runMigrateUp() {
 	cfg := config.MustLoad("config")
 
 	// Get raw database connection
-	db := database.MustConnect(cfg.Database)
+	db := database.MustConnect(cfg.Database, cfg.Security)
 	sqlDB, err := db.DB()
 	if err != nil {
 		fmt.Printf("Error getting database handle: %v\n", err)
@@ -72,7 +72,7 @@ func showMigrationStatus() {
 	cfg := config.MustLoad("config")
 
 	// Get raw database connection
-	db := database.MustConnect(cfg.Database)
+	db := database.MustConnect(cfg.Database, cfg.Security)
 	sqlDB, err := db.DB()
 	if err != nil {
 		fmt.Printf("Error getting database handle: %v\n", err)

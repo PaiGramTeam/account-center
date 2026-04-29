@@ -261,8 +261,11 @@ func TestBindingServiceUpdatesOwnerEditableFields(t *testing.T) {
 func TestUpdateBindingForOwnerRejectsPlatformServiceKey(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	service := NewBindingService(db)
+	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	require.NoError(t, db.Create(&owner).Error)
+
 	binding := model.PlatformAccountBinding{
-		OwnerUserID:        1001,
+		OwnerUserID:        owner.ID,
 		Platform:           "mihomo",
 		ExternalAccountKey: sql.NullString{String: "mihomo:10001", Valid: true},
 		PlatformServiceKey: "mihomo-cn",
@@ -272,7 +275,7 @@ func TestUpdateBindingForOwnerRejectsPlatformServiceKey(t *testing.T) {
 	require.NoError(t, db.Create(&binding).Error)
 
 	newServiceKey := "mihomo-overseas"
-	_, err := service.UpdateBindingForOwner(1001, binding.ID, UpdateBindingInput{PlatformServiceKey: &newServiceKey})
+	_, err := service.UpdateBindingForOwner(owner.ID, binding.ID, UpdateBindingInput{PlatformServiceKey: &newServiceKey})
 
 	require.ErrorIs(t, err, ErrInvalidBindingMutation)
 	var stored model.PlatformAccountBinding

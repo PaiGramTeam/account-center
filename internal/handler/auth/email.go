@@ -882,10 +882,25 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 			response.NotFound(c, "email not found")
 			return
 		}
-		// The transaction returns either gorm.ErrRecordNotFound (handled
-		// above) or fmt.Errorf wrapping db/business errors. Surfacing
-		// err.Error() would leak gorm/MySQL internals (V13); return a
-		// stable, generic 400 instead and log the cause for operators.
+		// V13 — sanitize error responses but keep two sentinel messages
+		// that are part of the user-visible verification UX contract:
+		//
+		//   - "invalid token"               → user mistyped or tampered link
+		//   - "verification token expired"  → user must request a new email
+		//
+		// These come from in-handler `fmt.Errorf` calls above (NOT from
+		// gorm/MySQL), so surfacing them does not leak internals. Anything
+		// else falls through to the generic message + structured log.
+		// Regression: TestVerifyEmail_InvalidToken_ReturnsBadRequest /
+		// TestVerifyEmail_ExpiredToken_ReturnsBadRequest.
+		msg := err.Error()
+		if msg == "invalid token" || msg == "verification token expired" {
+			logging.Error("verify email transaction failed", zap.Error(err))
+			response.BadRequest(c, msg)
+			return
+		}
+		// Any other error (db / unexpected business state): generic 400 +
+		// log the cause for operators.
 		logging.Error("verify email transaction failed", zap.Error(err))
 		response.BadRequest(c, "email verification failed")
 		return

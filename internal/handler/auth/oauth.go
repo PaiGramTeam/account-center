@@ -514,11 +514,45 @@ func (h *Handler) consumeOAuthState(c *gin.Context, provider, state string, now 
 		return nil, errStateExpired
 	}
 
+	// Bind-purpose pre-authorization MUST run before the strict IP/UA
+	// client-binding check below.
+	//
+	// Rationale (regression-tested by
+	// TestHandleOAuthCallbackBindAuthMissingTakesPrecedenceOverUserAgentMismatch
+	// and integration-tested by
+	// TestOAuthBindFlowRequiresAuthenticatedSessionForCallback):
+	//
+	//   - A bind-purpose callback hit with a missing/expired session is
+	//     the normal "session lost during the OAuth roundtrip" recovery
+	//     path. The user must see 401 + a preserved state row so they can
+	//     re-authenticate and retry without re-running the provider flow.
+	//   - The IP/UA strict-binding check is a defense-in-depth signal,
+	//     not a substitute for authentication. Running it first turned a
+	//     401-recoverable case into a 400 with the row deleted — hostile
+	//     UX and contractually wrong.
+	//   - For login-purpose states (no bind owner) we skip this branch
+	//     entirely and fall through to the IP/UA gate, preserving V23's
+	//     anti-replay coverage for unauthenticated login flows.
+	//
+	// authorizeBindCallback returns errBindAuthRequired / errBindUserMismatch
+	// / errMissingBindUser without touching the row; the deferred rollback
+	// preserves it for the user's retry.
+	if oauthPurposeFromState(record) == model.OAuthPurposeBindLoginMethod {
+		if authErr := h.authorizeBindCallback(c, record); authErr != nil {
+			return nil, authErr
+		}
+	}
+
 	// Strict client-binding check. Use constant-time equality (V18) for
 	// values an attacker could plausibly manipulate via header injection.
 	// Empty stored values are treated as mismatch — production state rows
 	// always carry a non-empty IP, and accepting "" would let pre-fix rows
 	// pass the check.
+	//
+	// For bind-purpose states this runs only after authorizeBindCallback
+	// confirmed the caller is the bind owner; an IP/UA mismatch at that
+	// point is a stronger signal of a hijacked session and we DO consume
+	// the row.
 	if !secsubtle.StringEqual(record.ClientIP, clientIP) || !secsubtle.StringEqual(record.UserAgent, userAgent) {
 		if delErr := tx.Delete(&record).Error; delErr != nil {
 			return nil, delErr
@@ -528,15 +562,6 @@ func (h *Handler) consumeOAuthState(c *gin.Context, provider, state string, now 
 		}
 		committed = true
 		return nil, errStateClientChanged
-	}
-
-	// Bind-purpose pre-authorization. Failures must NOT delete the row —
-	// see the long-standing test guarantees referenced in the doc above.
-	if oauthPurposeFromState(record) == model.OAuthPurposeBindLoginMethod {
-		if authErr := h.authorizeBindCallback(c, record); authErr != nil {
-			// Roll back; row preserved.
-			return nil, authErr
-		}
 	}
 
 	// All checks passed; consume the row inside the same tx so a concurrent

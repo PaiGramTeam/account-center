@@ -53,6 +53,22 @@ type registerEmailRequest struct {
 //	500: authErrorResponse
 //
 // RegisterEmail handles registration via email + password.
+//
+// KNOWN GAP (tracked as a security follow-up): this handler stores a
+// hashed verification token on the user_emails row but does NOT
+// dispatch the verification email containing the plaintext token. The
+// emailService.SendVerificationEmail method exists
+// (internal/email/email.go) but no caller wires it into the
+// registration flow. Until that wiring lands:
+//   - users registered through this endpoint cannot self-verify;
+//   - operators who set auth.require_verified_email_login=true will
+//     lock new users out of login because no plaintext token ever
+//     leaves the server. config.warnIfVerificationEmailDispatchMissing
+//     emits a startup warning when this combination is detected.
+//
+// Do NOT plug the gap by re-introducing the V14 response leak — the
+// token must arrive only via email so it proves ownership of the
+// address.
 func (h *Handler) RegisterEmail(c *gin.Context) {
 	var req registerEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -171,11 +187,28 @@ func (h *Handler) RegisterEmail(c *gin.Context) {
 		return
 	}
 
+	// V14 + KNOWN-GAP: the verification token's plaintext is no longer
+	// returned in this response. The intended dispatch path is
+	// h.emailService.SendVerificationEmail(ctx, email, verificationToken,
+	// h.frontendCfg.BaseURL) — but that wiring does not exist yet (see
+	// the package-level note above RegisterEmail). Until it lands, a
+	// freshly registered user has NO way to obtain the plaintext
+	// verification token, and operators who set
+	// auth.require_verified_email_login = true will lock new users out
+	// of login. config.warnIfVerificationEmailDispatchMissing emits a
+	// startup warning when this combination is detected. Tracked as a
+	// follow-up; do NOT silently re-add the response leak as a
+	// workaround.
+	_ = verificationToken     // surfaced via the email path once wired
+	_ = verificationTokenHash // already persisted on emailRecord above
+	_ = verificationExpiry    // already persisted on emailRecord above
+
+	// V14: do NOT include the verification token or its expiry in the
+	// HTTP response. The token must reach the user only through the
+	// verification email — returning it here defeats proof-of-ownership.
 	responseData := map[string]interface{}{
 		"user_id":                     user.ID,
 		"email":                       email,
-		"verification_token":          verificationToken,
-		"verification_expires_at":     verificationExpiry.Format(time.RFC3339),
 		"requires_email_verification": h.cfg.RequireEmailVerificationLogin,
 	}
 	response.Created(c, responseData)
@@ -1039,7 +1072,14 @@ func (h *Handler) logTwoFactorAudit(tx *gorm.DB, userID uint64, success bool, me
 }
 
 // is2FALocked checks if user is temporarily locked out due to failed 2FA attempts
-// Returns true and remaining time if locked, false otherwise
+// Returns true and remaining time if locked, false otherwise.
+//
+// V22: when Redis is unavailable and the operator-configured policy
+// requires Redis (the default), this fails CLOSED — returning locked=true
+// for h.securityCfg.TwoFAFailClosedTTL — rather than silently falling
+// back to a per-instance in-memory counter that would multiply the
+// effective threshold by N instances. Operators can opt into the memory
+// fallback by setting security.require_redis_for_2fa = false.
 func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Duration) {
 	// Try Redis first (preferred for distributed systems)
 	if h.sessionCache != nil {
@@ -1048,13 +1088,20 @@ func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Du
 		// Get current failure count
 		failCount, err := h.sessionCache.IncrementCounter(ctx, key, 0)
 		if err != nil {
-			// Redis failed - log warning and fall back to memory
-			log.Printf("[SECURITY WARNING] Redis unavailable for 2FA rate limiting (user_id=%d): %v", userID, err)
-			log.Printf("[SECURITY] Falling back to in-memory 2FA rate limiting")
+			log.Printf("[SECURITY] Redis unavailable for 2FA rate limit (user_id=%d): %v", userID, err)
+			if h.securityCfg.RequireRedisFor2FA {
+				ttl := h.securityCfg.TwoFAFailClosedTTL
+				if ttl <= 0 {
+					ttl = time.Minute
+				}
+				log.Printf("[SECURITY] FAIL-CLOSED: locking 2FA for user_id=%d for %v (policy require_redis_for_2fa=true)", userID, ttl)
+				return true, ttl
+			}
+			log.Printf("[SECURITY] policy allows in-memory fallback; using local 2FA counter for user_id=%d", userID)
+			// Fall through to in-memory limiter below.
 		} else {
 			// Redis is working - use it
 			const lockThreshold = 5
-			const lockDuration = 15 * time.Minute
 
 			if failCount >= lockThreshold {
 				// Get TTL to determine how long until unlock
@@ -1070,9 +1117,8 @@ func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Du
 		}
 	}
 
-	// CRITICAL SECURITY: Use in-memory fallback when Redis is unavailable
-	// This prevents 2FA brute force attacks even when Redis fails
-	// WARNING: In multi-instance deployments, each instance has separate limits
+	// In-memory fallback. Per-instance counters; only safe in single-
+	// instance deployments or when policy explicitly allows it.
 	if h.memory2FALimiter != nil {
 		locked, ttl := h.memory2FALimiter.isLocked(userID)
 		if locked {
@@ -1081,12 +1127,17 @@ func (h *Handler) is2FALocked(ctx context.Context, userID uint64) (bool, time.Du
 		return locked, ttl
 	}
 
-	// Both Redis and memory limiter unavailable - this should never happen
+	// Neither path is available - this should never happen.
 	log.Printf("[SECURITY CRITICAL] No 2FA rate limiting available for user_id=%d!", userID)
 	return false, 0
 }
 
-// track2FAFailure increments the failed 2FA attempt counter
+// track2FAFailure increments the failed 2FA attempt counter.
+//
+// V22: when Redis is unavailable and policy requires Redis, this returns
+// an error rather than recording in the per-instance memory counter (so
+// the caller can surface a fail-closed lockout). When policy allows the
+// memory fallback, the in-memory counter is incremented as before.
 func (h *Handler) track2FAFailure(ctx context.Context, userID uint64) error {
 	const lockDuration = 15 * time.Minute
 
@@ -1097,8 +1148,12 @@ func (h *Handler) track2FAFailure(ctx context.Context, userID uint64) error {
 		// Increment counter with 15 minute expiry
 		count, err := h.sessionCache.IncrementCounter(ctx, key, lockDuration)
 		if err != nil {
-			log.Printf("[SECURITY WARNING] Redis unavailable for tracking 2FA failure (user_id=%d): %v", userID, err)
-			log.Printf("[SECURITY] Falling back to in-memory tracking")
+			log.Printf("[SECURITY] Redis unavailable for tracking 2FA failure (user_id=%d): %v", userID, err)
+			if h.securityCfg.RequireRedisFor2FA {
+				return fmt.Errorf("2FA rate limiting unavailable (Redis down, policy requires Redis): %w", err)
+			}
+			log.Printf("[SECURITY] policy allows in-memory fallback for tracking 2FA failure")
+			// Fall through to memory limiter below.
 		} else {
 			log.Printf("[auth] 2FA failure count (Redis) for user_id=%d: %d/5", userID, count)
 			return nil

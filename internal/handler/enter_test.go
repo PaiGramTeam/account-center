@@ -14,6 +14,6 @@ func TestInitializeApiGroupsReturnsCasbinInitError(t *testing.T) {
 	casbin.Reset()
 	t.Cleanup(casbin.Reset)
 
-	err := InitializeApiGroups(nil, sessioncache.NewNoopStore(), config.AuthConfig{})
+	err := InitializeApiGroups(nil, sessioncache.NewNoopStore(), config.AuthConfig{}, config.SecurityConfig{})
 	require.Error(t, err)
 }

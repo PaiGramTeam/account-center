@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"paigram/internal/casbin"
@@ -361,7 +360,7 @@ func TestCreateDefaultAdmin(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "TestPassword123!")
 	t.Setenv("ADMIN_NAME", "Test Admin")
 
-	err = CreateDefaultAdmin(db)
+	err = CreateDefaultAdmin(db, 12)
 	require.NoError(t, err)
 
 	// Verify user was created
@@ -415,7 +414,7 @@ func TestCreateDefaultAdmin_Idempotent(t *testing.T) {
 	t.Setenv("ADMIN_NAME", "Idempotent Admin")
 
 	// Create admin first time
-	err = CreateDefaultAdmin(db)
+	err = CreateDefaultAdmin(db, 12)
 	require.NoError(t, err)
 
 	var count int64
@@ -424,7 +423,7 @@ func TestCreateDefaultAdmin_Idempotent(t *testing.T) {
 	assert.Equal(t, int64(1), count)
 
 	// Create admin second time (should skip)
-	err = CreateDefaultAdmin(db)
+	err = CreateDefaultAdmin(db, 12)
 	require.NoError(t, err)
 
 	// Should still have only one user
@@ -437,15 +436,16 @@ func TestCreateDefaultAdmin_WithoutAdminRole(t *testing.T) {
 	db := setupTestDB(t)
 
 	// Don't seed roles
-	err := CreateDefaultAdmin(db)
+	err := CreateDefaultAdmin(db, 12)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "admin role not found")
 }
 
-func TestCreateDefaultAdmin_RequiresExplicitCredentials(t *testing.T) {
-	// When neither ADMIN_EMAIL nor ADMIN_PASSWORD is set, bootstrap should
-	// generate a random password and fall back to the default email instead
-	// of failing — this is the "first run, just works" contract.
+func TestSeed_FailsClosedWhenAdminPasswordEmpty(t *testing.T) {
+	// V6: ADMIN_PASSWORD is now mandatory. Auto-generating a password
+	// would either leak via stdout/stderr (caught by log aggregators) or
+	// require fragile TTY-only printing. The cleanest fix is to refuse
+	// to seed at all unless the operator supplies a password.
 	db := setupTestDB(t)
 
 	require.NoError(t, SeedPermissions(db))
@@ -455,18 +455,24 @@ func TestCreateDefaultAdmin_RequiresExplicitCredentials(t *testing.T) {
 	t.Setenv("ADMIN_PASSWORD", "")
 	t.Setenv("ADMIN_NAME", "")
 
-	require.NoError(t, CreateDefaultAdmin(db))
+	err := CreateDefaultAdmin(db, 12)
+	require.Error(t, err, "must refuse to seed when ADMIN_PASSWORD is unset")
+	require.Contains(t, err.Error(), "ADMIN_PASSWORD")
 
-	var email model.UserEmail
-	require.NoError(t, db.First(&email).Error)
-	assert.Equal(t, defaultAdminEmail, email.Email)
+	// No user, profile, email, credential, or role assignment must have
+	// been created.
+	var userCount int64
+	require.NoError(t, db.Model(&model.User{}).Count(&userCount).Error)
+	assert.Equal(t, int64(0), userCount, "no user must be created on fail-closed path")
 
-	var credential model.UserCredential
-	require.NoError(t, db.Where("provider = ?", "email").First(&credential).Error)
-	assert.NotEmpty(t, credential.PasswordHash)
+	var credentialCount int64
+	require.NoError(t, db.Model(&model.UserCredential{}).Count(&credentialCount).Error)
+	assert.Equal(t, int64(0), credentialCount, "no credential must be created on fail-closed path")
 }
 
-func TestCreateDefaultAdmin_GeneratesPasswordWhenOnlyEmailProvided(t *testing.T) {
+func TestCreateDefaultAdmin_RequiresExplicitPasswordEvenWhenEmailProvided(t *testing.T) {
+	// V6 corollary: setting only ADMIN_EMAIL still does not allow
+	// auto-generation; ADMIN_PASSWORD remains mandatory.
 	db := setupTestDB(t)
 
 	require.NoError(t, SeedPermissions(db))
@@ -475,23 +481,9 @@ func TestCreateDefaultAdmin_GeneratesPasswordWhenOnlyEmailProvided(t *testing.T)
 	t.Setenv("ADMIN_EMAIL", "ops@example.com")
 	t.Setenv("ADMIN_PASSWORD", "")
 
-	// Stub the generator so we can assert the exact value flowed through.
-	original := generateRandomPassword
-	t.Cleanup(func() { generateRandomPassword = original })
-	generateRandomPassword = func() (string, error) { return "stub-generated-secret", nil }
-
-	require.NoError(t, CreateDefaultAdmin(db))
-
-	var email model.UserEmail
-	require.NoError(t, db.First(&email).Error)
-	assert.Equal(t, "ops@example.com", email.Email)
-
-	var credential model.UserCredential
-	require.NoError(t, db.Where("provider = ?", "email").First(&credential).Error)
-	require.NoError(t, bcrypt.CompareHashAndPassword(
-		[]byte(credential.PasswordHash),
-		[]byte("stub-generated-secret"),
-	))
+	err := CreateDefaultAdmin(db, 12)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ADMIN_PASSWORD")
 }
 
 func TestCreateDefaultAdmin_CreatesReplacementWhenExistingAdminAssignmentIsInactive(t *testing.T) {
@@ -511,7 +503,7 @@ func TestCreateDefaultAdmin_CreatesReplacementWhenExistingAdminAssignmentIsInact
 	t.Setenv("ADMIN_PASSWORD", "ReplacementPass123!")
 	t.Setenv("ADMIN_NAME", "Replacement Admin")
 
-	require.NoError(t, CreateDefaultAdmin(db))
+	require.NoError(t, CreateDefaultAdmin(db, 12))
 
 	var activeAdminCount int64
 	require.NoError(t, db.Table("user_roles").

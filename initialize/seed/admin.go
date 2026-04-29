@@ -1,14 +1,11 @@
 package seed
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -20,9 +17,10 @@ import (
 // defaultAdminEmail is used when ADMIN_EMAIL is not provided.
 const defaultAdminEmail = "admin@paigram.local"
 
-// generatedPasswordBytes controls the entropy of auto-generated admin passwords.
-// 24 random bytes => 32-character URL-safe base64 string.
-const generatedPasswordBytes = 24
+// DefaultBcryptCost matches the OWASP-recommended cost the rest of the
+// system uses when an explicit Config is unavailable. Callers that have
+// access to *config.Config should pass cfg.GetBcryptCost() instead.
+const DefaultBcryptCost = 12
 
 // AdminConfig holds configuration for creating the default admin user.
 type AdminConfig struct {
@@ -31,81 +29,51 @@ type AdminConfig struct {
 	DisplayName string
 }
 
-// generateRandomPassword returns a cryptographically random URL-safe password.
-// Exposed as a variable so tests can stub deterministic values if needed.
-var generateRandomPassword = func() (string, error) {
-	buf := make([]byte, generatedPasswordBytes)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("read random bytes: %w", err)
-	}
-	// URL-safe, no padding so the secret can be copy-pasted easily.
-	return strings.TrimRight(base64.URLEncoding.EncodeToString(buf), "="), nil
-}
-
-// resolveAdminConfig builds the admin config, generating the email and/or
-// password when either is missing from the environment. Generated credentials
-// are returned in `generated` so the caller can decide how to surface them.
-type generatedFlags struct {
-	email    bool
-	password bool
-}
-
-func resolveAdminConfig() (AdminConfig, generatedFlags, error) {
-	var flags generatedFlags
-
+// resolveAdminConfig builds the admin config from environment variables.
+//
+// V6: ADMIN_PASSWORD is mandatory. We deliberately refuse to auto-generate
+// a password — anything we did with a generated value (logging it,
+// writing it to a file, printing only to a TTY) would either leak via log
+// aggregators or break docker-exec / non-TTY scenarios. Failing closed
+// makes the operator decide once and the seed step never fingerprints
+// the value into rotated storage.
+func resolveAdminConfig() (AdminConfig, error) {
 	email := os.Getenv("ADMIN_EMAIL")
 	if email == "" {
 		email = defaultAdminEmail
-		flags.email = true
 	}
 
 	password := os.Getenv("ADMIN_PASSWORD")
 	if password == "" {
-		generated, err := generateRandomPassword()
-		if err != nil {
-			return AdminConfig{}, flags, fmt.Errorf("generate admin password: %w", err)
-		}
-		password = generated
-		flags.password = true
+		return AdminConfig{}, errors.New(
+			"ADMIN_PASSWORD must be set; refusing to auto-generate a password " +
+				"(would leak via logs or files). Set ADMIN_PASSWORD to a strong " +
+				"value (>=8 chars) and re-run seed.")
 	}
 
-	cfg := AdminConfig{
+	displayName := os.Getenv("ADMIN_NAME")
+	if displayName == "" {
+		displayName = "Administrator"
+	}
+
+	return AdminConfig{
 		Email:       email,
 		Password:    password,
-		DisplayName: getEnvOrDefault("ADMIN_NAME", "Administrator"),
-	}
-	return cfg, flags, nil
-}
-
-// announceGeneratedCredentials prints a clearly formatted, single-shot banner
-// to stdout when the bootstrap step had to invent credentials. The plaintext
-// password is printed exactly once because it is not recoverable afterward.
-func announceGeneratedCredentials(cfg AdminConfig, flags generatedFlags) {
-	if !flags.email && !flags.password {
-		return
-	}
-
-	log.Println("================================================================")
-	log.Println("  Default admin user has been bootstrapped.")
-	if flags.email {
-		log.Printf("  Email    (auto-generated): %s", cfg.Email)
-	} else {
-		log.Printf("  Email    (from ADMIN_EMAIL): %s", cfg.Email)
-	}
-	if flags.password {
-		log.Printf("  Password (auto-generated): %s", cfg.Password)
-		log.Println("  This password will NOT be shown again. Save it now and")
-		log.Println("  rotate it via the admin UI as soon as possible.")
-	}
-	log.Println("================================================================")
+		DisplayName: displayName,
+	}, nil
 }
 
 // CreateDefaultAdmin creates a default admin user if it doesn't exist.
-// It reads admin credentials from environment variables when available; any
-// missing value (email and/or password) is filled in with a safe default or a
-// freshly generated random secret, and the resulting credentials are logged
-// once so an operator can capture them on first boot.
-func CreateDefaultAdmin(db *gorm.DB) error {
+//
+// Credentials come exclusively from environment variables:
+//
+//	ADMIN_EMAIL    - optional, defaults to admin@paigram.local
+//	ADMIN_PASSWORD - REQUIRED; the call fails closed if unset (V6)
+//	ADMIN_NAME     - optional, defaults to "Administrator"
+//
+// bcryptCost should be the operator-configured cost (typically
+// cfg.GetBcryptCost()). A value below 10 is bumped to DefaultBcryptCost.
+func CreateDefaultAdmin(db *gorm.DB, bcryptCost int) error {
 	// Check if admin user already exists
 	var adminRole model.Role
 	if err := db.Where("name = ?", model.RoleAdmin).First(&adminRole).Error; err != nil {
@@ -129,25 +97,41 @@ func CreateDefaultAdmin(db *gorm.DB) error {
 		return nil
 	}
 
-	cfg, flags, err := resolveAdminConfig()
+	cfg, err := resolveAdminConfig()
 	if err != nil {
 		return err
 	}
 
 	log.Printf("Creating default admin user with email: %s", cfg.Email)
 
-	if err := createAdminUser(db, cfg, adminRole.ID); err != nil {
+	if err := createAdminUser(db, cfg, adminRole.ID, bcryptCost); err != nil {
 		return err
 	}
 
-	announceGeneratedCredentials(cfg, flags)
+	log.Println("================================================================")
+	log.Println("  Default admin user has been bootstrapped.")
+	log.Printf("  Email: %s", cfg.Email)
+	log.Println("  Password: (set via ADMIN_PASSWORD environment variable)")
+	log.Println("  Rotate the password via the admin UI as soon as possible.")
+	log.Println("================================================================")
 	return nil
 }
 
+// resolveBcryptCost clamps the cost into the safe [10,14] range.
+func resolveBcryptCost(cost int) int {
+	if cost < 10 {
+		return DefaultBcryptCost
+	}
+	if cost > 14 {
+		return 14
+	}
+	return cost
+}
+
 // createAdminUser creates an admin user with the given configuration.
-func createAdminUser(db *gorm.DB, config AdminConfig, adminRoleID uint64) error {
-	// Hash password
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(config.Password), bcrypt.DefaultCost)
+func createAdminUser(db *gorm.DB, config AdminConfig, adminRoleID uint64, bcryptCost int) error {
+	// Hash password with the operator-configured cost (V8).
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(config.Password), resolveBcryptCost(bcryptCost))
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
@@ -218,12 +202,4 @@ func createAdminUser(db *gorm.DB, config AdminConfig, adminRoleID uint64) error 
 
 		return nil
 	})
-}
-
-// getEnvOrDefault retrieves an environment variable or returns a default value.
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
 }

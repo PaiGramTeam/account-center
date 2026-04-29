@@ -589,14 +589,10 @@ func registerVerifyAndLogin(t *testing.T, stack *integrationStack, prefix string
 		"locale":       "en_US",
 	}, nil)
 	require.Equal(t, http.StatusCreated, registerRes.Code, registerRes.Body.String())
-	registerData := decodeResponseData(t, registerRes)
-	verificationToken := registerData["verification_token"].(string)
 
-	verifyRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/verify-email", map[string]any{
-		"email": email,
-		"token": verificationToken,
-	}, nil)
-	require.Equal(t, http.StatusOK, verifyRes.Code, verifyRes.Body.String())
+	// V14: registration response no longer leaks the verification token;
+	// flip verified_at directly in the DB to keep this helper functional.
+	markEmailVerified(t, stack, email)
 
 	loginRes := performJSONRequest(t, stack.Router, http.MethodPost, "/api/v1/auth/login", map[string]any{
 		"email":    email,

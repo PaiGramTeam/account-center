@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -212,10 +213,12 @@ type EmailConfig struct {
 
 // SecurityConfig holds security-related configuration.
 type SecurityConfig struct {
-	SuspiciousLoginDetection  bool   `mapstructure:"suspicious_login_detection"`   // Enable suspicious login detection
-	SuspiciousLoginEmailAlert bool   `mapstructure:"suspicious_login_email_alert"` // Send email alerts for suspicious logins
-	SecuritySettingsURL       string `mapstructure:"security_settings_url"`        // URL to account security settings page
-	BcryptCost                int    `mapstructure:"bcrypt_cost"`                  // Bcrypt hashing cost (default: 12, min: 10, max: 31)
+	SuspiciousLoginDetection  bool          `mapstructure:"suspicious_login_detection"`   // Enable suspicious login detection
+	SuspiciousLoginEmailAlert bool          `mapstructure:"suspicious_login_email_alert"` // Send email alerts for suspicious logins
+	SecuritySettingsURL       string        `mapstructure:"security_settings_url"`        // URL to account security settings page
+	BcryptCost                int           `mapstructure:"bcrypt_cost"`                  // Bcrypt hashing cost (default: 12, min: 10, max: 31)
+	RequireRedisFor2FA        bool          `mapstructure:"require_redis_for_2fa"`        // V22: when true, 2FA rate limiting fails closed if Redis is unavailable
+	TwoFAFailClosedTTL        time.Duration `mapstructure:"twofa_fail_closed_ttl"`        // V22: lock duration applied when failing closed; defaults to 1m
 }
 
 // SentryConfig holds Sentry error reporting configuration.
@@ -276,6 +279,7 @@ func Load(paths ...string) (*Config, error) {
 			return
 		}
 		warnIfFrontendBaseURLMissing(localCfg)
+		warnIfVerificationEmailDispatchMissing(localCfg)
 
 		cfg = localCfg
 	})
@@ -327,6 +331,35 @@ func warnIfFrontendBaseURLMissing(cfg *Config) {
 	logging.Warn(
 		"frontend.base_url is not configured; password-reset and similar emails will be suppressed",
 		zap.String("setting", "frontend.base_url"),
+	)
+}
+
+// warnIfVerificationEmailDispatchMissing covers a deployment-blocking
+// gap surfaced by V14: the registration handler stores a hashed
+// verification token but does not yet dispatch the verification email
+// containing the plaintext token (see handler/auth/email.go::
+// RegisterEmail KNOWN GAP). Until that wiring lands, an operator who
+// turns on auth.require_verified_email_login=true will lock all new
+// users out of login because there is no path by which a freshly
+// registered user can obtain the plaintext token. We log a loud
+// warning rather than failing Load: existing deployments with
+// require_verified_email_login=false are unaffected, and operators
+// using OAuth-only login should not be blocked from starting.
+//
+// This warning will become a hard validation error once the
+// verification email dispatch is wired up; remove this function then.
+func warnIfVerificationEmailDispatchMissing(cfg *Config) {
+	if cfg == nil {
+		return
+	}
+	if !cfg.Auth.RequireEmailVerificationLogin {
+		return
+	}
+	logging.Warn(
+		"auth.require_verified_email_login=true but the registration handler does not dispatch verification emails yet; "+
+			"newly registered email-password users will be unable to log in until verification email dispatch is wired up. "+
+			"See KNOWN GAP in internal/handler/auth/email.go::RegisterEmail.",
+		zap.String("setting", "auth.require_verified_email_login"),
 	)
 }
 
@@ -435,6 +468,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.bcrypt_cost", 12)
 	v.SetDefault("security.suspicious_login_detection", false)
 	v.SetDefault("security.suspicious_login_email_alert", false)
+	// V22: fail closed by default. Operators who run a single instance
+	// without Redis can opt out by setting require_redis_for_2fa: false.
+	v.SetDefault("security.require_redis_for_2fa", true)
+	v.SetDefault("security.twofa_fail_closed_ttl", "1m")
 
 	v.SetDefault("sentry.enabled", false)
 	v.SetDefault("sentry.dsn", "")

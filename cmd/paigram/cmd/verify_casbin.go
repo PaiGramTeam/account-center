@@ -22,7 +22,7 @@ var verifyCasbinCmd = &cobra.Command{
 		cfg := config.MustLoad("config")
 		cfg.Database.AutoMigrate = false
 		cfg.Database.AutoSeed = false
-		db := database.MustConnect(cfg.Database)
+		db := database.MustConnect(cfg.Database, cfg.Security)
 
 		drift, err := seed.VerifySeedCasbinPolicies(db)
 		if err != nil {

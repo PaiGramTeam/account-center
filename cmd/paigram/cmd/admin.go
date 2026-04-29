@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"gorm.io/gorm"
 
 	"paigram/initialize/seed"
+	"paigram/internal/config"
 	"paigram/internal/model"
 )
 
@@ -87,6 +89,27 @@ func init() {
 	adminResetPasswordCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 }
 
+// validateNewPassword enforces the system-wide password policy of 8-72
+// characters used by every other code path (HTTP register, forgot, reset,
+// admin-create, admin-reset, etc.). The CLI previously accepted 6+
+// characters, contradicting the rest of the system (V9).
+func validateNewPassword(p string) error {
+	if len(p) < 8 {
+		return errors.New("Password must be at least 8 characters long")
+	}
+	if len(p) > 72 {
+		return errors.New("Password must not exceed 72 characters (bcrypt limit)")
+	}
+	return nil
+}
+
+// loadAppConfig wraps config.MustLoad so admin command paths share a
+// single load site (and we can stub it in tests if needed). Auto-migrate
+// and auto-seed are disabled because the CLI manages its own DB lifecycle.
+func loadAppConfig() *config.Config {
+	return config.MustLoad("config")
+}
+
 func createAdmin(cmd *cobra.Command) {
 	db := getDB()
 
@@ -117,14 +140,15 @@ func createAdmin(cmd *cobra.Command) {
 	// Check if using default credentials
 	useDefault, _ := cmd.Flags().GetBool("use-default")
 	if useDefault {
-		if err := seed.CreateDefaultAdmin(db); err != nil {
+		appCfg := loadAppConfig()
+		if err := seed.CreateDefaultAdmin(db, appCfg.GetBcryptCost()); err != nil {
 			fmt.Printf("Error creating default admin: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Default admin account created successfully!")
-		fmt.Println("Email: admin@paigram.local")
-		fmt.Println("Password: admin123456")
-		fmt.Println("\n⚠️  Please change the default password immediately!")
+		fmt.Println("Default admin account created.")
+		fmt.Println("Email and password came from ADMIN_EMAIL / ADMIN_PASSWORD environment variables")
+		fmt.Println("(default email: admin@paigram.local; ADMIN_PASSWORD is required).")
+		fmt.Println("\n⚠️  Rotate the password via the admin UI as soon as possible.")
 		return
 	}
 
@@ -144,6 +168,10 @@ func createAdmin(cmd *cobra.Command) {
 			fmt.Println("Passwords do not match!")
 			os.Exit(1)
 		}
+	}
+	if err := validateNewPassword(password); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 	if name == "" {
 		name = promptInput("Display Name: ")
@@ -199,7 +227,8 @@ func createAdmin(cmd *cobra.Command) {
 		DisplayName: name,
 	}
 
-	if err := createAdminUser(db, config, adminRole.ID); err != nil {
+	appCfg := loadAppConfig()
+	if err := createAdminUser(db, config, adminRole.ID, appCfg.GetBcryptCost()); err != nil {
 		fmt.Printf("Error creating admin: %v\n", err)
 		os.Exit(1)
 	}
@@ -308,9 +337,16 @@ func removeAdmin(email string) {
 }
 
 // Helper function to create admin user (reuse seed logic)
-func createAdminUser(db *gorm.DB, config seed.AdminConfig, adminRoleID uint64) error {
-	// Hash password
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(config.Password), bcrypt.DefaultCost)
+func createAdminUser(db *gorm.DB, config seed.AdminConfig, adminRoleID uint64, bcryptCost int) error {
+	// Hash password using the operator-configured cost (V8).
+	cost := bcryptCost
+	if cost < 10 {
+		cost = seed.DefaultBcryptCost
+	}
+	if cost > 14 {
+		cost = 14
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(config.Password), cost)
 	if err != nil {
 		return fmt.Errorf("hash password: %w", err)
 	}
@@ -445,9 +481,9 @@ func resetPassword(email string, cmd *cobra.Command) {
 		}
 	}
 
-	// Validate password length
-	if len(newPassword) < 6 {
-		fmt.Println("Password must be at least 6 characters long!")
+	// Validate password length using the system-wide policy (V9).
+	if err := validateNewPassword(newPassword); err != nil {
+		fmt.Println(err)
 		os.Exit(1)
 	}
 
@@ -465,8 +501,10 @@ func resetPassword(email string, cmd *cobra.Command) {
 		}
 	}
 
-	// Hash the new password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	// Hash the new password using the operator-configured cost (V8).
+	appCfg := loadAppConfig()
+	cost := appCfg.GetBcryptCost()
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), cost)
 	if err != nil {
 		fmt.Printf("Error hashing password: %v\n", err)
 		os.Exit(1)

@@ -135,7 +135,7 @@ func runServer() {
 		log.Printf("2FA will not work properly. Please set ENCRYPTION_KEY environment variable.")
 	}
 
-	db, err := database.Connect(cfg.Database)
+	db, err := database.Connect(cfg.Database, cfg.Security)
 	if err != nil {
 		fatalStartup(cfg.Sentry, "database connection failed: %v", err)
 	}
@@ -289,5 +289,5 @@ func getDB() *gorm.DB {
 	// Disable auto initialization for CLI commands
 	cfg.Database.AutoMigrate = false
 	cfg.Database.AutoSeed = false
-	return database.MustConnect(cfg.Database)
+	return database.MustConnect(cfg.Database, cfg.Security)
 }

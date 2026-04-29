@@ -200,7 +200,12 @@ func TestRegisterEmail_Success(t *testing.T) {
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	data := resp["data"].(map[string]any)
-	assert.NotEmpty(t, data["verification_token"])
+	// V14: registration response must NOT leak the verification token or
+	// its expiry. Those reach the user only via email.
+	_, hasToken := data["verification_token"]
+	assert.False(t, hasToken, "verification_token must not appear in registration response")
+	_, hasExpiry := data["verification_expires_at"]
+	assert.False(t, hasExpiry, "verification_expires_at must not appear in registration response")
 	assert.Equal(t, "newuser@example.com", data["email"])
 	assert.Equal(t, false, data["requires_email_verification"])
 
@@ -222,8 +227,47 @@ func TestRegisterEmail_Success(t *testing.T) {
 	require.NoError(t, db.Where("user_id = ?", user.ID).First(&emailRecord).Error)
 	assert.Equal(t, "newuser@example.com", emailRecord.Email)
 	assert.True(t, emailRecord.VerificationExpiry.Valid)
+	// Persisted token (a hash) is opaque to the test; just verify it was stored.
 	assert.NotEmpty(t, emailRecord.VerificationToken)
-	assert.NotEqual(t, data["verification_token"], emailRecord.VerificationToken)
+}
+
+// TestRegister_DoesNotLeakVerificationTokenInResponse verifies V14: the
+// registration response must not return the email-verification token in
+// plaintext. The token is supposed to reach the user only via the
+// verification email — returning it in HTTP defeats proof-of-ownership.
+func TestRegister_DoesNotLeakVerificationTokenInResponse(t *testing.T) {
+	db := setupTestDB(t)
+	handler := setupTestHandler(db)
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/auth/register", handler.RegisterEmail)
+
+	bodyBytes, err := json.Marshal(registerEmailRequest{
+		Email:       "leakcheck@example.com",
+		Password:    "Password123!",
+		DisplayName: "Leak Check",
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/register", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data, _ := resp["data"].(map[string]any)
+	require.NotNil(t, data, "data envelope expected")
+
+	if _, ok := data["verification_token"]; ok {
+		t.Fatalf("registration response leaks verification_token: %v", data["verification_token"])
+	}
+	if _, ok := data["verification_expires_at"]; ok {
+		t.Fatalf("registration response leaks verification_expires_at: %v", data["verification_expires_at"])
+	}
 }
 
 func TestRegisterEmail_DuplicateEmail_ReturnsConflict(t *testing.T) {

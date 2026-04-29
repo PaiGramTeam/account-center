@@ -19,6 +19,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
+	"paigram/internal/config"
 	"paigram/internal/handler/shared"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
@@ -35,7 +36,8 @@ type Handler struct {
 	userService  UserServiceInterface
 	loginMethods LoginMethodService
 	sessionCache sessioncache.Store
-	db           *gorm.DB // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
+	securityCfg  config.SecurityConfig // bcrypt cost source for admin-create / admin-reset paths (V8)
+	db           *gorm.DB              // TODO(architectural-refactoring): Remove after migrating remaining 8 methods (UpdateUserStatus, ResetUserPassword, GetAuditLogs, GetUserRoles, GetUserPermissions, GetUserSessions, RevokeUserSession, GetSecuritySummary) to service layer. See docs/superpowers/plans/2026-04-11-architectural-refactoring.md Phase 5
 }
 
 // LoginMethodService defines reusable login-method operations shared with /me.
@@ -85,6 +87,28 @@ func NewHandlerWithDBAndCache(userService UserServiceInterface, db *gorm.DB, cac
 		sessionCache: cache,
 		db:           db,
 	}
+}
+
+// NewHandlerWithDBCacheAndSecurity is the preferred constructor for the
+// production wiring: it accepts the security config so admin-managed
+// password operations hash at the operator-configured cost (V8).
+func NewHandlerWithDBCacheAndSecurity(userService UserServiceInterface, db *gorm.DB, cache sessioncache.Store, security config.SecurityConfig) *Handler {
+	h := NewHandlerWithDBAndCache(userService, db, cache)
+	h.securityCfg = security
+	return h
+}
+
+// bcryptCost returns the operator-configured cost clamped to [10, 14],
+// falling back to 12 (OWASP minimum) when not set.
+func (h *Handler) bcryptCost() int {
+	cost := h.securityCfg.BcryptCost
+	if cost < 10 {
+		return 12
+	}
+	if cost > 14 {
+		return 14
+	}
+	return cost
 }
 
 // RegisterRoutes binds user routes to the router group.
@@ -682,8 +706,8 @@ func (h *Handler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	// Hash password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	// Hash password using the operator-configured cost (V8).
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), h.bcryptCost())
 	if err != nil {
 		response.InternalServerError(c, "failed to hash password")
 		return
@@ -1067,8 +1091,8 @@ func (h *Handler) ResetUserPassword(c *gin.Context) {
 		return
 	}
 
-	// Hash new password
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	// Hash new password using the operator-configured cost (V8).
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), h.bcryptCost())
 	if err != nil {
 		response.InternalServerErrorWithCode(c, response.ErrCodeInternalError, "failed to hash password", nil)
 		return

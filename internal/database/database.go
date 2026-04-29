@@ -26,7 +26,9 @@ var (
 )
 
 // Connect initialises a GORM connection using the provided configuration.
-func Connect(cfg config.DatabaseConfig) (*gorm.DB, error) {
+// security is consulted when AutoSeed is enabled so the bootstrap admin
+// password is hashed at the operator-configured cost (V8).
+func Connect(cfg config.DatabaseConfig, security config.SecurityConfig) (*gorm.DB, error) {
 	var initErr error
 	dbOnce.Do(func() {
 		if err := validateConfig(cfg); err != nil {
@@ -85,7 +87,7 @@ func Connect(cfg config.DatabaseConfig) (*gorm.DB, error) {
 
 			if cfg.AutoSeed {
 				// Use the GORM connection for seeding
-				initializer := initialize.NewInitializer(db, nil, cfg)
+				initializer := initialize.NewInitializer(db, nil, cfg, security)
 				if err := initializer.Run(); err != nil {
 					initErr = fmt.Errorf("run seed data: %w", err)
 					return
@@ -103,8 +105,9 @@ func Connect(cfg config.DatabaseConfig) (*gorm.DB, error) {
 }
 
 // MustConnect is a convenience helper that panics when connection fails.
-func MustConnect(cfg config.DatabaseConfig) *gorm.DB {
-	db, err := Connect(cfg)
+// The security config is consulted only when cfg.AutoSeed is true.
+func MustConnect(cfg config.DatabaseConfig, security config.SecurityConfig) *gorm.DB {
+	db, err := Connect(cfg, security)
 	if err != nil {
 		log.Fatalf("database connection failed: %v", err)
 	}

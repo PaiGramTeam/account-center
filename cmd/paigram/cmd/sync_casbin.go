@@ -28,7 +28,7 @@ func runSeedCasbinSync() {
 	cfg := config.MustLoad("config")
 	cfg.Database.AutoMigrate = false
 	cfg.Database.AutoSeed = false
-	db := database.MustConnect(cfg.Database)
+	db := database.MustConnect(cfg.Database, cfg.Security)
 
 	log.Println("Synchronizing built-in Casbin state from the seed catalog...")
 	if err := seed.SeedPermissions(db); err != nil {

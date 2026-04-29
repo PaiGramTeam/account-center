@@ -141,31 +141,16 @@ func (s *UserService) VerifyUser(ctx context.Context, req *VerifyUserRequest) (*
 	}, nil
 }
 
-// GetUserPermissions retrieves user permissions and roles
+// GetUserPermissions retrieves user permissions and roles.
+//
+// V17 hardening: the previous implementation auto-granted "admin.all" + "admin"
+// to any user whose numeric ID was below 100, which was a "demo" backdoor that
+// would have escalated to a privilege-escalation bug the moment this RPC was
+// registered with the gRPC server. Until a real role system exists, we simply
+// refuse to answer rather than risk fabricating an authoritative-looking
+// permission list.
 func (s *UserService) GetUserPermissions(ctx context.Context, req *GetUserPermissionsRequest) (*GetUserPermissionsResponse, error) {
-	// Verify user exists
-	var user model.User
-	if err := s.db.First(&user, req.UserId).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, status.Errorf(codes.NotFound, "user not found")
-		}
-		return nil, status.Errorf(codes.Internal, "failed to get user: %v", err)
-	}
-
-	// TODO: Implement actual permission system
-	// For now, return default permissions
-	permissions := []string{"user.read", "user.update.self"}
-	roles := []string{"user"}
-
-	if user.ID < 100 { // Simple admin check for demo
-		permissions = append(permissions, "admin.all")
-		roles = append(roles, "admin")
-	}
-
-	return &GetUserPermissionsResponse{
-		Permissions: permissions,
-		Roles:       roles,
-	}, nil
+	return nil, status.Error(codes.Unimplemented, "permission system not implemented")
 }
 
 // UpdateUserData updates user profile data

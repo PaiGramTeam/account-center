@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"strings"
 	"time"
 
@@ -30,20 +31,42 @@ const (
 	DefaultRateLimitTimeWindow = int64(24 * 60 * 60 * 1000)
 	// DefaultRateLimitMax is 1000 requests per day
 	DefaultRateLimitMax = 1000
+
+	// botTokenStatusActive marks the current row in a token family.
+	botTokenStatusActive = "active"
+	// botTokenStatusRotated marks rows that were legitimately superseded by a
+	// newer row in the same family via RefreshBotToken.
+	botTokenStatusRotated = "rotated"
+	// botTokenStatusRevoked marks rows that have been invalidated and must
+	// never be honored again, e.g. after refresh-token reuse detection.
+	botTokenStatusRevoked = "revoked"
+
+	// botTokenRevokeReasonReuse is recorded on every row in a family when a
+	// non-active refresh token from that family is presented again.
+	botTokenRevokeReasonReuse = "token_reuse_detected"
 )
+
+// allowedRegisterBotScopes is the explicit allowlist of scopes a caller may
+// request when registering a new bot through the gRPC RegisterBot RPC. Any
+// scope outside this set (notably anything starting with admin.) MUST be
+// rejected — see V1 hardening.
+var allowedRegisterBotScopes = map[string]struct{}{
+	"bot.read":  {},
+	"bot.write": {},
+}
 
 // BotAuthService implements the gRPC BotAuthService
 type BotAuthService struct {
 	UnimplementedBotAuthServiceServer
 	db                   *gorm.DB
-	cache                *cache.BotTokenCache
+	cache                cache.BotTokenCacheStore
 	accessTokenDuration  time.Duration
 	refreshTokenDuration time.Duration
 }
 
 // NewBotAuthService creates a new bot auth service
 func NewBotAuthService(db *gorm.DB, redisClient *redis.Client, redisPrefix string) *BotAuthService {
-	var tokenCache *cache.BotTokenCache
+	var tokenCache cache.BotTokenCacheStore
 	if redisClient != nil {
 		tokenCache = cache.NewBotTokenCache(redisClient, redisPrefix)
 	}
@@ -56,7 +79,29 @@ func NewBotAuthService(db *gorm.DB, redisClient *redis.Client, redisPrefix strin
 	}
 }
 
-// RegisterBot registers a new bot client
+// NewBotAuthServiceWithCache wires a BotAuthService against a caller-provided
+// cache store. It exists primarily so tests can inject an in-memory fake that
+// satisfies cache.BotTokenCacheStore without standing up Redis. Pass nil to
+// disable caching entirely.
+func NewBotAuthServiceWithCache(db *gorm.DB, store cache.BotTokenCacheStore) *BotAuthService {
+	return &BotAuthService{
+		db:                   db,
+		cache:                store,
+		accessTokenDuration:  time.Hour,
+		refreshTokenDuration: time.Hour * 24 * 30,
+	}
+}
+
+// RegisterBot registers a new bot client.
+//
+// V1 hardening:
+//   - The auth interceptor now requires a valid bot access token before this
+//     method runs, so the caller is always an authenticated bot.
+//   - The caller may only register additional bots under the same owner user
+//     they themselves belong to. Any attempt to set OwnerEmail to a different
+//     user's email is rejected with PermissionDenied.
+//   - Requested Scopes are validated against an explicit allowlist. Anything
+//     outside that allowlist (notably admin.*) is rejected with InvalidArgument.
 func (s *BotAuthService) RegisterBot(ctx context.Context, req *RegisterBotRequest) (*RegisterBotResponse, error) {
 	// Validate input
 	if req.Name == "" {
@@ -66,7 +111,55 @@ func (s *BotAuthService) RegisterBot(ctx context.Context, req *RegisterBotReques
 		return nil, status.Errorf(codes.InvalidArgument, "owner email is required")
 	}
 
-	// Find owner user
+	// The auth interceptor populates ctx with the calling bot. If it isn't there
+	// we treat the call as unauthenticated rather than silently fall through.
+	callerBot, ok := ctx.Value("bot").(*Bot)
+	if !ok || callerBot == nil || callerBot.Id == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing authenticated caller")
+	}
+
+	// Resolve the caller's owner user via the bot row, then take that user's
+	// primary email as the canonical caller identity. We do not trust any
+	// owner-email field on the proto Bot — there isn't one — and we do not
+	// trust the request body to assert who the caller is.
+	var callerBotRow model.Bot
+	if err := s.db.Where("id = ?", callerBot.Id).First(&callerBotRow).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, status.Error(codes.Unauthenticated, "caller bot not found")
+		}
+		return nil, status.Errorf(codes.Internal, "failed to resolve caller bot: %v", err)
+	}
+
+	var callerEmail model.UserEmail
+	if err := s.db.Where("user_id = ? AND is_primary = ?", callerBotRow.OwnerUserID, true).First(&callerEmail).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Fall back to any email so we still have a basis for comparison.
+			if fbErr := s.db.Where("user_id = ?", callerBotRow.OwnerUserID).First(&callerEmail).Error; fbErr != nil {
+				return nil, status.Error(codes.PermissionDenied, "caller has no resolvable email")
+			}
+		} else {
+			return nil, status.Errorf(codes.Internal, "failed to resolve caller email: %v", err)
+		}
+	}
+
+	// Owner-email enforcement (case-insensitive). Reject any cross-user attempt.
+	if !strings.EqualFold(strings.TrimSpace(req.OwnerEmail), strings.TrimSpace(callerEmail.Email)) {
+		return nil, status.Error(codes.PermissionDenied, "owner_email must match the authenticated caller")
+	}
+
+	// Scope allowlist. Reject anything outside { bot.read, bot.write }.
+	for _, requested := range req.Scopes {
+		scope := strings.TrimSpace(requested)
+		if scope == "" {
+			continue
+		}
+		if _, ok := allowedRegisterBotScopes[scope]; !ok {
+			return nil, status.Errorf(codes.InvalidArgument, "scope %q is not permitted via RegisterBot", scope)
+		}
+	}
+
+	// Find owner user by the validated email. We re-query so the persisted
+	// OwnerUserID is consistent with what's actually in the DB right now.
 	var userEmail model.UserEmail
 	if err := s.db.Where("email = ?", req.OwnerEmail).First(&userEmail).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -86,7 +179,13 @@ func (s *BotAuthService) RegisterBot(ctx context.Context, req *RegisterBotReques
 		return nil, status.Errorf(codes.Internal, "failed to hash secret: %v", err)
 	}
 
-	// Create bot
+	// Create bot. Default empty metadata to "{}" so the JSON column constraint
+	// is always satisfied — RegisterBot used to crash with a CONSTRAINT error
+	// when the caller didn't supply any metadata.
+	metadata := strings.TrimSpace(req.Metadata)
+	if metadata == "" {
+		metadata = "{}"
+	}
 	bot := &model.Bot{
 		ID:          botID,
 		Name:        req.Name,
@@ -97,7 +196,7 @@ func (s *BotAuthService) RegisterBot(ctx context.Context, req *RegisterBotReques
 		APIKey:      apiKey,
 		APISecret:   string(hashedSecret),
 		Scopes:      s.encodeScopesJSON(req.Scopes),
-		Metadata:    req.Metadata, // Store metadata as-is (should be valid JSON)
+		Metadata:    metadata,
 	}
 
 	if err := s.db.Create(bot).Error; err != nil {
@@ -149,6 +248,11 @@ func (s *BotAuthService) BotLogin(ctx context.Context, req *BotLoginRequest) (*B
 	rateLimitTimeWindow := DefaultRateLimitTimeWindow
 	rateLimitMax := DefaultRateLimitMax
 
+	// Each fresh login starts a brand-new token family. Subsequent rotations
+	// performed by RefreshBotToken stay in the same family so reuse detection
+	// can revoke them all at once.
+	familyID := uuid.New().String()
+
 	botToken := &model.BotToken{
 		BotID:               bot.ID,
 		AccessTokenHash:     accessTokenHash,
@@ -157,7 +261,10 @@ func (s *BotAuthService) BotLogin(ctx context.Context, req *BotLoginRequest) (*B
 		RateLimitTimeWindow: &rateLimitTimeWindow,
 		RateLimitMax:        &rateLimitMax,
 		RequestCount:        0,
+		Metadata:            "{}",
 		ExpiresAt:           time.Now().Add(s.accessTokenDuration),
+		FamilyID:            familyID,
+		Status:              botTokenStatusActive,
 	}
 
 	if err := s.db.Create(botToken).Error; err != nil {
@@ -176,24 +283,74 @@ func (s *BotAuthService) BotLogin(ctx context.Context, req *BotLoginRequest) (*B
 	}, nil
 }
 
-// RefreshBotToken refreshes an access token using a refresh token
+// RefreshBotToken refreshes an access token using a refresh token.
+//
+// V11 hardening — token-family rotation with reuse detection:
+//   - The presented refresh token is hashed and looked up. If no row matches at
+//     all, we return Unauthenticated (the token never existed or its row was
+//     hard-deleted).
+//   - If a row matches but its status is no longer 'active', the token has
+//     already been rotated or revoked. Any subsequent presentation must be
+//     treated as a reuse attack: we revoke every row in the same family and
+//     return Unauthenticated. The rest of the family stops being honored.
+//   - On the happy path, the matching row is marked 'rotated' and a brand-new
+//     row is inserted in the same family with status 'active' and freshly
+//     generated access/refresh hashes. The plaintext tokens are returned to
+//     the caller; old tokens are no longer valid.
 func (s *BotAuthService) RefreshBotToken(ctx context.Context, req *RefreshBotTokenRequest) (*RefreshBotTokenResponse, error) {
 	if req.RefreshToken == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "refresh token is required")
 	}
 
-	// Hash the refresh token to look up in database
 	refreshTokenHash := hashToken(req.RefreshToken)
 
-	// Find token record
+	// Find the row that minted this refresh token. We deliberately do NOT
+	// filter on revoked_at IS NULL or status='active' here — we need to *see*
+	// non-active rows so reuse detection can fire.
 	var botToken model.BotToken
-	if err := s.db.Preload("Bot").Where("refresh_token_hash = ? AND revoked_at IS NULL", refreshTokenHash).First(&botToken).Error; err != nil {
+	if err := s.db.Preload("Bot").Where("refresh_token_hash = ?", refreshTokenHash).First(&botToken).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Potential refresh token reuse attack detected
-			// In production, you may want to revoke all tokens for this bot
 			return nil, status.Errorf(codes.Unauthenticated, "invalid refresh token")
 		}
 		return nil, status.Errorf(codes.Internal, "failed to find token: %v", err)
+	}
+
+	// Reuse detection: any presentation of a non-active row's refresh token is
+	// a security violation. Revoke the whole family.
+	if botToken.Status != botTokenStatusActive {
+		now := time.Now()
+		log.Printf("[security] bot token reuse detected family=%s bot=%s row_id=%d row_status=%s", botToken.FamilyID, botToken.BotID, botToken.ID, botToken.Status)
+
+		// Snapshot every row in the family BEFORE we update them so we can
+		// invalidate each row's cache entry — including the still-active row,
+		// whose plaintext access token is in the attacker's hands. Without
+		// this step ValidateBotToken would keep honoring that access token
+		// from the cache fast path until natural TTL.
+		var familyRows []model.BotToken
+		if err := s.db.Where("family_id = ?", botToken.FamilyID).Find(&familyRows).Error; err != nil {
+			log.Printf("[security] failed to enumerate bot token family %s for cache invalidation: %v", botToken.FamilyID, err)
+			// Continue: DB-side revocation below is still the source of truth
+			// on cache miss; we just lose the fast-path cache invalidation.
+		}
+
+		// Best-effort revoke; even if this errors we still refuse the caller.
+		if err := s.db.Model(&model.BotToken{}).
+			Where("family_id = ?", botToken.FamilyID).
+			Updates(map[string]any{
+				"status":         botTokenStatusRevoked,
+				"revoked_at":     now,
+				"revoked_reason": botTokenRevokeReasonReuse,
+			}).Error; err != nil {
+			log.Printf("[security] failed to revoke bot token family %s after reuse detection: %v", botToken.FamilyID, err)
+		}
+
+		// Invalidate the cache for every member of the now-revoked family,
+		// not just the row whose refresh token tripped the detection. Each
+		// call is fire-and-forget but logs on error so an operator can spot
+		// cache outages during a security event.
+		s.invalidateAccessTokenCache(familyRows)
+
+		return nil, status.Errorf(codes.Unauthenticated, "invalid refresh token")
 	}
 
 	// Check bot status
@@ -204,26 +361,60 @@ func (s *BotAuthService) RefreshBotToken(ctx context.Context, req *RefreshBotTok
 	// Generate new tokens (token rotation for security)
 	newAccessToken := s.generateToken()
 	newRefreshToken := s.generateToken()
-
-	// Hash new tokens
 	newAccessTokenHash := hashToken(newAccessToken)
 	newRefreshTokenHash := hashToken(newRefreshToken)
 
-	// Update token record with new hashes
-	botToken.AccessTokenHash = newAccessTokenHash
-	botToken.RefreshTokenHash = newRefreshTokenHash
-	botToken.ExpiresAt = time.Now().Add(s.accessTokenDuration)
+	now := time.Now()
+	newExpiresAt := now.Add(s.accessTokenDuration)
+	rateLimitTimeWindow := DefaultRateLimitTimeWindow
+	rateLimitMax := DefaultRateLimitMax
 
-	if err := s.db.Save(&botToken).Error; err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update token: %v", err)
+	// Atomically mark the current row 'rotated' and insert the successor.
+	// If anything in the transaction fails, both sides revert and the caller's
+	// existing tokens stay valid.
+	newRow := model.BotToken{
+		BotID:               botToken.BotID,
+		AccessTokenHash:     newAccessTokenHash,
+		RefreshTokenHash:    newRefreshTokenHash,
+		RateLimitEnabled:    true,
+		RateLimitTimeWindow: &rateLimitTimeWindow,
+		RateLimitMax:        &rateLimitMax,
+		RequestCount:        0,
+		Metadata:            "{}",
+		ExpiresAt:           newExpiresAt,
+		FamilyID:            botToken.FamilyID,
+		Status:              botTokenStatusActive,
 	}
 
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Concurrency guard: only flip the row if it is still 'active'. If a
+		// concurrent reuse detection beat us to it, RowsAffected will be 0
+		// and we abort the rotation.
+		res := tx.Model(&model.BotToken{}).
+			Where("id = ? AND status = ?", botToken.ID, botTokenStatusActive).
+			Updates(map[string]any{"status": botTokenStatusRotated})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errors.New("token row no longer active")
+		}
+		return tx.Create(&newRow).Error
+	}); err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "invalid refresh token")
+	}
+
+	// Best-effort cache invalidation of the previous access token hash so a
+	// cached validation can't outlive its rotation. Errors are logged inside
+	// the helper.
+	s.invalidateAccessTokenCache([]model.BotToken{botToken})
+
 	// Update last active time
-	s.db.Model(&botToken.Bot).Update("last_active_at", time.Now())
+	s.db.Model(&botToken.Bot).Update("last_active_at", now)
 
 	return &RefreshBotTokenResponse{
-		AccessToken:  newAccessToken,  // Return plaintext token to client
-		RefreshToken: newRefreshToken, // Return plaintext token to client
+		AccessToken:  newAccessToken,
+		RefreshToken: newRefreshToken,
 		ExpiresIn:    int64(s.accessTokenDuration.Seconds()),
 		TokenType:    "Bearer",
 	}, nil
@@ -331,9 +522,12 @@ func (s *BotAuthService) ValidateBotToken(ctx context.Context, req *ValidateBotT
 		}
 	}
 
-	// Cache miss - fall back to database lookup
+	// Cache miss - fall back to database lookup. We only honor rows whose
+	// lifecycle status is still 'active' so that rotated/revoked rows can
+	// never be replayed even if their original expires_at is still in the
+	// future.
 	var botToken model.BotToken
-	if err := s.db.Preload("Bot").Where("access_token_hash = ? AND revoked_at IS NULL", accessTokenHash).First(&botToken).Error; err != nil {
+	if err := s.db.Preload("Bot").Where("access_token_hash = ? AND revoked_at IS NULL AND status = ?", accessTokenHash, botTokenStatusActive).First(&botToken).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return &ValidateBotTokenResponse{Valid: false}, nil
 		}
@@ -458,11 +652,7 @@ func (s *BotAuthService) RevokeBotToken(ctx context.Context, req *RevokeBotToken
 	// Get token to find expiry time for cache TTL
 	var botToken model.BotToken
 	if err := s.db.Where("access_token_hash = ? AND revoked_at IS NULL", accessTokenHash).First(&botToken).Error; err == nil {
-		// Mark as revoked in cache
-		if s.cache != nil {
-			go s.cache.MarkRevoked(context.Background(), accessTokenHash, botToken.ExpiresAt)
-			go s.cache.Delete(context.Background(), accessTokenHash)
-		}
+		s.invalidateAccessTokenCache([]model.BotToken{botToken})
 	}
 
 	// Find and revoke token in database
@@ -507,6 +697,43 @@ func (s *BotAuthService) GetBotInfo(ctx context.Context, req *GetBotInfoRequest)
 }
 
 // Helper functions
+
+// invalidateAccessTokenCache fires best-effort cache invalidations for every
+// row whose access-token hash should no longer be honored — typically the
+// row(s) involved in a rotation or family-wide revocation.
+//
+// It writes to two cache namespaces per row:
+//
+//   - MarkRevoked: adds the hash to a tombstone set so the IsRevoked fast path
+//     in ValidateBotToken short-circuits even if a positive cache entry hasn't
+//     yet been evicted.
+//   - Delete: removes any positive cache entry so a stale Get() can't keep
+//     returning Valid:true until natural TTL.
+//
+// Each invalidation runs in its own goroutine and logs on error rather than
+// silently dropping the failure: during a security-relevant revocation the
+// operator must see whether cache invalidation actually landed.
+func (s *BotAuthService) invalidateAccessTokenCache(rows []model.BotToken) {
+	if s.cache == nil {
+		return
+	}
+	for _, row := range rows {
+		row := row // capture
+		if row.AccessTokenHash == "" {
+			continue
+		}
+		go func() {
+			if err := s.cache.MarkRevoked(context.Background(), row.AccessTokenHash, row.ExpiresAt); err != nil {
+				log.Printf("[security] failed to mark bot token revoked in cache bot=%s row_id=%d: %v", row.BotID, row.ID, err)
+			}
+		}()
+		go func() {
+			if err := s.cache.Delete(context.Background(), row.AccessTokenHash); err != nil {
+				log.Printf("[security] failed to delete bot token cache entry bot=%s row_id=%d: %v", row.BotID, row.ID, err)
+			}
+		}()
+	}
+}
 
 // hashToken creates SHA-256 hash of token for secure database storage
 func hashToken(token string) string {

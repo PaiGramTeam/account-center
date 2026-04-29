@@ -22,6 +22,7 @@ import (
 	"paigram/internal/model"
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
+	"paigram/internal/utils/secsubtle"
 )
 
 var errRefreshTokenRotated = errors.New("refresh token already rotated")
@@ -540,7 +541,7 @@ func (h *Handler) RefreshToken(c *gin.Context) {
 		err = h.db.First(&session, sessionID).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
-		} else if err == nil && session.RefreshTokenHash != refreshTokenHash {
+		} else if err == nil && !secsubtle.StringEqual(session.RefreshTokenHash, refreshTokenHash) {
 			err = h.db.Where("refresh_token_hash = ?", refreshTokenHash).First(&session).Error
 		}
 	} else {
@@ -808,8 +809,10 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 			return fmt.Errorf("no verification token present")
 		}
 
-		// Hash the provided token and compare with stored hash (secure comparison)
-		if hashToken(req.Token) != emailRecord.VerificationToken {
+		// Hash the provided token and compare with stored hash (constant-time
+		// equality — V12/V18: SHA-256 outputs leak nothing useful, but we use
+		// the constant-time helper for consistency with the rest of the codebase).
+		if !secsubtle.StringEqual(hashToken(req.Token), emailRecord.VerificationToken) {
 			return fmt.Errorf("invalid token")
 		}
 

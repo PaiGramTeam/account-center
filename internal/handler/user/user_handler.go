@@ -27,6 +27,7 @@ import (
 	serviceme "paigram/internal/service/me"
 	"paigram/internal/service/user"
 	"paigram/internal/sessioncache"
+	"paigram/internal/utils/secsubtle"
 )
 
 // Handler exposes REST handlers for user resources.
@@ -467,7 +468,7 @@ func (h *Handler) GetUserSessions(c *gin.Context) {
 			CreatedAt:     session.CreatedAt,
 			AccessExpiry:  session.AccessExpiry,
 			RefreshExpiry: session.RefreshExpiry,
-			IsCurrent:     session.AccessTokenHash == currentTokenHash && currentTokenHash != "",
+			IsCurrent:     currentTokenHash != "" && secsubtle.StringEqual(session.AccessTokenHash, currentTokenHash),
 		}
 
 		deviceID := buildDeviceID(session.UserAgent, session.ClientIP)

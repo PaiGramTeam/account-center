@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"paigram/internal/casbin"
@@ -442,14 +443,55 @@ func TestCreateDefaultAdmin_WithoutAdminRole(t *testing.T) {
 }
 
 func TestCreateDefaultAdmin_RequiresExplicitCredentials(t *testing.T) {
+	// When neither ADMIN_EMAIL nor ADMIN_PASSWORD is set, bootstrap should
+	// generate a random password and fall back to the default email instead
+	// of failing — this is the "first run, just works" contract.
 	db := setupTestDB(t)
 
 	require.NoError(t, SeedPermissions(db))
 	require.NoError(t, SeedRoles(db))
 
-	err := CreateDefaultAdmin(db)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "ADMIN_EMAIL and ADMIN_PASSWORD must be set")
+	t.Setenv("ADMIN_EMAIL", "")
+	t.Setenv("ADMIN_PASSWORD", "")
+	t.Setenv("ADMIN_NAME", "")
+
+	require.NoError(t, CreateDefaultAdmin(db))
+
+	var email model.UserEmail
+	require.NoError(t, db.First(&email).Error)
+	assert.Equal(t, defaultAdminEmail, email.Email)
+
+	var credential model.UserCredential
+	require.NoError(t, db.Where("provider = ?", "email").First(&credential).Error)
+	assert.NotEmpty(t, credential.PasswordHash)
+}
+
+func TestCreateDefaultAdmin_GeneratesPasswordWhenOnlyEmailProvided(t *testing.T) {
+	db := setupTestDB(t)
+
+	require.NoError(t, SeedPermissions(db))
+	require.NoError(t, SeedRoles(db))
+
+	t.Setenv("ADMIN_EMAIL", "ops@example.com")
+	t.Setenv("ADMIN_PASSWORD", "")
+
+	// Stub the generator so we can assert the exact value flowed through.
+	original := generateRandomPassword
+	t.Cleanup(func() { generateRandomPassword = original })
+	generateRandomPassword = func() (string, error) { return "stub-generated-secret", nil }
+
+	require.NoError(t, CreateDefaultAdmin(db))
+
+	var email model.UserEmail
+	require.NoError(t, db.First(&email).Error)
+	assert.Equal(t, "ops@example.com", email.Email)
+
+	var credential model.UserCredential
+	require.NoError(t, db.Where("provider = ?", "email").First(&credential).Error)
+	require.NoError(t, bcrypt.CompareHashAndPassword(
+		[]byte(credential.PasswordHash),
+		[]byte("stub-generated-secret"),
+	))
 }
 
 func TestCreateDefaultAdmin_CreatesReplacementWhenExistingAdminAssignmentIsInactive(t *testing.T) {

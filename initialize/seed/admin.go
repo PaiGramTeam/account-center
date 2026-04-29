@@ -1,11 +1,14 @@
 package seed
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -14,6 +17,13 @@ import (
 	"paigram/internal/model"
 )
 
+// defaultAdminEmail is used when ADMIN_EMAIL is not provided.
+const defaultAdminEmail = "admin@paigram.local"
+
+// generatedPasswordBytes controls the entropy of auto-generated admin passwords.
+// 24 random bytes => 32-character URL-safe base64 string.
+const generatedPasswordBytes = 24
+
 // AdminConfig holds configuration for creating the default admin user.
 type AdminConfig struct {
 	Email       string
@@ -21,8 +31,80 @@ type AdminConfig struct {
 	DisplayName string
 }
 
+// generateRandomPassword returns a cryptographically random URL-safe password.
+// Exposed as a variable so tests can stub deterministic values if needed.
+var generateRandomPassword = func() (string, error) {
+	buf := make([]byte, generatedPasswordBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
+	}
+	// URL-safe, no padding so the secret can be copy-pasted easily.
+	return strings.TrimRight(base64.URLEncoding.EncodeToString(buf), "="), nil
+}
+
+// resolveAdminConfig builds the admin config, generating the email and/or
+// password when either is missing from the environment. Generated credentials
+// are returned in `generated` so the caller can decide how to surface them.
+type generatedFlags struct {
+	email    bool
+	password bool
+}
+
+func resolveAdminConfig() (AdminConfig, generatedFlags, error) {
+	var flags generatedFlags
+
+	email := os.Getenv("ADMIN_EMAIL")
+	if email == "" {
+		email = defaultAdminEmail
+		flags.email = true
+	}
+
+	password := os.Getenv("ADMIN_PASSWORD")
+	if password == "" {
+		generated, err := generateRandomPassword()
+		if err != nil {
+			return AdminConfig{}, flags, fmt.Errorf("generate admin password: %w", err)
+		}
+		password = generated
+		flags.password = true
+	}
+
+	cfg := AdminConfig{
+		Email:       email,
+		Password:    password,
+		DisplayName: getEnvOrDefault("ADMIN_NAME", "Administrator"),
+	}
+	return cfg, flags, nil
+}
+
+// announceGeneratedCredentials prints a clearly formatted, single-shot banner
+// to stdout when the bootstrap step had to invent credentials. The plaintext
+// password is printed exactly once because it is not recoverable afterward.
+func announceGeneratedCredentials(cfg AdminConfig, flags generatedFlags) {
+	if !flags.email && !flags.password {
+		return
+	}
+
+	log.Println("================================================================")
+	log.Println("  Default admin user has been bootstrapped.")
+	if flags.email {
+		log.Printf("  Email    (auto-generated): %s", cfg.Email)
+	} else {
+		log.Printf("  Email    (from ADMIN_EMAIL): %s", cfg.Email)
+	}
+	if flags.password {
+		log.Printf("  Password (auto-generated): %s", cfg.Password)
+		log.Println("  This password will NOT be shown again. Save it now and")
+		log.Println("  rotate it via the admin UI as soon as possible.")
+	}
+	log.Println("================================================================")
+}
+
 // CreateDefaultAdmin creates a default admin user if it doesn't exist.
-// It reads admin credentials from environment variables or uses provided config.
+// It reads admin credentials from environment variables when available; any
+// missing value (email and/or password) is filled in with a safe default or a
+// freshly generated random secret, and the resulting credentials are logged
+// once so an operator can capture them on first boot.
 func CreateDefaultAdmin(db *gorm.DB) error {
 	// Check if admin user already exists
 	var adminRole model.Role
@@ -47,22 +129,19 @@ func CreateDefaultAdmin(db *gorm.DB) error {
 		return nil
 	}
 
-	adminEmail := os.Getenv("ADMIN_EMAIL")
-	adminPassword := os.Getenv("ADMIN_PASSWORD")
-	if adminEmail == "" || adminPassword == "" {
-		return fmt.Errorf("ADMIN_EMAIL and ADMIN_PASSWORD must be set to create the default admin")
+	cfg, flags, err := resolveAdminConfig()
+	if err != nil {
+		return err
 	}
 
-	// Get admin credentials from environment
-	config := AdminConfig{
-		Email:       adminEmail,
-		Password:    adminPassword,
-		DisplayName: getEnvOrDefault("ADMIN_NAME", "Administrator"),
+	log.Printf("Creating default admin user with email: %s", cfg.Email)
+
+	if err := createAdminUser(db, cfg, adminRole.ID); err != nil {
+		return err
 	}
 
-	log.Printf("Creating default admin user with email: %s", config.Email)
-
-	return createAdminUser(db, config, adminRole.ID)
+	announceGeneratedCredentials(cfg, flags)
+	return nil
 }
 
 // createAdminUser creates an admin user with the given configuration.

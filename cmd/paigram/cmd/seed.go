@@ -98,10 +98,10 @@ func runAllSeeds(cmd *cobra.Command) {
 			fmt.Printf("Error creating default admin: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("✓ Default admin created successfully")
-		fmt.Println("Email: admin@paigram.local")
-		fmt.Println("Password: admin123456")
-		fmt.Println("\n⚠️  Please change the default password immediately!")
+		fmt.Println("✓ Default admin processed successfully")
+		fmt.Println("If credentials were auto-generated, they were printed in the")
+		fmt.Println("log output above. Capture them now — the password is not")
+		fmt.Println("recoverable later.")
 	}
 
 	fmt.Println("\n✅ All seed operations completed successfully!")
@@ -161,17 +161,22 @@ func seedAdminBootstrap(db *gorm.DB) error {
 }
 
 func printAdminCredentials() {
-	config := seed.AdminConfig{
-		Email:       getEnvOrDefault("ADMIN_EMAIL", "admin@paigram.local"),
-		Password:    getEnvOrDefault("ADMIN_PASSWORD", "admin123456"),
-		DisplayName: getEnvOrDefault("ADMIN_NAME", "Administrator"),
-	}
+	email := os.Getenv("ADMIN_EMAIL")
+	password := os.Getenv("ADMIN_PASSWORD")
 
 	fmt.Println("Admin credentials:")
-	fmt.Printf("- Email: %s\n", config.Email)
-	fmt.Printf("- Password: %s\n", config.Password)
+	if email != "" {
+		fmt.Printf("- Email: %s\n", email)
+	} else {
+		fmt.Println("- Email: (auto-generated, see log output above)")
+	}
+	if password != "" {
+		fmt.Printf("- Password: %s\n", password)
+	} else {
+		fmt.Println("- Password: (auto-generated, see log output above — not recoverable)")
+	}
 	fmt.Println()
-	fmt.Println("⚠️  Please change the default password immediately!")
+	fmt.Println("⚠️  If you used the default password, please change it immediately!")
 }
 
 func getEnvOrDefault(key, defaultValue string) string {

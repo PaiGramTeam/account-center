@@ -16,6 +16,8 @@ type UpdateBindingInput struct {
 	PlatformServiceKey *string
 }
 
+var ErrInvalidBindingMutation = errors.New("invalid platform binding mutation")
+
 type BindingService struct {
 	db *gorm.DB
 }
@@ -65,6 +67,10 @@ func (s *BindingService) UpdateBinding(bindingID uint64, input UpdateBindingInpu
 }
 
 func (s *BindingService) UpdateBindingForOwner(ownerUserID, bindingID uint64, input UpdateBindingInput) (*model.PlatformAccountBinding, error) {
+	if input.PlatformServiceKey != nil {
+		return nil, ErrInvalidBindingMutation
+	}
+
 	binding, err := s.GetBindingForOwner(ownerUserID, bindingID)
 	if err != nil {
 		return nil, err

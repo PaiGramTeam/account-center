@@ -30,9 +30,9 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type BotAccessServiceClient interface {
 	ResolveBotUser(ctx context.Context, in *ResolveBotUserRequest, opts ...grpc.CallOption) (*ResolveBotUserResponse, error)
-	// Legacy migration-only endpoint for importing platform bindings from bot services.
-	// New callers must use account-center binding/grant APIs instead. This RPC may
-	// create a legacy migration ConsumerGrant for the caller bot and is capability-gated.
+	// UpsertPlatformBinding is a legacy migration-only RPC.
+	// Normal bot runtime must use ResolveBotUser, ListAccessibleBindings,
+	// and IssueServiceTicket instead of creating or updating bindings.
 	UpsertPlatformBinding(ctx context.Context, in *UpsertPlatformBindingRequest, opts ...grpc.CallOption) (*UpsertPlatformBindingResponse, error)
 	ListAccessibleBindings(ctx context.Context, in *ListAccessibleBindingsRequest, opts ...grpc.CallOption) (*ListAccessibleBindingsResponse, error)
 	IssueServiceTicket(ctx context.Context, in *IssueServiceTicketRequest, opts ...grpc.CallOption) (*IssueServiceTicketResponse, error)
@@ -91,9 +91,9 @@ func (c *botAccessServiceClient) IssueServiceTicket(ctx context.Context, in *Iss
 // for forward compatibility.
 type BotAccessServiceServer interface {
 	ResolveBotUser(context.Context, *ResolveBotUserRequest) (*ResolveBotUserResponse, error)
-	// Legacy migration-only endpoint for importing platform bindings from bot services.
-	// New callers must use account-center binding/grant APIs instead. This RPC may
-	// create a legacy migration ConsumerGrant for the caller bot and is capability-gated.
+	// UpsertPlatformBinding is a legacy migration-only RPC.
+	// Normal bot runtime must use ResolveBotUser, ListAccessibleBindings,
+	// and IssueServiceTicket instead of creating or updating bindings.
 	UpsertPlatformBinding(context.Context, *UpsertPlatformBindingRequest) (*UpsertPlatformBindingResponse, error)
 	ListAccessibleBindings(context.Context, *ListAccessibleBindingsRequest) (*ListAccessibleBindingsResponse, error)
 	IssueServiceTicket(context.Context, *IssueServiceTicketRequest) (*IssueServiceTicketResponse, error)

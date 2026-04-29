@@ -251,12 +251,33 @@ func TestBindingServiceUpdatesOwnerEditableFields(t *testing.T) {
 	require.NoError(t, err)
 
 	updated, err := service.UpdateBindingForOwner(owner.ID, binding.ID, UpdateBindingInput{
-		DisplayName:        ptrString("New Name"),
-		PlatformServiceKey: ptrString("mihomo-new"),
+		DisplayName: ptrString("New Name"),
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "New Name", updated.DisplayName)
-	assert.Equal(t, "mihomo-new", updated.PlatformServiceKey)
+	assert.Equal(t, "mihomo-old", updated.PlatformServiceKey)
+}
+
+func TestUpdateBindingForOwnerRejectsPlatformServiceKey(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewBindingService(db)
+	binding := model.PlatformAccountBinding{
+		OwnerUserID:        1001,
+		Platform:           "mihomo",
+		ExternalAccountKey: sql.NullString{String: "mihomo:10001", Valid: true},
+		PlatformServiceKey: "mihomo-cn",
+		DisplayName:        "Main account",
+		Status:             model.PlatformAccountBindingStatusActive,
+	}
+	require.NoError(t, db.Create(&binding).Error)
+
+	newServiceKey := "mihomo-overseas"
+	_, err := service.UpdateBindingForOwner(1001, binding.ID, UpdateBindingInput{PlatformServiceKey: &newServiceKey})
+
+	require.ErrorIs(t, err, ErrInvalidBindingMutation)
+	var stored model.PlatformAccountBinding
+	require.NoError(t, db.First(&stored, binding.ID).Error)
+	assert.Equal(t, "mihomo-cn", stored.PlatformServiceKey)
 }
 
 func TestListBindingsPaginatesAdminAndOwnerCollections(t *testing.T) {

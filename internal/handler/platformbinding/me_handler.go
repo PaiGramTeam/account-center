@@ -71,8 +71,8 @@ type PutConsumerGrantRequest struct {
 }
 
 type PatchBindingRequest struct {
-	DisplayName        *string `json:"display_name"`
-	PlatformServiceKey *string `json:"platform_service_key"`
+	DisplayName        *string         `json:"display_name"`
+	PlatformServiceKey json.RawMessage `json:"platform_service_key"`
 }
 
 type PatchPrimaryProfileRequest struct {
@@ -196,6 +196,10 @@ func (h *MeHandler) PatchBinding(c *gin.Context) {
 		response.BadRequest(c, "invalid request payload")
 		return
 	}
+	if req.PlatformServiceKey != nil {
+		response.BadRequest(c, "platform_service_key cannot be updated from this endpoint")
+		return
+	}
 	if req.DisplayName != nil {
 		value := strings.TrimSpace(*req.DisplayName)
 		if value == "" {
@@ -204,18 +208,8 @@ func (h *MeHandler) PatchBinding(c *gin.Context) {
 		}
 		req.DisplayName = &value
 	}
-	if req.PlatformServiceKey != nil {
-		value := strings.TrimSpace(*req.PlatformServiceKey)
-		if value == "" {
-			response.BadRequest(c, "platform_service_key is required")
-			return
-		}
-		req.PlatformServiceKey = &value
-	}
-
 	binding, err := h.bindingService.UpdateBindingForOwner(userID, bindingID, serviceplatformbinding.UpdateBindingInput{
-		DisplayName:        req.DisplayName,
-		PlatformServiceKey: req.PlatformServiceKey,
+		DisplayName: req.DisplayName,
 	})
 	if err != nil {
 		writeBindingError(c, err, "failed to update platform binding")
@@ -593,6 +587,8 @@ func writeBindingError(c *gin.Context, err error, fallback string) {
 		response.ErrorWithCode(c, http.StatusUnprocessableEntity, pkgerrors.ErrorCodePlatformCredentialValidationFailed, "platform credential validation failed", nil)
 	case errors.Is(err, serviceplatformbinding.ErrConsumerNotSupported):
 		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "consumer is not supported", nil)
+	case errors.Is(err, serviceplatformbinding.ErrInvalidBindingMutation):
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid platform binding mutation", nil)
 	case errors.Is(err, serviceplatformbinding.ErrBindingRuntimeSummaryNotReady):
 		response.Conflict(c, "platform binding runtime summary is not ready")
 	case errors.Is(err, serviceplatformbinding.ErrPrimaryProfileNotOwned):

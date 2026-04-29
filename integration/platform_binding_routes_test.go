@@ -211,17 +211,26 @@ func TestPlatformBindingRoutes(t *testing.T) {
 		getData := decodeResponseData(t, getResp)
 		assert.Equal(t, binding.DisplayName, getData["display_name"])
 
-		patchResp := performJSONRequest(t, stack.Router, http.MethodPatch, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), map[string]any{
+		forbiddenPatchResp := performJSONRequest(t, stack.Router, http.MethodPatch, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), map[string]any{
 			"display_name":         "Owner Main Updated",
 			"platform_service_key": "platform-mihomo-service-v2",
+		}, authHeaders(ownerAccessToken))
+		require.Equal(t, http.StatusBadRequest, forbiddenPatchResp.Code, forbiddenPatchResp.Body.String())
+		var storedBinding model.PlatformAccountBinding
+		require.NoError(t, stack.DB.First(&storedBinding, binding.ID).Error)
+		assert.Equal(t, "Owner Main", storedBinding.DisplayName)
+		assert.Equal(t, "platform-mihomo-service", storedBinding.PlatformServiceKey)
+
+		patchResp := performJSONRequest(t, stack.Router, http.MethodPatch, fmt.Sprintf("/api/v1/me/platform-accounts/%d", binding.ID), map[string]any{
+			"display_name": "Owner Main Updated",
 		}, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusOK, patchResp.Code, patchResp.Body.String())
 		patchData := decodeResponseData(t, patchResp)
 		assert.Equal(t, "Owner Main Updated", patchData["display_name"])
-		assert.Equal(t, "platform-mihomo-service-v2", patchData["platform_service_key"])
-		require.NoError(t, stack.DB.Model(&model.PlatformService{}).
-			Where("platform_key = ?", "mihomo").
-			Updates(map[string]any{"service_key": "platform-mihomo-service-v2", "service_audience": "platform-mihomo-service-v2"}).Error)
+		assert.Equal(t, "platform-mihomo-service", patchData["platform_service_key"])
+		require.NoError(t, stack.DB.First(&storedBinding, binding.ID).Error)
+		assert.Equal(t, "Owner Main Updated", storedBinding.DisplayName)
+		assert.Equal(t, "platform-mihomo-service", storedBinding.PlatformServiceKey)
 
 		profilesResp := performJSONRequest(t, stack.Router, http.MethodGet, fmt.Sprintf("/api/v1/me/platform-accounts/%d/profiles", binding.ID), nil, authHeaders(ownerAccessToken))
 		require.Equal(t, http.StatusOK, profilesResp.Code, profilesResp.Body.String())

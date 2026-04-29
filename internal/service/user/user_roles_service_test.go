@@ -56,6 +56,28 @@ func TestUserServiceReplaceUserRolesRejectsPrimaryRoleOutsideAssignments(t *test
 	require.ErrorIs(t, err, ErrPrimaryRoleNotAssigned)
 }
 
+func TestUserServiceReplaceUserRolesClearsRemovedPrimaryRole(t *testing.T) {
+	db := setupUserRoleServiceTestDB(t)
+	service := &UserService{db: db}
+	user := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
+	roleA := model.Role{Name: "role-a", DisplayName: "Role A"}
+	roleB := model.Role{Name: "role-b", DisplayName: "Role B"}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&roleA).Error)
+	require.NoError(t, db.Create(&roleB).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: roleA.ID, GrantedBy: user.ID}).Error)
+	require.NoError(t, db.Create(&model.UserRole{UserID: user.ID, RoleID: roleB.ID, GrantedBy: user.ID}).Error)
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.ID).Update("primary_role_id", roleB.ID).Error)
+
+	updated, err := service.ReplaceUserRoles(user.ID, []uint64{roleA.ID}, nil, user.ID)
+	require.NoError(t, err)
+	assert.False(t, updated.PrimaryRoleID.Valid)
+
+	var persisted model.User
+	require.NoError(t, db.First(&persisted, user.ID).Error)
+	assert.False(t, persisted.PrimaryRoleID.Valid)
+}
+
 func TestUserServiceSetPrimaryRoleRequiresExistingAssignment(t *testing.T) {
 	db := setupUserRoleServiceTestDB(t)
 	service := &UserService{db: db}

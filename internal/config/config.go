@@ -213,12 +213,23 @@ type EmailConfig struct {
 
 // SecurityConfig holds security-related configuration.
 type SecurityConfig struct {
-	SuspiciousLoginDetection  bool          `mapstructure:"suspicious_login_detection"`   // Enable suspicious login detection
-	SuspiciousLoginEmailAlert bool          `mapstructure:"suspicious_login_email_alert"` // Send email alerts for suspicious logins
-	SecuritySettingsURL       string        `mapstructure:"security_settings_url"`        // URL to account security settings page
-	BcryptCost                int           `mapstructure:"bcrypt_cost"`                  // Bcrypt hashing cost (default: 12, min: 10, max: 31)
-	RequireRedisFor2FA        bool          `mapstructure:"require_redis_for_2fa"`        // V22: when true, 2FA rate limiting fails closed if Redis is unavailable
-	TwoFAFailClosedTTL        time.Duration `mapstructure:"twofa_fail_closed_ttl"`        // V22: lock duration applied when failing closed; defaults to 1m
+	SuspiciousLoginDetection  bool                  `mapstructure:"suspicious_login_detection"`   // Enable suspicious login detection
+	SuspiciousLoginEmailAlert bool                  `mapstructure:"suspicious_login_email_alert"` // Send email alerts for suspicious logins
+	SecuritySettingsURL       string                `mapstructure:"security_settings_url"`        // URL to account security settings page
+	BcryptCost                int                   `mapstructure:"bcrypt_cost"`                  // Bcrypt hashing cost (default: 12, min: 10, max: 31)
+	RequireRedisFor2FA        bool                  `mapstructure:"require_redis_for_2fa"`        // V22: when true, 2FA rate limiting fails closed if Redis is unavailable
+	TwoFAFailClosedTTL        time.Duration         `mapstructure:"twofa_fail_closed_ttl"`        // V22: lock duration applied when failing closed; defaults to 1m
+	SecurityHeaders           SecurityHeadersConfig `mapstructure:"security_headers"`             // V10: HTTP response security headers
+}
+
+// SecurityHeadersConfig configures HTTP response security headers
+// applied by the middleware in internal/middleware/security_headers.go
+// (see V10).
+type SecurityHeadersConfig struct {
+	HSTSMaxAgeSeconds int    `mapstructure:"hsts_max_age_seconds"` // default 31536000 (1 year)
+	HSTSIncludeSub    bool   `mapstructure:"hsts_include_sub"`     // default false; turning on is irrecoverable for the parent domain
+	CSP               string `mapstructure:"csp"`                  // default "default-src 'self'"
+	AssumeHTTPS       bool   `mapstructure:"assume_https"`         // default false; opt in ONLY when behind an HTTPS-terminating proxy. Header `X-Forwarded-Proto` is NOT honored because it is forgeable.
 }
 
 // SentryConfig holds Sentry error reporting configuration.
@@ -379,13 +390,13 @@ func Reset() {
 }
 
 func setDefaults(v *viper.Viper) {
-	// App defaults
-	v.SetDefault("app.trusted_proxies", []string{
-		"127.0.0.1",      // localhost
-		"10.0.0.0/8",     // private network
-		"172.16.0.0/12",  // Docker default network
-		"192.168.0.0/16", // private network
-	})
+	// App defaults.
+	// V21: trusted_proxies defaults to empty. Operators behind a reverse
+	// proxy (k8s ingress, nginx, Cloudflare, etc.) MUST set this to the
+	// proxy's real IP/CIDR. The previous default trusted all RFC1918
+	// space, which let any host inside those CIDRs spoof X-Forwarded-For
+	// and bypass IP-based rate limiting via c.ClientIP().
+	v.SetDefault("app.trusted_proxies", []string{})
 	v.SetDefault("app.real_ip_header", "") // Empty means use X-Forwarded-For via TrustedProxies
 	v.SetDefault("app.ipv6_subnet", 64)    // /64 subnet (typical home/business allocation)
 	v.SetDefault("app.cors.enabled", false)
@@ -472,6 +483,16 @@ func setDefaults(v *viper.Viper) {
 	// without Redis can opt out by setting require_redis_for_2fa: false.
 	v.SetDefault("security.require_redis_for_2fa", true)
 	v.SetDefault("security.twofa_fail_closed_ttl", "1m")
+	// V10: response security headers. HSTS subdomain inclusion stays off
+	// by default — turning it on is irrecoverable for the parent domain
+	// for the duration of max-age. assume_https is also off by default;
+	// X-Forwarded-Proto is intentionally NOT honored (it is forgeable
+	// when no proxy filter is in place), so operators behind an
+	// HTTPS-terminating proxy must opt in explicitly.
+	v.SetDefault("security.security_headers.hsts_max_age_seconds", 31536000)
+	v.SetDefault("security.security_headers.hsts_include_sub", false)
+	v.SetDefault("security.security_headers.csp", "default-src 'self'")
+	v.SetDefault("security.security_headers.assume_https", false)
 
 	v.SetDefault("sentry.enabled", false)
 	v.SetDefault("sentry.dsn", "")

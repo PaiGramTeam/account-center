@@ -258,10 +258,7 @@ func runServer() {
 		fatalStartup(cfg.Sentry, "http router initialization failed: %v", err)
 	}
 	addr := fmt.Sprintf("%s:%d", cfg.App.Host, cfg.App.Port)
-	httpServer = &http.Server{
-		Addr:    addr,
-		Handler: engine,
-	}
+	httpServer = buildHTTPServer(addr, engine)
 
 	wg.Add(1)
 	go func() {
@@ -281,6 +278,25 @@ func runServer() {
 
 	shutdown()
 	wg.Wait()
+}
+
+// buildHTTPServer constructs the production HTTP server with
+// Slowloris-resistant timeouts and a bounded header size.
+//
+// V16: previously the server used Go's zero-value timeouts, which
+// disable timeouts entirely. A slow-reader can hold a connection open
+// indefinitely and exhaust the listener. The values below are
+// conservative defaults; expose them via config later if needed.
+func buildHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB
+	}
 }
 
 // getDB helper function to get database connection for CLI commands

@@ -319,6 +319,40 @@ func TestWriteBindingErrorReturnsCodedCredentialValidationFailure(t *testing.T) 
 	assert.Equal(t, "platform credential validation failed", errorData["message"])
 }
 
+func TestWriteBindingErrorReturnsBadRequestForInvalidMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+
+	writeBindingError(c, serviceplatformbinding.ErrInvalidBindingMutation, "fallback")
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	errorData, ok := payload["error"].(map[string]any)
+	require.True(t, ok, "expected error map in response, got %T", payload["error"])
+	assert.Equal(t, response.ErrCodeInvalidInput, errorData["code"])
+	assert.Equal(t, "invalid platform binding mutation", errorData["message"])
+}
+
+func TestMePatchBindingRejectsPlatformServiceKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewMeHandler(mutationBindingStub{}, &mutationProfileStub{}, &mutationGrantStub{}, &mutationOrchestrationStub{}, mutationRuntimeSummaryStub{})
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Params = []gin.Param{{Key: "bindingId", Value: "101"}}
+	c.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/me/platform-accounts/101", bytes.NewBufferString(`{"display_name":"Owner Main Updated","platform_service_key":"platform-mihomo-service-v2"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	middleware.SetUserID(c, 7)
+
+	handler.PatchBinding(c)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 func TestMePutConsumerGrantReturnsCodedBadRequestForUnsupportedConsumer(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	grantStub := &mutationGrantStub{upsertForOwnerErr: serviceplatformbinding.ErrConsumerNotSupported}

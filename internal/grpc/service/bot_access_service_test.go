@@ -178,7 +178,7 @@ func TestBotAccessServiceRejectsRevokedConsumerGrantOnTicketIssue(t *testing.T) 
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
-func TestBotAccessServiceRejectsLegacyBindingWriteWithoutCapability(t *testing.T) {
+func TestBotAccessServiceUpsertPlatformBindingDeniedForNormalBot(t *testing.T) {
 	db := testutil.OpenMySQLTestDB(t, "bot_access_grpc_legacy_gate",
 		&model.User{},
 		&model.UserEmail{},
@@ -200,7 +200,7 @@ func TestBotAccessServiceRejectsLegacyBindingWriteWithoutCapability(t *testing.T
 	client := pb.NewBotAccessServiceClient(conn)
 	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+accessToken)
 
-	_, err := client.UpsertPlatformBinding(ctx, &pb.UpsertPlatformBindingRequest{
+	resp, err := client.UpsertPlatformBinding(ctx, &pb.UpsertPlatformBindingRequest{
 		ExternalUserId:     "tg-123",
 		Platform:           "mihomo",
 		PlatformServiceKey: "platform-mihomo-service",
@@ -210,7 +210,9 @@ func TestBotAccessServiceRejectsLegacyBindingWriteWithoutCapability(t *testing.T
 	})
 
 	require.Error(t, err)
+	assert.Nil(t, resp)
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Contains(t, status.Convert(err).Message(), "migration-only")
 
 	var event model.AuditEvent
 	require.NoError(t, db.Where("category = ? AND action = ?", "bot_access", "legacy_binding_write_reject").Order("id DESC").First(&event).Error)

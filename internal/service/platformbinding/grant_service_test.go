@@ -113,6 +113,22 @@ func TestGrantServiceUpsertRejectsUnsupportedConsumer(t *testing.T) {
 	assert.False(t, created)
 }
 
+func TestPutGrantRejectsWebConsumer(t *testing.T) {
+	db := setupPlatformBindingTestDB(t)
+	service := NewGrantService(db)
+	binding := seedGrantServiceBinding(t, db, "cn:grant-web-consumer")
+
+	grant, created, err := service.UpsertGrantForOwner(binding.OwnerUserID, UpsertGrantInput{
+		BindingID: binding.ID,
+		Consumer:  "web",
+		GrantedBy: sql.NullInt64{Int64: int64(binding.OwnerUserID), Valid: true},
+		GrantedAt: time.Now().UTC(),
+	})
+	require.ErrorIs(t, err, ErrConsumerNotSupported)
+	assert.Nil(t, grant)
+	assert.False(t, created)
+}
+
 func TestGrantServiceRevokeGrantIsIdempotentWhenGrantDoesNotExist(t *testing.T) {
 	db := setupPlatformBindingTestDB(t)
 	service := NewGrantService(db)

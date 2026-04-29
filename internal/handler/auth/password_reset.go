@@ -18,6 +18,7 @@ import (
 	"paigram/internal/logging"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	"paigram/internal/sessioncache"
 	piiutil "paigram/internal/utils/pii"
 )
 
@@ -243,7 +244,19 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 		return
 	}
 
-	// Update password and mark token as used in a transaction
+	// Update password and mark token as used in a transaction.
+	//
+	// V15 (commit-boundary nuance): cache writes for session revocation
+	// MUST happen AFTER the transaction commits, not inside the closure.
+	// Otherwise a transient commit failure (deadlock, connection drop)
+	// rolls back the UPDATE but leaves the revocation marker set in
+	// Redis. The middleware fast path at internal/middleware/auth.go:88
+	// short-circuits on marker presence with NO fallback to DB, so a
+	// stray marker locks the user out of the cache fast path until the
+	// marker TTL elapses. We therefore have revokeAllUserSessions return
+	// the snapshot of revoked sessions and write the cache markers only
+	// after Transaction(...) returns nil.
+	var revokedSnapshots []model.UserSession
 	err = h.db.Transaction(func(tx *gorm.DB) error {
 		// Update password
 		if err := tx.Model(&model.UserCredential{}).
@@ -261,14 +274,20 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 			return fmt.Errorf("mark token as used: %w", err)
 		}
 
-		// Revoke all active sessions for security
-		if err := h.revokeAllUserSessions(tx, user.ID); err != nil {
+		// Revoke all active sessions for security. Snapshot the rows we
+		// just revoked so the post-commit step below can write the cache
+		// markers. revokeAllUserSessions does NOT touch the cache itself.
+		snapshots, err := h.revokeAllUserSessions(tx, user.ID)
+		if err != nil {
 			logging.Warn("failed to revoke sessions",
 				zap.Error(err),
 				zap.Uint64("user_id", user.ID),
 			)
-			// Continue anyway
+			// Continue anyway — leave revokedSnapshots nil so we don't
+			// publish stale markers for a half-finished revoke.
+			return nil
 		}
+		revokedSnapshots = snapshots
 
 		return nil
 	})
@@ -281,6 +300,11 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
 		return
 	}
+
+	// Post-commit: publish per-session revocation markers and clear the
+	// current-access-hash markers. See invalidateRevokedSessionsCache for
+	// the honest failure-mode contract.
+	h.invalidateRevokedSessionsCache(context.Background(), revokedSnapshots)
 
 	// Send password changed notification email asynchronously
 	// This prevents response time variations and doesn't block the success response
@@ -342,27 +366,106 @@ func generatePasswordResetToken() (plain, hashed string, err error) {
 
 // hashToken is now defined in helpers.go (SHA-256 implementation)
 
-// revokeAllUserSessions revokes all active sessions for a user
-func (h *Handler) revokeAllUserSessions(tx *gorm.DB, userID uint64) error {
-	// Get all active sessions for the user
+// revokeAllUserSessions revokes all active sessions for a user at the DB
+// layer and returns the snapshot of rows that were just revoked so the
+// caller can publish cache markers AFTER the surrounding transaction
+// commits.
+//
+// V15: a stolen access token used to remain valid until its TTL expired
+// even after a password reset, because the middleware's cache fast path
+// (see internal/middleware/auth.go:88) short-circuits on the per-session
+// revocation marker. Deleting DB rows alone does nothing for cached
+// payloads. The fix is two-step:
+//
+//  1. revokeAllUserSessions runs INSIDE the password-reset transaction:
+//     UPDATE user_sessions SET revoked_at=now, revoked_reason='password_reset'
+//     and DELETE user_devices. It does NOT write to the cache.
+//  2. The caller writes cache markers AFTER Transaction(...) returns nil
+//     via invalidateRevokedSessionsCache. This ordering matters: writing
+//     the marker before the commit risks a stray marker on rollback that
+//     locks the user out of the cache fast path (the middleware does not
+//     fall back to the DB on marker presence — it returns 401 outright),
+//     for up to the marker's TTL. Code-review feedback on the V15 commit.
+//
+// We chose UPDATE-with-revoked_at (option ii) over outright DELETE so the
+// audit trail survives. This mirrors the precedent set by the token-reuse
+// and rapid-refresh handlers in email.go and the "revoke other sessions"
+// path in service/me/security_service.go. UserDevice rows ARE still wiped:
+// losing trusted-device state on a password reset is intentional — it
+// forces a 2FA re-prompt on the next login.
+func (h *Handler) revokeAllUserSessions(tx *gorm.DB, userID uint64) ([]model.UserSession, error) {
+	// Snapshot the active sessions so the caller can drive cache marker
+	// writes after the transaction commits. The snapshot also gives
+	// RevokedSessionMarkerTTL the original RefreshExpiry to size the
+	// marker against — UPDATE doesn't touch that column, but we want the
+	// snapshot decoupled from any later mutation.
 	var sessions []model.UserSession
-	if err := tx.Where("user_id = ?", userID).Find(&sessions).Error; err != nil {
-		return fmt.Errorf("query user sessions: %w", err)
+	if err := tx.Where("user_id = ? AND revoked_at IS NULL", userID).Find(&sessions).Error; err != nil {
+		return nil, fmt.Errorf("query user sessions: %w", err)
 	}
 
-	// Note: We cannot remove tokens from cache here because we don't have the original tokens
-	// The cache entries will naturally expire based on their TTL
-	// The revoked_at flag in the database will prevent any cached tokens from being used
-
-	// Delete all user sessions from database
-	if err := tx.Where("user_id = ?", userID).Delete(&model.UserSession{}).Error; err != nil {
-		return fmt.Errorf("delete user sessions: %w", err)
+	now := time.Now().UTC()
+	if len(sessions) > 0 {
+		if err := tx.Model(&model.UserSession{}).
+			Where("user_id = ? AND revoked_at IS NULL", userID).
+			Updates(map[string]interface{}{
+				"revoked_at":     now,
+				"revoked_reason": "password_reset",
+			}).Error; err != nil {
+			return nil, fmt.Errorf("revoke user sessions: %w", err)
+		}
 	}
 
-	// Delete all user devices
+	// Delete all user devices: trusted-device state is cleared on password
+	// reset by design (forces 2FA re-prompt next login).
 	if err := tx.Where("user_id = ?", userID).Delete(&model.UserDevice{}).Error; err != nil {
-		return fmt.Errorf("delete user devices: %w", err)
+		return nil, fmt.Errorf("delete user devices: %w", err)
 	}
 
-	return nil
+	return sessions, nil
+}
+
+// invalidateRevokedSessionsCache publishes per-session revocation markers
+// and clears the current-access-hash markers for each session in the
+// snapshot. Intended to be called AFTER the password-reset transaction
+// commits; see revokeAllUserSessions for the rationale.
+//
+// Cache marker writes are best-effort and run AFTER the DB commit. If a
+// cache write fails (Redis down, network blip), the DB UPDATE has already
+// committed — the session is durably revoked. The middleware's cache
+// fast path will continue to admit the previously-cached sessionData
+// until that data expires (typically minutes-hours), at which point the
+// DB-fallback path will see revoked_at IS NOT NULL and reject. That is
+// an inherent best-effort property of the cache-revocation design;
+// V15's contract is "DB-correct immediately + cache-best-effort".
+//
+// If you need stronger guarantees (e.g., immediate cache invalidation
+// on Redis recovery), consider writing the marker via a retry loop or
+// a separate compensating job — both are out of scope here.
+func (h *Handler) invalidateRevokedSessionsCache(ctx context.Context, sessions []model.UserSession) {
+	for i := range sessions {
+		s := &sessions[i]
+		if err := h.sessionCache.Set(
+			ctx,
+			sessioncache.RevokedSessionMarkerKey(s.ID),
+			[]byte("1"),
+			sessioncache.RevokedSessionMarkerTTL(s),
+		); err != nil && !errorsIsRedisNil(err) {
+			logging.Warn("failed to write session revocation marker",
+				zap.Error(err),
+				zap.Uint64("user_id", s.UserID),
+				zap.Uint64("session_id", s.ID),
+			)
+		}
+		// Drop the current-access-hash marker so a stale cached
+		// tokenPayload also fails the hash-equality check in the
+		// middleware fast path. Mirrors clearCurrentAccessHashMarker.
+		if err := h.sessionCache.Delete(ctx, sessioncache.CurrentAccessTokenHashKey(s.ID)); err != nil && !errorsIsRedisNil(err) {
+			logging.Warn("failed to clear current access token hash marker",
+				zap.Error(err),
+				zap.Uint64("user_id", s.UserID),
+				zap.Uint64("session_id", s.ID),
+			)
+		}
+	}
 }

@@ -388,21 +388,7 @@ func setupPlatformBindingHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	db := testutil.OpenMySQLTestDB(t, "platformbinding_handler")
-	for _, fileName := range []string{
-		"000001_create_users_table.up.sql",
-		"000011_create_roles_table.up.sql",
-		"000013_create_user_roles_table.up.sql",
-		"000034_add_primary_role_id_to_users.up.sql",
-		"000035_create_platform_account_bindings_table.up.sql",
-		"000036_create_platform_account_profiles_table.up.sql",
-		"000037_create_consumer_grants_table.up.sql",
-		"000038_alter_platform_account_bindings_for_phase_two.up.sql",
-		"000044_add_scopes_json_to_consumer_grants.up.sql",
-		"000045_add_consumer_grant_ticket_versions.up.sql",
-	} {
-		require.NoError(t, db.Exec(readPlatformBindingHandlerMigration(t, fileName)).Error)
-	}
-
+	require.NoError(t, db.Exec(readPlatformBindingHandlerMigration(t, "000001_init_schema.up.sql")).Error)
 	return db
 }
 

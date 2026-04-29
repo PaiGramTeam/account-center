@@ -21,22 +21,7 @@ func setupPlatformBindingTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	db := testutil.OpenMySQLTestDB(t, "platformbinding")
-	for _, fileName := range []string{
-		"000001_create_users_table.up.sql",
-		"000011_create_roles_table.up.sql",
-		"000013_create_user_roles_table.up.sql",
-		"000034_add_primary_role_id_to_users.up.sql",
-		"000035_create_platform_account_bindings_table.up.sql",
-		"000036_create_platform_account_profiles_table.up.sql",
-		"000037_create_consumer_grants_table.up.sql",
-		"000038_alter_platform_account_bindings_for_phase_two.up.sql",
-		"000041_create_audit_events.up.sql",
-		"000044_add_scopes_json_to_consumer_grants.up.sql",
-		"000045_add_consumer_grant_ticket_versions.up.sql",
-	} {
-		require.NoError(t, db.Exec(readPlatformBindingMigration(t, fileName)).Error)
-	}
-
+	require.NoError(t, db.Exec(readPlatformBindingMigration(t, "000001_init_schema.up.sql")).Error)
 	return db
 }
 
@@ -339,46 +324,6 @@ func TestPersistRuntimeSummaryUpdatesResolvedIdentityAndStatus(t *testing.T) {
 	assert.Equal(t, "challenge_required", updated.StatusReasonCode)
 	assert.True(t, updated.LastValidatedAt.Valid)
 	assert.True(t, updated.LastSyncedAt.Valid)
-}
-
-func TestPhaseTwoDownMigrationBackfillsNullExternalAccountKeys(t *testing.T) {
-	db := setupPlatformBindingTestDB(t)
-	owner := model.User{PrimaryLoginType: model.LoginTypeEmail, Status: model.UserStatusActive}
-	require.NoError(t, db.Create(&owner).Error)
-
-	first := model.PlatformAccountBinding{
-		OwnerUserID:        owner.ID,
-		Platform:           "mihomo",
-		ExternalAccountKey: sql.NullString{},
-		PlatformServiceKey: "mihomo",
-		DisplayName:        "Draft A",
-		Status:             model.PlatformAccountBindingStatusPendingBind,
-	}
-	second := model.PlatformAccountBinding{
-		OwnerUserID:        owner.ID,
-		Platform:           "mihomo",
-		ExternalAccountKey: sql.NullString{},
-		PlatformServiceKey: "mihomo",
-		DisplayName:        "Draft B",
-		Status:             model.PlatformAccountBindingStatusPendingBind,
-	}
-	require.NoError(t, db.Create(&first).Error)
-	require.NoError(t, db.Create(&second).Error)
-
-	require.NoError(t, db.Exec(readPlatformBindingMigration(t, "000038_alter_platform_account_bindings_for_phase_two.down.sql")).Error)
-
-	type bindingRow struct {
-		ID                 uint64
-		ExternalAccountKey string
-	}
-	var rows []bindingRow
-	require.NoError(t, db.Raw("SELECT id, external_account_key FROM platform_account_bindings WHERE id IN (?, ?) ORDER BY id ASC", first.ID, second.ID).Scan(&rows).Error)
-	require.Len(t, rows, 2)
-	assert.NotEmpty(t, rows[0].ExternalAccountKey)
-	assert.NotEmpty(t, rows[1].ExternalAccountKey)
-	assert.NotEqual(t, rows[0].ExternalAccountKey, rows[1].ExternalAccountKey)
-	assert.Contains(t, rows[0].ExternalAccountKey, "__draft_rollback__:")
-	assert.Contains(t, rows[1].ExternalAccountKey, "__draft_rollback__:")
 }
 
 func TestUpsertGrantIsIdempotentAndRevokeMarksGrantRevoked(t *testing.T) {

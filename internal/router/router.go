@@ -93,7 +93,7 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	if err := handler.InitializeApiGroups(db, cache, authCfg); err != nil {
 		return nil, fmt.Errorf("initialize api groups: %w", err)
 	}
-	handler.ApiGroupApp.AuthApiGroup = *authhandler.NewApiGroup(db, authCfg, emailService, cfg.Security, cache, geoService)
+	handler.ApiGroupApp.AuthApiGroup = *authhandler.NewApiGroup(db, authCfg, cfg.Frontend, emailService, cfg.Security, cache, geoService)
 
 	// Public routes - no authentication required
 	authHandler := &handler.ApiGroupApp.AuthApiGroup.Handler

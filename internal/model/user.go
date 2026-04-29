@@ -100,6 +100,11 @@ type UserEmail struct {
 }
 
 // UserOAuthState stores temporary OAuth states for CSRF protection.
+//
+// ClientIP and UserAgent bind a state token to the originating client and
+// MUST be checked at consumption time (see V23 hardening). Without these
+// fields a leaked state can be replayed from an unrelated machine to
+// consume the OAuth authorization code.
 type UserOAuthState struct {
 	ID           uint64        `gorm:"primaryKey"`
 	Provider     string        `gorm:"size:64;index"`
@@ -109,8 +114,14 @@ type UserOAuthState struct {
 	RedirectTo   string        `gorm:"size:512"`
 	Nonce        string        `gorm:"size:255"`
 	CodeVerifier string        `gorm:"size:255;index"` // PKCE code verifier
-	ExpiresAt    time.Time     `gorm:"index"`
-	CreatedAt    time.Time
+	// ClientIP is the c.ClientIP() value captured when the state was created.
+	// Strict equality is enforced on consumption — see oauth.go callback.
+	ClientIP string `gorm:"size:64;not null;default:''"`
+	// UserAgent is the User-Agent header captured at state creation, truncated
+	// to the column size. Strict equality is enforced on consumption.
+	UserAgent string    `gorm:"size:255;not null;default:''"`
+	ExpiresAt time.Time `gorm:"index"`
+	CreatedAt time.Time
 }
 
 // UserSession represents an access/refresh token pair for a user.

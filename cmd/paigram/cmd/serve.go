@@ -243,7 +243,7 @@ func runServer() {
 	if cfg.Redis.Enabled {
 		// Create auth handler for worker
 		geoService := geolocation.NewService()
-		authHandler := authhandler.NewHandler(db, cfg.Auth, emailService, cfg.Security, sessionStore, geoService)
+		authHandler := authhandler.NewHandler(db, cfg.Auth, cfg.Frontend, emailService, cfg.Security, sessionStore, geoService)
 
 		asynqServer, asynqScheduler, err = worker.StartAsynqServer(cfg, redisClient, db, authHandler)
 		if err != nil {

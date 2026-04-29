@@ -15,8 +15,8 @@ type ApiGroup struct {
 }
 
 // NewApiGroup creates an auth API group with shared dependencies.
-func NewApiGroup(db *gorm.DB, cfg config.AuthConfig, emailService *email.Service, securityCfg config.SecurityConfig, cache sessioncache.Store, geoService *geolocation.Service) *ApiGroup {
+func NewApiGroup(db *gorm.DB, cfg config.AuthConfig, frontendCfg config.FrontendConfig, emailService *email.Service, securityCfg config.SecurityConfig, cache sessioncache.Store, geoService *geolocation.Service) *ApiGroup {
 	return &ApiGroup{
-		Handler: *NewHandler(db, cfg, emailService, securityCfg, cache, geoService),
+		Handler: *NewHandler(db, cfg, frontendCfg, emailService, securityCfg, cache, geoService),
 	}
 }

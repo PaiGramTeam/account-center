@@ -28,6 +28,19 @@ import (
 	"paigram/internal/service"
 )
 
+// testHTTPRequestClientIP / testHTTPRequestUserAgent are the values we
+// expect c.ClientIP()/c.GetHeader("User-Agent") to return for a request
+// constructed via httptest.NewRequest with no explicit overrides.
+//
+// httptest.NewRequest sets RemoteAddr="192.0.2.1:1234" by default and we
+// don't set a User-Agent header in these tests. State rows seeded for the
+// callback handler MUST carry these same values, otherwise V23's strict
+// IP/UA binding will reject them as tampered.
+const (
+	testHTTPRequestClientIP  = "192.0.2.1"
+	testHTTPRequestUserAgent = ""
+)
+
 func TestStartBindLoginMethodPersistsBindPurposeAndUserID(t *testing.T) {
 	db := setupTestDB(t)
 	ensureUserOAuthStatesTable(t, db)
@@ -89,6 +102,8 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderAlreadyBelongsToAn
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -156,6 +171,8 @@ func TestHandleOAuthCallbackReturnsConflictWhenBindingProviderWouldReplaceExisti
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -199,6 +216,8 @@ func TestHandleOAuthCallbackRequiresAuthenticatedSessionForBindPurpose(t *testin
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -236,6 +255,8 @@ func TestHandleOAuthCallbackRejectsBindPurposeForDifferentAuthenticatedUser(t *t
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -273,6 +294,8 @@ func TestHandleOAuthCallbackDoesNotConsumeStateWhenBindCallbackIsUnauthorized(t 
 		RedirectTo:   "https://app.example.com/settings/login-methods",
 		Nonce:        "expected-nonce",
 		CodeVerifier: "expected-verifier",
+		ClientIP:     testHTTPRequestClientIP,
+		UserAgent:    testHTTPRequestUserAgent,
 		ExpiresAt:    time.Now().UTC().Add(5 * time.Minute),
 	}
 	require.NoError(t, db.Create(&state).Error)
@@ -303,6 +326,8 @@ func ensureUserOAuthStatesTable(t *testing.T, db *gorm.DB) {
 			redirect_to VARCHAR(512) NULL,
 			nonce VARCHAR(255) NULL,
 			code_verifier VARCHAR(255) NULL,
+			client_ip VARCHAR(64) NOT NULL DEFAULT '',
+			user_agent VARCHAR(255) NOT NULL DEFAULT '',
 			expires_at DATETIME(3) NOT NULL,
 			created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 			UNIQUE KEY uniq_state (state),
@@ -536,7 +561,8 @@ func TestVerifyIDTokenTelegramValidatesSignatureAndClaims(t *testing.T) {
 	idToken, err := token.SignedString(privateKey)
 	require.NoError(t, err)
 
-	claims, err := verifyIDToken(context.Background(), "telegram", idToken, config.OAuthProviderConfig{ClientID: "123456789"}, "expected-nonce")
+	h := &Handler{oidcVerifiers: newOIDCVerifierCache()}
+	claims, err := h.verifyIDToken(context.Background(), "telegram", idToken, config.OAuthProviderConfig{ClientID: "123456789"}, "expected-nonce")
 	require.NoError(t, err)
 	require.NotNil(t, claims)
 	assert.Equal(t, "telegram-user-123", claims.Subject)

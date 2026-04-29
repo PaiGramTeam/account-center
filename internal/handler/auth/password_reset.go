@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,7 @@ import (
 	"paigram/internal/logging"
 	"paigram/internal/model"
 	"paigram/internal/response"
+	piiutil "paigram/internal/utils/pii"
 )
 
 // ForgotPasswordRequest is the request payload for forgot password
@@ -65,7 +67,7 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		}
 		logging.Error("failed to query user email",
 			zap.Error(err),
-			zap.String("email", req.Email),
+			zap.String("email_masked", piiutil.MaskEmail(req.Email)),
 		)
 		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "internal server error", nil)
 		return
@@ -133,25 +135,34 @@ func (h *Handler) ForgotPassword(c *gin.Context) {
 		return
 	}
 
-	// Send password reset email asynchronously to prevent timing attacks
-	// By using a goroutine, the response time is consistent regardless of whether
-	// the email exists or not, preventing attackers from determining valid emails
-	// based on response time differences
-	go func(userEmail string, userID uint64, token string, origin string) {
-		baseURL := origin
-		if baseURL == "" {
-			baseURL = "http://localhost:8080" // Fallback, should be configured
-		}
-
-		// Use background context since the HTTP request is already complete
-		ctx := context.Background()
-		if err := h.emailService.SendPasswordResetEmail(ctx, userEmail, token, baseURL); err != nil {
-			logging.Error("failed to send password reset email",
-				zap.Error(err),
-				zap.Uint64("user_id", userID),
-			)
-		}
-	}(userEmail.Email, user.ID, token, c.Request.Header.Get("Origin"))
+	// Send password reset email asynchronously to prevent timing attacks.
+	// By using a goroutine, the response time is consistent regardless of
+	// whether the email exists or not, preventing attackers from determining
+	// valid emails based on response time differences.
+	//
+	// SECURITY: The reset link's host MUST come from server-side configuration
+	// (cfg.Frontend.BaseURL). It is intentionally NOT taken from the Origin
+	// header — that header is attacker-controlled and would let a malicious
+	// caller phish the user via a link to their own domain. If BaseURL is
+	// missing we log + skip the send rather than fall back; the user-facing
+	// response is unchanged so we don't leak that the deployment is
+	// misconfigured.
+	baseURL := strings.TrimRight(strings.TrimSpace(h.frontendCfg.BaseURL), "/")
+	if baseURL == "" {
+		logging.Error("frontend.base_url is not configured; suppressing password-reset email",
+			zap.Uint64("user_id", user.ID),
+		)
+	} else {
+		go func(recipient string, userID uint64, plainToken, base string) {
+			ctx := context.Background()
+			if err := h.dispatchPasswordResetEmail(ctx, recipient, plainToken, base); err != nil {
+				logging.Error("failed to send password reset email",
+					zap.Error(err),
+					zap.Uint64("user_id", userID),
+				)
+			}
+		}(userEmail.Email, user.ID, token, baseURL)
+	}
 
 	// Return immediately with consistent timing to prevent timing attacks
 	response.Success(c, gin.H{
@@ -299,6 +310,16 @@ func (h *Handler) ResetPassword(c *gin.Context) {
 	response.Success(c, gin.H{
 		"message": "password has been reset successfully",
 	})
+}
+
+// dispatchPasswordResetEmail routes the reset email through the test seam
+// when set, falling back to the wired email service in production. Keeping
+// this in one place ensures every path uses the same dispatcher contract.
+func (h *Handler) dispatchPasswordResetEmail(ctx context.Context, to, token, baseURL string) error {
+	if h.sendPasswordResetEmail != nil {
+		return h.sendPasswordResetEmail(ctx, to, token, baseURL)
+	}
+	return h.emailService.SendPasswordResetEmail(ctx, to, token, baseURL)
 }
 
 // generatePasswordResetToken generates a secure random token

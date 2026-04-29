@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
@@ -16,6 +18,7 @@ import (
 type Handler struct {
 	db               *gorm.DB
 	cfg              config.AuthConfig
+	frontendCfg      config.FrontendConfig
 	emailService     *email.Service
 	securityCfg      config.SecurityConfig
 	sessionCache     sessioncache.Store
@@ -25,10 +28,21 @@ type Handler struct {
 	// SECURITY: In-memory fallback for 2FA rate limiting when Redis is unavailable
 	// WARNING: Not suitable for multi-instance deployments (no cross-instance sync)
 	memory2FALimiter *memory2FARateLimiter
+
+	// oidcVerifiers caches per-provider OIDC ID-token verifiers. See V3:
+	// non-Telegram id_tokens MUST be cryptographically verified — there is
+	// no ParseUnverified fallback path anywhere in this handler.
+	oidcVerifiers *oidcVerifierCache
+
+	// sendPasswordResetEmail is a test seam. When nil (the production case)
+	// the handler dispatches to emailService.SendPasswordResetEmail. Tests
+	// override this so they can capture the URL the handler hands to the
+	// email layer without spinning up SMTP. Do not set in production.
+	sendPasswordResetEmail func(ctx context.Context, to, token, baseURL string) error
 }
 
 // NewHandler constructs an auth Handler.
-func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailService *email.Service, securityCfg config.SecurityConfig, cache sessioncache.Store, geoService *geolocation.Service) *Handler {
+func NewHandler(db *gorm.DB, cfg config.AuthConfig, frontendCfg config.FrontendConfig, emailService *email.Service, securityCfg config.SecurityConfig, cache sessioncache.Store, geoService *geolocation.Service) *Handler {
 	if cache == nil {
 		cache = sessioncache.NewNoopStore()
 	}
@@ -38,6 +52,7 @@ func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailService *email.Service,
 	return &Handler{
 		db:               db,
 		cfg:              cfg,
+		frontendCfg:      frontendCfg,
 		emailService:     emailService,
 		securityCfg:      securityCfg,
 		sessionCache:     cache,
@@ -45,6 +60,7 @@ func NewHandler(db *gorm.DB, cfg config.AuthConfig, emailService *email.Service,
 		securityAnalyzer: security.NewAnalyzer(db),
 		captchaVerifier:  newCaptchaVerifier(cfg.Captcha.Turnstile),
 		memory2FALimiter: newMemory2FARateLimiter(), // Always create in-memory fallback
+		oidcVerifiers:    newOIDCVerifierCache(),
 	}
 }
 

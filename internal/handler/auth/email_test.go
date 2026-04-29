@@ -87,9 +87,11 @@ func setupTestHandler(db *gorm.DB) *Handler {
 	return &Handler{
 		db:               db,
 		cfg:              cfg,
+		frontendCfg:      config.FrontendConfig{BaseURL: "https://app.example.com"},
 		emailService:     emailService,
 		sessionCache:     sessionCache,
 		memory2FALimiter: newMemory2FARateLimiter(),
+		oidcVerifiers:    newOIDCVerifierCache(),
 	}
 }
 

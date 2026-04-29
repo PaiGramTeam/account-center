@@ -7,10 +7,13 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
+	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/response"
 	serviceme "paigram/internal/service/me"
+	"paigram/internal/utils/safeerror"
 )
 
 type SessionView = serviceme.SessionView
@@ -113,11 +116,16 @@ func (h *SessionHandler) RevokeSession(c *gin.Context) {
 	if err := h.service.RevokeSession(c.Request.Context(), userID, sessionID); err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrInvalidSessionID):
-			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid session id", nil)
 		case errors.Is(err, serviceme.ErrSessionNotFound):
-			response.NotFoundWithCode(c, "SESSION_NOT_FOUND", err.Error(), nil)
+			response.NotFoundWithCode(c, "SESSION_NOT_FOUND", "session not found", nil)
 		default:
-			response.InternalServerError(c, err.Error())
+			logging.Error("revoke session failed",
+				zap.Error(err),
+				zap.Uint64("user_id", userID),
+				zap.Uint64("session_id", sessionID),
+			)
+			response.InternalServerError(c, safeerror.UserMessage(err))
 		}
 		return
 	}

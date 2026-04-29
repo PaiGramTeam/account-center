@@ -259,7 +259,10 @@ func TestSessionHandlerRevokeSessionReturnsInternalServerErrorWhenServiceFails(t
 	handler.RevokeSession(ctx)
 
 	require.Equal(t, http.StatusInternalServerError, rec.Code)
-	require.Contains(t, rec.Body.String(), "revoke failed")
+	// V13: the unknown service error must NOT echo back to the client; the
+	// handler sanitizes via safeerror.UserMessage and logs the original.
+	require.Contains(t, rec.Body.String(), "internal server error")
+	require.NotContains(t, rec.Body.String(), "revoke failed")
 }
 
 func TestCurrentUserHandlerDeleteEmailUsesMeRoute(t *testing.T) {

@@ -19,11 +19,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"paigram/internal/config"
 	"paigram/internal/handler/shared"
+	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/model"
 	"paigram/internal/oidc"
@@ -190,7 +192,8 @@ func (h *Handler) initiateOAuth(c *gin.Context, purpose model.OAuthPurpose, user
 	var req initiateOAuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		if !errors.Is(err, io.EOF) {
-			response.BadRequest(c, err.Error())
+			logging.Error("initiate oauth: invalid request body", zap.Error(err), zap.String("provider", provider))
+			response.BadRequest(c, "invalid request body")
 			return
 		}
 	}
@@ -305,7 +308,8 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 
 	var req oauthCallbackRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("oauth callback: invalid request body", zap.Error(err), zap.String("provider", provider))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -392,7 +396,8 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 				response.BadRequest(c, "invalid oauth state")
 				return
 			}
-			response.BadRequest(c, err.Error())
+			logging.Error("oauth bind failed", zap.Error(err), zap.String("provider", provider))
+			response.BadRequest(c, "oauth bind failed")
 			return
 		}
 
@@ -409,7 +414,8 @@ func (h *Handler) HandleOAuthCallback(c *gin.Context) {
 	result, err := h.completeOAuthLogin(provider, userInfo, tokenResp, now, clientIP, userAgent)
 
 	if err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("oauth login completion failed", zap.Error(err), zap.String("provider", provider))
+		response.BadRequest(c, "oauth login failed")
 		return
 	}
 

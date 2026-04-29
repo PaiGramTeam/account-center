@@ -14,14 +14,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
+	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"paigram/internal/crypto"
 	"paigram/internal/handler/shared"
+	"paigram/internal/logging"
 	"paigram/internal/model"
 	"paigram/internal/response"
 	"paigram/internal/sessioncache"
+	piiutil "paigram/internal/utils/pii"
 	"paigram/internal/utils/secsubtle"
 )
 
@@ -72,7 +75,8 @@ type registerEmailRequest struct {
 func (h *Handler) RegisterEmail(c *gin.Context) {
 	var req registerEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("register email: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -244,7 +248,8 @@ type loginEmailRequest struct {
 func (h *Handler) LoginWithEmail(c *gin.Context) {
 	var req loginEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("login email: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -304,7 +309,9 @@ func (h *Handler) LoginWithEmail(c *gin.Context) {
 
 	// Verify password
 	if err := comparePassword(credential.PasswordHash, req.Password); err != nil {
-		log.Printf("[auth] password verification failed for email=%s: %v", email, err)
+		// V7: never log the plaintext email; preserve a masked diagnostic so
+		// operators can still correlate events without leaking the address.
+		log.Printf("[auth] password verification failed for email_masked=%s: %v", piiutil.MaskEmail(email), err)
 		h.recordFailedLoginAudit(sql.NullInt64{Int64: int64(user.ID), Valid: true}, c.ClientIP(), c.GetHeader("User-Agent"), "invalid credentials")
 		response.Unauthorized(c, "invalid credentials")
 		return
@@ -547,7 +554,8 @@ type refreshTokenRequest struct {
 func (h *Handler) RefreshToken(c *gin.Context) {
 	var req refreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("refresh token: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -768,7 +776,8 @@ type logoutRequest struct {
 func (h *Handler) Logout(c *gin.Context) {
 	var req logoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("logout: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -823,7 +832,8 @@ type verifyEmailRequest struct {
 func (h *Handler) VerifyEmail(c *gin.Context) {
 	var req verifyEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		logging.Error("verify email: invalid request body", zap.Error(err))
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
@@ -872,7 +882,12 @@ func (h *Handler) VerifyEmail(c *gin.Context) {
 			response.NotFound(c, "email not found")
 			return
 		}
-		response.BadRequest(c, err.Error())
+		// The transaction returns either gorm.ErrRecordNotFound (handled
+		// above) or fmt.Errorf wrapping db/business errors. Surfacing
+		// err.Error() would leak gorm/MySQL internals (V13); return a
+		// stable, generic 400 instead and log the cause for operators.
+		logging.Error("verify email transaction failed", zap.Error(err))
+		response.BadRequest(c, "email verification failed")
 		return
 	}
 

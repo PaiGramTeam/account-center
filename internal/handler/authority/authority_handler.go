@@ -6,7 +6,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/response"
 	serviceaudit "paigram/internal/service/audit"
@@ -39,7 +42,8 @@ func NewAuthorityHandler(service *authority.AuthorityService) *AuthorityHandler 
 func (h *AuthorityHandler) CreateAuthority(c *gin.Context) {
 	var req CreateAuthorityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "参数错误: "+err.Error())
+		logging.Error("create authority: invalid request body", zap.Error(err))
+		response.BadRequest(c, "参数错误")
 		return
 	}
 
@@ -54,7 +58,8 @@ func (h *AuthorityHandler) CreateAuthority(c *gin.Context) {
 			response.Conflict(c, "角色名称已存在")
 			return
 		}
-		response.InternalServerError(c, "创建角色失败: "+err.Error())
+		logging.Error("create authority failed", zap.Error(err), zap.String("name", req.Name))
+		response.InternalServerError(c, "创建角色失败")
 		return
 	}
 
@@ -97,7 +102,8 @@ func (h *AuthorityHandler) GetAuthority(c *gin.Context) {
 			response.NotFound(c, "角色不存在")
 			return
 		}
-		response.InternalServerError(c, "获取角色失败: "+err.Error())
+		logging.Error("get authority failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "获取角色失败")
 		return
 	}
 
@@ -136,7 +142,8 @@ func (h *AuthorityHandler) ListAuthorities(c *gin.Context) {
 		Name:     name,
 	})
 	if err != nil {
-		response.InternalServerError(c, "获取角色列表失败: "+err.Error())
+		logging.Error("list authorities failed", zap.Error(err))
+		response.InternalServerError(c, "获取角色列表失败")
 		return
 	}
 
@@ -169,7 +176,8 @@ func (h *AuthorityHandler) UpdateAuthority(c *gin.Context) {
 
 	var req UpdateAuthorityRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "参数错误: "+err.Error())
+		logging.Error("update authority: invalid request body", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.BadRequest(c, "参数错误")
 		return
 	}
 	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
@@ -195,7 +203,8 @@ func (h *AuthorityHandler) UpdateAuthority(c *gin.Context) {
 			response.Forbidden(c, "系统角色不可修改")
 			return
 		}
-		response.InternalServerError(c, "更新角色失败: "+err.Error())
+		logging.Error("update authority failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "更新角色失败")
 		return
 	}
 
@@ -247,7 +256,8 @@ func (h *AuthorityHandler) DeleteAuthority(c *gin.Context) {
 			response.Conflict(c, "角色正在使用中,无法删除")
 			return
 		}
-		response.InternalServerError(c, "删除角色失败: "+err.Error())
+		logging.Error("delete authority failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "删除角色失败")
 		return
 	}
 
@@ -287,7 +297,8 @@ func (h *AuthorityHandler) AssignPermissions(c *gin.Context) {
 
 	var req AssignPermissionsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "参数错误: "+err.Error())
+		logging.Error("assign permissions: invalid request body", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.BadRequest(c, "参数错误")
 		return
 	}
 
@@ -297,7 +308,8 @@ func (h *AuthorityHandler) AssignPermissions(c *gin.Context) {
 			response.NotFound(c, "角色不存在")
 			return
 		}
-		response.InternalServerError(c, "分配权限失败: "+err.Error())
+		logging.Error("assign permissions failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "分配权限失败")
 		return
 	}
 
@@ -360,7 +372,8 @@ func (h *AuthorityHandler) GetRolePermissions(c *gin.Context) {
 			response.NotFound(c, "角色不存在")
 			return
 		}
-		response.InternalServerError(c, "获取权限失败: "+err.Error())
+		logging.Error("get role permissions failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "获取权限失败")
 		return
 	}
 
@@ -393,7 +406,8 @@ func (h *AuthorityHandler) GetAuthorityUsers(c *gin.Context) {
 			response.NotFound(c, "角色不存在")
 			return
 		}
-		response.InternalServerError(c, "获取角色用户失败: "+err.Error())
+		logging.Error("get authority users failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "获取角色用户失败")
 		return
 	}
 
@@ -435,7 +449,8 @@ func (h *AuthorityHandler) ReplaceAuthorityUsers(c *gin.Context) {
 
 	var req ReplaceAuthorityUsersRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "参数错误: "+err.Error())
+		logging.Error("replace authority users: invalid request body", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.BadRequest(c, "参数错误")
 		return
 	}
 	if req.UserIDs == nil {
@@ -463,7 +478,8 @@ func (h *AuthorityHandler) ReplaceAuthorityUsers(c *gin.Context) {
 			response.NotFound(c, "用户不存在")
 			return
 		}
-		response.InternalServerError(c, "更新角色用户失败: "+err.Error())
+		logging.Error("replace authority users failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "更新角色用户失败")
 		return
 	}
 

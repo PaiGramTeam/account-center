@@ -5,6 +5,9 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	"paigram/internal/logging"
 	"paigram/internal/response"
 	servicecasbin "paigram/internal/service/casbin"
 	pkgerrors "paigram/pkg/errors"
@@ -41,7 +44,8 @@ func (h *CasbinHandler) ReplaceAuthorityPolicies(c *gin.Context) {
 
 	var req ReplaceAuthorityPoliciesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "参数错误: "+err.Error())
+		logging.Error("replace authority policies: invalid request body", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.BadRequest(c, "参数错误")
 		return
 	}
 
@@ -58,7 +62,8 @@ func (h *CasbinHandler) ReplaceAuthorityPolicies(c *gin.Context) {
 			response.NotFound(c, "角色不存在")
 			return
 		}
-		response.InternalServerError(c, "更新API权限失败: "+err.Error())
+		logging.Error("replace authority policies failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "更新API权限失败")
 		return
 	}
 
@@ -90,7 +95,8 @@ func (h *CasbinHandler) GetAuthorityPolicies(c *gin.Context) {
 			response.NotFound(c, "角色不存在")
 			return
 		}
-		response.InternalServerError(c, "获取API权限失败: "+err.Error())
+		logging.Error("get authority policies failed", zap.Error(err), zap.Uint64("role_id", roleID))
+		response.InternalServerError(c, "获取API权限失败")
 		return
 	}
 

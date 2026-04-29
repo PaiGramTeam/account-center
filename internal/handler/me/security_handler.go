@@ -5,7 +5,9 @@ import (
 	"errors"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
+	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/response"
 	serviceme "paigram/internal/service/me"
@@ -117,7 +119,8 @@ func (h *SecurityHandler) UpdatePassword(c *gin.Context) {
 	}
 	var req updatePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("update password: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 	err := h.service.UpdatePassword(c.Request.Context(), serviceme.UpdatePasswordInput{UserID: userID, OldPassword: req.OldPassword, NewPassword: req.NewPassword, RevokeOtherSessions: req.RevokeOtherSessions, CurrentAccessToken: bearerToken(c.GetHeader("Authorization")), ClientIP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent")})
@@ -160,7 +163,8 @@ func (h *SecurityHandler) SetupTwoFactor(c *gin.Context) {
 	}
 	var req setupTwoFactorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("setup 2FA: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 	setup, err := h.service.SetupTwoFactor(c.Request.Context(), serviceme.SetupTwoFactorInput{UserID: userID, Password: req.Password})
@@ -201,7 +205,8 @@ func (h *SecurityHandler) ConfirmTwoFactor(c *gin.Context) {
 	}
 	var req confirmTwoFactorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("confirm 2FA: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 	err := h.service.ConfirmTwoFactor(c.Request.Context(), serviceme.ConfirmTwoFactorInput{UserID: userID, Code: req.Code, ClientIP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent")})
@@ -243,7 +248,8 @@ func (h *SecurityHandler) DisableTwoFactor(c *gin.Context) {
 	}
 	var req disableTwoFactorRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("disable 2FA: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 	err := h.service.DisableTwoFactor(c.Request.Context(), serviceme.DisableTwoFactorInput{UserID: userID, Password: req.Password, Code: req.Code, ClientIP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent")})
@@ -285,7 +291,8 @@ func (h *SecurityHandler) RegenerateBackupCodes(c *gin.Context) {
 	}
 	var req regenerateBackupCodesRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("regenerate backup codes: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 	backupCodes, err := h.service.RegenerateBackupCodes(c.Request.Context(), serviceme.RegenerateBackupCodesInput{UserID: userID, Password: req.Password, ClientIP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent")})
@@ -296,19 +303,27 @@ func (h *SecurityHandler) RegenerateBackupCodes(c *gin.Context) {
 	response.Success(c, gin.H{"message": "backup codes regenerated successfully", "backup_codes": backupCodes})
 }
 
+// writeSecurityError maps service-layer sentinels onto HTTP responses. The
+// user-facing message strings are written as literals here (rather than via
+// err.Error()) so that the prose surfaced to clients is auditable in the
+// handler — V13 forbids piping err.Error() into response bodies because gorm
+// or driver errors could otherwise leak through unexpected error paths.
 func (h *SecurityHandler) writeSecurityError(c *gin.Context, err error, fallback string) {
 	switch {
 	case errors.Is(err, serviceme.ErrNoPasswordLogin):
-		response.NotFoundWithCode(c, "NO_PASSWORD", err.Error(), nil)
-	case errors.Is(err, serviceme.ErrInvalidPassword), errors.Is(err, serviceme.ErrInvalidTwoFactorCode):
-		response.UnauthorizedWithCode(c, "INVALID_CREDENTIAL", err.Error(), nil)
+		response.NotFoundWithCode(c, "NO_PASSWORD", "user does not have password authentication", nil)
+	case errors.Is(err, serviceme.ErrInvalidPassword):
+		response.UnauthorizedWithCode(c, "INVALID_CREDENTIAL", "incorrect password", nil)
+	case errors.Is(err, serviceme.ErrInvalidTwoFactorCode):
+		response.UnauthorizedWithCode(c, "INVALID_CREDENTIAL", "invalid verification code", nil)
 	case errors.Is(err, serviceme.ErrTwoFactorAlreadyEnabled):
-		response.ConflictWithCode(c, "ALREADY_ENABLED", err.Error(), nil)
+		response.ConflictWithCode(c, "ALREADY_ENABLED", "2FA is already enabled", nil)
 	case errors.Is(err, serviceme.ErrTwoFactorNotEnabled):
-		response.NotFoundWithCode(c, "2FA_NOT_ENABLED", err.Error(), nil)
+		response.NotFoundWithCode(c, "2FA_NOT_ENABLED", "2FA is not enabled", nil)
 	case errors.Is(err, serviceme.ErrTwoFactorSetupExpired):
-		response.BadRequestWithCode(c, "SETUP_EXPIRED", err.Error(), nil)
+		response.BadRequestWithCode(c, "SETUP_EXPIRED", "2FA setup expired or not found", nil)
 	default:
+		logging.Error("security operation failed", zap.Error(err), zap.String("fallback", fallback))
 		response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", fallback, nil)
 	}
 }

@@ -11,8 +11,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/response"
 	serviceme "paigram/internal/service/me"
@@ -96,13 +98,15 @@ func (h *CurrentUserHandler) PatchMe(c *gin.Context) {
 
 	var req patchMeRequest
 	if err := c.ShouldBindBodyWith(&req, binding.JSON); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("patch me: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 
 	var raw map[string]json.RawMessage
 	if err := c.ShouldBindBodyWith(&raw, binding.JSON); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("patch me: cannot reparse request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 	if unsupported := unsupportedPatchMeFields(raw); len(unsupported) > 0 {
@@ -120,10 +124,11 @@ func (h *CurrentUserHandler) PatchMe(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrDisplayNameRequired):
-			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "display_name must not be empty", nil)
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			response.NotFound(c, "user not found")
 		default:
+			logging.Error("update current user failed", zap.Error(err), zap.Uint64("user_id", userID))
 			response.InternalServerError(c, "failed to update current user")
 		}
 		return
@@ -279,18 +284,22 @@ func (h *CurrentUserHandler) CreateEmail(c *gin.Context) {
 	}
 	var req createEmailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+		logging.Error("create email: invalid request body", zap.Error(err), zap.Uint64("user_id", userID))
+		response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid request body", nil)
 		return
 	}
 	created, err := h.service.CreateEmail(c.Request.Context(), serviceme.CreateEmailInput{UserID: userID, Email: req.Email, VerificationTTL: 24 * time.Hour})
 	if err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrEmailAlreadyAddedToAccount):
-			response.ConflictWithCode(c, "EMAIL_ALREADY_ADDED", err.Error(), nil)
+			response.ConflictWithCode(c, "EMAIL_ALREADY_ADDED", "email already added to this account", nil)
 		case errors.Is(err, serviceme.ErrEmailAlreadyInUse):
-			response.ConflictWithCode(c, "EMAIL_IN_USE", err.Error(), nil)
+			response.ConflictWithCode(c, "EMAIL_IN_USE", "email already in use by another account", nil)
 		default:
-			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+			// Service-layer validation rejection (e.g., malformed email); log
+			// the cause but surface only a generic invalid-input message.
+			logging.Error("create email failed", zap.Error(err), zap.Uint64("user_id", userID))
+			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "invalid email", nil)
 		}
 		return
 	}
@@ -333,10 +342,11 @@ func (h *CurrentUserHandler) PatchPrimaryEmail(c *gin.Context) {
 	if err := h.service.PatchPrimaryEmail(c.Request.Context(), userID, emailID); err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrEmailNotFound):
-			response.NotFoundWithCode(c, "EMAIL_NOT_FOUND", err.Error(), nil)
+			response.NotFoundWithCode(c, "EMAIL_NOT_FOUND", "email not found", nil)
 		case errors.Is(err, serviceme.ErrEmailNotVerified):
-			response.ForbiddenWithCode(c, "EMAIL_NOT_VERIFIED", err.Error(), nil)
+			response.ForbiddenWithCode(c, "EMAIL_NOT_VERIFIED", "email must be verified before setting as primary", nil)
 		default:
+			logging.Error("patch primary email failed", zap.Error(err), zap.Uint64("user_id", userID), zap.Uint64("email_id", emailID))
 			response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "failed to set primary email", nil)
 		}
 		return
@@ -380,10 +390,11 @@ func (h *CurrentUserHandler) DeleteEmail(c *gin.Context) {
 	if err := h.service.DeleteEmail(c.Request.Context(), userID, emailID); err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrEmailNotFound):
-			response.NotFoundWithCode(c, "EMAIL_NOT_FOUND", err.Error(), nil)
+			response.NotFoundWithCode(c, "EMAIL_NOT_FOUND", "email not found", nil)
 		case errors.Is(err, serviceme.ErrLastEmailCannotDelete):
-			response.ForbiddenWithCode(c, "LAST_EMAIL_CANNOT_DELETE", err.Error(), nil)
+			response.ForbiddenWithCode(c, "LAST_EMAIL_CANNOT_DELETE", "cannot delete the only email", nil)
 		default:
+			logging.Error("delete email failed", zap.Error(err), zap.Uint64("user_id", userID), zap.Uint64("email_id", emailID))
 			response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "failed to delete email", nil)
 		}
 		return
@@ -427,10 +438,13 @@ func (h *CurrentUserHandler) VerifyEmail(c *gin.Context) {
 	if err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrEmailNotFound):
-			response.NotFoundWithCode(c, "EMAIL_NOT_FOUND", err.Error(), nil)
-		case errors.Is(err, serviceme.ErrEmailAlreadyVerified), errors.Is(err, serviceme.ErrEmailRateLimited):
-			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, err.Error(), nil)
+			response.NotFoundWithCode(c, "EMAIL_NOT_FOUND", "email not found", nil)
+		case errors.Is(err, serviceme.ErrEmailAlreadyVerified):
+			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "email already verified", nil)
+		case errors.Is(err, serviceme.ErrEmailRateLimited):
+			response.BadRequestWithCode(c, response.ErrCodeInvalidInput, "verification email recently sent", nil)
 		default:
+			logging.Error("verify email failed", zap.Error(err), zap.Uint64("user_id", userID), zap.Uint64("email_id", emailID))
 			response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "failed to resend verification email", nil)
 		}
 		return
@@ -500,8 +514,9 @@ func (h *CurrentUserHandler) PatchPrimaryLoginMethod(c *gin.Context) {
 	if err := h.service.SetPrimaryLoginMethod(c.Request.Context(), userID, c.Param("provider")); err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrProviderNotBound):
-			response.NotFoundWithCode(c, "PROVIDER_NOT_BOUND", err.Error(), nil)
+			response.NotFoundWithCode(c, "PROVIDER_NOT_BOUND", "provider not bound to this account", nil)
 		default:
+			logging.Error("set primary login method failed", zap.Error(err), zap.Uint64("user_id", userID), zap.String("provider", c.Param("provider")))
 			response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "failed to set primary login method", nil)
 		}
 		return
@@ -539,10 +554,13 @@ func (h *CurrentUserHandler) DeleteLoginMethod(c *gin.Context) {
 	if err := h.service.DeleteLoginMethod(c.Request.Context(), userID, c.Param("provider")); err != nil {
 		switch {
 		case errors.Is(err, serviceme.ErrProviderNotBound):
-			response.NotFoundWithCode(c, "PROVIDER_NOT_BOUND", err.Error(), nil)
-		case errors.Is(err, serviceme.ErrCannotRemoveLastLoginMethod), errors.Is(err, serviceme.ErrCannotUnbindPrimaryLogin):
-			response.ForbiddenWithCode(c, "FORBIDDEN", err.Error(), nil)
+			response.NotFoundWithCode(c, "PROVIDER_NOT_BOUND", "provider not bound to this account", nil)
+		case errors.Is(err, serviceme.ErrCannotRemoveLastLoginMethod):
+			response.ForbiddenWithCode(c, "FORBIDDEN", "cannot remove the last login method", nil)
+		case errors.Is(err, serviceme.ErrCannotUnbindPrimaryLogin):
+			response.ForbiddenWithCode(c, "FORBIDDEN", "cannot unbind primary login method", nil)
 		default:
+			logging.Error("delete login method failed", zap.Error(err), zap.Uint64("user_id", userID), zap.String("provider", c.Param("provider")))
 			response.InternalServerErrorWithCode(c, "INTERNAL_ERROR", "failed to delete login method", nil)
 		}
 		return

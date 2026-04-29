@@ -17,6 +17,7 @@ import (
 	"paigram/internal/model"
 	"paigram/internal/security"
 	"paigram/internal/sessioncache"
+	piiutil "paigram/internal/utils/pii"
 )
 
 // SessionWithTokens holds the session record and the original tokens
@@ -228,7 +229,8 @@ func (h *Handler) sendSuspiciousLoginAlert(userID uint64, ip, deviceName, device
 	if err := h.emailService.SendSuspiciousLoginEmail(ctx, userEmail.Email, emailData); err != nil {
 		log.Printf("failed to send suspicious login email: %v", err)
 	} else {
-		log.Printf("Sent suspicious login alert to user %d (%s)", userID, userEmail.Email)
+		// V7: log a masked email so audit trails do not leak the address.
+		log.Printf("Sent suspicious login alert to user %d (email_masked=%s)", userID, piiutil.MaskEmail(userEmail.Email))
 	}
 }
 

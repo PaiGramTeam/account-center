@@ -131,10 +131,13 @@ func runServer() {
 	}
 	defer logging.Sync()
 
-	// Initialize encryption for 2FA secrets
-	if err := crypto.InitEncryption(); err != nil {
+	// Initialize encryption for 2FA secrets. The key is sourced from
+	// `security.encryption_key` (which Viper auto-binds to
+	// PAI_SECURITY_ENCRYPTION_KEY); InitEncryption itself falls back to
+	// the legacy ENCRYPTION_KEY env var for backwards compatibility.
+	if err := crypto.InitEncryption(cfg.Security.EncryptionKey); err != nil {
 		log.Printf("WARNING: Encryption initialization failed: %v", err)
-		log.Printf("2FA will not work properly. Please set ENCRYPTION_KEY environment variable.")
+		log.Printf("2FA will not work properly. Please set security.encryption_key in config (or PAI_SECURITY_ENCRYPTION_KEY env).")
 	}
 
 	db, err := database.Connect(cfg.Database, cfg.Security)

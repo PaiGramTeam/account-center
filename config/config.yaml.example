@@ -186,7 +186,15 @@ security:
   # Higher values = more secure but slower (10=74ms, 12=300ms, 14=1.2s)
   # Valid range: 10-14 (values outside this range will be clamped)
   bcrypt_cost: 12
-  
+
+  # AES-256 master key used to encrypt 2FA TOTP secrets at rest.
+  # Accepts either a raw 32-byte ASCII string or a base64-encoded 32-byte key.
+  # SECURITY: do NOT commit a real production key to this file. Prefer the
+  # environment variable PAI_SECURITY_ENCRYPTION_KEY (preferred) or the legacy
+  # ENCRYPTION_KEY (kept for backwards compatibility) in production.
+  # Generate one with: `openssl rand -base64 32`
+  encryption_key: ""
+
   # Suspicious Login Detection
   suspicious_login_detection: true      # Enable analyzing logins for suspicious patterns
   suspicious_login_email_alert: true    # Send email alerts when suspicious logins detected

@@ -220,6 +220,12 @@ type SecurityConfig struct {
 	RequireRedisFor2FA        bool                  `mapstructure:"require_redis_for_2fa"`        // V22: when true, 2FA rate limiting fails closed if Redis is unavailable
 	TwoFAFailClosedTTL        time.Duration         `mapstructure:"twofa_fail_closed_ttl"`        // V22: lock duration applied when failing closed; defaults to 1m
 	SecurityHeaders           SecurityHeadersConfig `mapstructure:"security_headers"`             // V10: HTTP response security headers
+	// EncryptionKey is the AES-256 master key (32 bytes raw or base64) used to
+	// encrypt 2FA TOTP secrets at rest. Prefer setting this via the
+	// PAI_SECURITY_ENCRYPTION_KEY environment variable rather than committing
+	// it to config.yaml. If empty at startup, the legacy ENCRYPTION_KEY
+	// environment variable is consulted as a backwards-compatible fallback.
+	EncryptionKey string `mapstructure:"encryption_key"`
 }
 
 // SecurityHeadersConfig configures HTTP response security headers

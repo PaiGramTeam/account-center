@@ -18,33 +18,47 @@ var (
 	// ErrInvalidCiphertext is returned when the ciphertext is too short or malformed
 	ErrInvalidCiphertext = errors.New("invalid ciphertext")
 	// ErrKeyNotSet is returned when encryption key is not configured
-	ErrKeyNotSet = errors.New("encryption key not set in environment variable ENCRYPTION_KEY")
+	ErrKeyNotSet = errors.New("encryption key not configured (set security.encryption_key in config or PAI_SECURITY_ENCRYPTION_KEY / ENCRYPTION_KEY environment variable)")
 )
 
-// encryptionKey holds the global encryption key loaded from environment
+// encryptionKey holds the global encryption key loaded at startup.
 var encryptionKey []byte
 
-// InitEncryption initializes the encryption key from environment variable
-// Must be called at application startup
-func InitEncryption() error {
-	keyStr := os.Getenv("ENCRYPTION_KEY")
+// InitEncryption initializes the global encryption key.
+//
+// keyStr is the configured key as either:
+//   - a raw 32-byte ASCII string, or
+//   - a base64-encoded 32-byte key (auto-detected when standard-base64 padding/special
+//     characters are present, or when the decoded length is exactly 32 bytes).
+//
+// If keyStr is empty, InitEncryption falls back to the legacy ENCRYPTION_KEY
+// environment variable for backwards compatibility with deployments that
+// predate the config-driven flow. Operators should migrate to either
+// `security.encryption_key` in config.yaml or PAI_SECURITY_ENCRYPTION_KEY.
+func InitEncryption(keyStr string) error {
+	keyStr = strings.TrimSpace(keyStr)
+
+	// Backwards-compatible fallback to the legacy bare env var. Kept
+	// intentionally so existing CI / local setups keep working while
+	// teams migrate to the config-driven approach.
+	if keyStr == "" {
+		keyStr = strings.TrimSpace(os.Getenv("ENCRYPTION_KEY"))
+	}
 	if keyStr == "" {
 		return ErrKeyNotSet
 	}
 
-	// Remove any whitespace
-	keyStr = strings.TrimSpace(keyStr)
-
-	// Decode from base64 if it looks like base64
-	if strings.Contains(keyStr, "+") || strings.Contains(keyStr, "/") || strings.Contains(keyStr, "=") {
-		decoded, err := base64.StdEncoding.DecodeString(keyStr)
-		if err == nil && len(decoded) == 32 {
+	// Try base64 first when the input looks base64-shaped. We only
+	// accept the result if it decodes to exactly 32 bytes; otherwise
+	// fall through to the raw-string branch so a 32-char ASCII key
+	// containing '+', '/', or '=' still works.
+	if strings.ContainsAny(keyStr, "+/=") {
+		if decoded, err := base64.StdEncoding.DecodeString(keyStr); err == nil && len(decoded) == 32 {
 			encryptionKey = decoded
 			return nil
 		}
 	}
 
-	// Otherwise use raw string as key
 	if len(keyStr) != 32 {
 		return fmt.Errorf("%w: got %d bytes", ErrInvalidKey, len(keyStr))
 	}

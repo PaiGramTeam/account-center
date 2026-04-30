@@ -61,6 +61,15 @@ type Env struct {
 	RedisDB       int
 	RedisPrefix   string
 
+	// HasMySQLPassword and HasRedisPassword are configuration presence
+	// indicators computed once at Load time. SummaryLines and other
+	// diagnostic helpers read these booleans instead of reading the raw
+	// password fields, which keeps CWE-312 clear-text-logging data flow
+	// from ever crossing the boundary between a secret string field and a
+	// print/log sink.
+	HasMySQLPassword bool
+	HasRedisPassword bool
+
 	Sources Sources
 }
 
@@ -111,6 +120,12 @@ func Load(opts LoadOptions) (Env, error) {
 	env.RedisPassword, env.Sources.RedisPassword = selectString(lookupEnv, fileValues, "PAI_TEST_REDIS_PASSWORD", "")
 	env.RedisPrefix, env.Sources.RedisPrefix = selectString(lookupEnv, fileValues, "PAI_TEST_REDIS_PREFIX", defaultRedisPrefix)
 
+	// Capture the boolean "is configured" indicators here, immediately
+	// adjacent to where the secret was loaded, so that downstream
+	// diagnostic helpers never need to read the password fields again.
+	env.HasMySQLPassword = strings.TrimSpace(env.MySQLPassword) != ""
+	env.HasRedisPassword = strings.TrimSpace(env.RedisPassword) != ""
+
 	redisDBValue, source, err := selectInt(lookupEnv, fileValues, "PAI_TEST_REDIS_DB", defaultRedisDB)
 	if err != nil {
 		return Env{}, err
@@ -142,15 +157,13 @@ func (e Env) MissingRequired() []string {
 }
 
 func (e Env) SummaryLines(sampleName string, requireRedis bool) []string {
-	// Compute the "is configured" boolean for each secret upstream of the
-	// helper so the raw password value never appears as a function
-	// argument flowing toward a print sink. Static analyzers (e.g.
-	// CodeQL's go/clear-text-logging) that follow data flow from the
-	// password field through arguments cannot find any path from
-	// MySQLPassword/RedisPassword into Sprintf because the only thing
-	// reaching the helper here is a bool.
-	mysqlPasswordTag := passwordTag(strings.TrimSpace(e.MySQLPassword) != "")
-	redisPasswordTag := passwordTag(strings.TrimSpace(e.RedisPassword) != "")
+	// Read the pre-computed presence booleans rather than the password
+	// fields themselves. This severs the data flow from MySQLPassword /
+	// RedisPassword to fmt.Sprintf at the source side, satisfying CWE-312
+	// clear-text-logging analysis without relying on intermediate
+	// sanitizer recognition by the static analyser.
+	mysqlPasswordTag := passwordTag(e.HasMySQLPassword)
+	redisPasswordTag := passwordTag(e.HasRedisPassword)
 
 	lines := []string{
 		"repo_root=" + e.RepoRoot,

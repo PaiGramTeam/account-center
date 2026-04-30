@@ -43,6 +43,9 @@ func TestLoadUsesEnvFileDefaultsAndTracksSources(t *testing.T) {
 	require.Equal(t, SourceDefault, env.Sources.RedisPrefix)
 	require.Empty(t, env.MissingRequired())
 
+	require.True(t, env.HasMySQLPassword, "MySQLPassword presence flag should be true when set")
+	require.False(t, env.HasRedisPassword, "RedisPassword presence flag should be false when empty")
+
 	lines := strings.Join(env.SummaryLines("doctor", true), "\n")
 	require.Contains(t, lines, "mysql.addr=127.0.0.1:3306 (file)")
 	require.Contains(t, lines, "mysql.password=<redacted> (file)")
@@ -100,6 +103,9 @@ func TestLoadShellEnvOverridesFileValues(t *testing.T) {
 	require.Equal(t, SourceShell, env.Sources.RedisPassword)
 	require.Equal(t, SourceShell, env.Sources.RedisDB)
 	require.Equal(t, SourceShell, env.Sources.RedisPrefix)
+
+	require.True(t, env.HasMySQLPassword)
+	require.True(t, env.HasRedisPassword)
 
 	lines := strings.Join(env.SummaryLines("doctor", true), "\n")
 	require.Contains(t, lines, "mysql.addr=shell-host:3306 (shell)")

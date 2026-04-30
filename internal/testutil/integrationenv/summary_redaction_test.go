@@ -14,19 +14,21 @@ func TestSummaryLinesNeverLeaksPasswords(t *testing.T) {
 	redisSecret := "another-secret-redis-pa55w0rd-NEVER-LEAK"
 
 	env := Env{
-		RepoRoot:      "/tmp/repo",
-		EnvFilePath:   "/tmp/repo/.env.integration.local",
-		EnvFileLoaded: true,
-		GoWork:        "off",
-		MySQLAddr:     "127.0.0.1:3306",
-		MySQLUsername: "root",
-		MySQLPassword: mysqlSecret,
-		MySQLDatabase: "paigram_test",
-		MySQLConfig:   "charset=utf8mb4",
-		RedisAddr:     "127.0.0.1:6379",
-		RedisPassword: redisSecret,
-		RedisDB:       0,
-		RedisPrefix:   "itest",
+		RepoRoot:         "/tmp/repo",
+		EnvFilePath:      "/tmp/repo/.env.integration.local",
+		EnvFileLoaded:    true,
+		GoWork:           "off",
+		MySQLAddr:        "127.0.0.1:3306",
+		MySQLUsername:    "root",
+		MySQLPassword:    mysqlSecret,
+		MySQLDatabase:    "paigram_test",
+		MySQLConfig:      "charset=utf8mb4",
+		RedisAddr:        "127.0.0.1:6379",
+		RedisPassword:    redisSecret,
+		RedisDB:          0,
+		RedisPrefix:      "itest",
+		HasMySQLPassword: true,
+		HasRedisPassword: true,
 	}
 
 	for _, line := range env.SummaryLines("doctor", true) {

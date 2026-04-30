@@ -34,14 +34,17 @@ func TestLoadUsesEnvFileDefaultsAndTracksSources(t *testing.T) {
 
 	require.Equal(t, SourceFile, env.Sources.MySQLAddr)
 	require.Equal(t, SourceFile, env.Sources.MySQLUsername)
-	require.Equal(t, SourceFile, env.Sources.MySQLPassword)
+	require.Equal(t, SourceFile, env.Sources.MySQLCredentialOrigin)
 	require.Equal(t, SourceFile, env.Sources.MySQLDatabase)
 	require.Equal(t, SourceDefault, env.Sources.MySQLConfig)
 	require.Equal(t, SourceFile, env.Sources.RedisAddr)
-	require.Equal(t, SourceDefault, env.Sources.RedisPassword)
+	require.Equal(t, SourceDefault, env.Sources.RedisCredentialOrigin)
 	require.Equal(t, SourceDefault, env.Sources.RedisDB)
 	require.Equal(t, SourceDefault, env.Sources.RedisPrefix)
 	require.Empty(t, env.MissingRequired())
+
+	require.True(t, env.HasMySQLPassword, "MySQLPassword presence flag should be true when set")
+	require.False(t, env.HasRedisPassword, "RedisPassword presence flag should be false when empty")
 
 	lines := strings.Join(env.SummaryLines("doctor", true), "\n")
 	require.Contains(t, lines, "mysql.addr=127.0.0.1:3306 (file)")
@@ -93,13 +96,16 @@ func TestLoadShellEnvOverridesFileValues(t *testing.T) {
 
 	require.Equal(t, SourceShell, env.Sources.MySQLAddr)
 	require.Equal(t, SourceShell, env.Sources.MySQLUsername)
-	require.Equal(t, SourceShell, env.Sources.MySQLPassword)
+	require.Equal(t, SourceShell, env.Sources.MySQLCredentialOrigin)
 	require.Equal(t, SourceShell, env.Sources.MySQLDatabase)
 	require.Equal(t, SourceShell, env.Sources.MySQLConfig)
 	require.Equal(t, SourceShell, env.Sources.RedisAddr)
-	require.Equal(t, SourceShell, env.Sources.RedisPassword)
+	require.Equal(t, SourceShell, env.Sources.RedisCredentialOrigin)
 	require.Equal(t, SourceShell, env.Sources.RedisDB)
 	require.Equal(t, SourceShell, env.Sources.RedisPrefix)
+
+	require.True(t, env.HasMySQLPassword)
+	require.True(t, env.HasRedisPassword)
 
 	lines := strings.Join(env.SummaryLines("doctor", true), "\n")
 	require.Contains(t, lines, "mysql.addr=shell-host:3306 (shell)")

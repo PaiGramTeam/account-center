@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -261,6 +262,16 @@ func generatedRequestID() string {
 }
 
 func nullUint64(value uint64) sql.NullInt64 {
+	// uint64 can hold values larger than math.MaxInt64. Direct casting in
+	// that range would silently wrap to a negative int64, corrupting audit
+	// records and downstream comparisons. Clamp to MaxInt64 (CWE-197). The
+	// Valid flag is preserved so callers see the truncated row rather than
+	// an unexpected NULL — values above 2^63 in our IDs/foreign keys are
+	// not currently reachable, but defending here makes the invariant
+	// explicit and CodeQL-clean.
+	if value > math.MaxInt64 {
+		return sql.NullInt64{Int64: math.MaxInt64, Valid: true}
+	}
 	return sql.NullInt64{Int64: int64(value), Valid: true}
 }
 

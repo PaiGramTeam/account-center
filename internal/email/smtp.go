@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"mime"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,49 @@ import (
 
 	"paigram/internal/config"
 )
+
+// sanitizeHeader strips CR/LF and other control characters that would allow
+// SMTP/email header injection (CWE-93). It is applied to every value that
+// flows into a raw header string built via fmt.Sprintf in buildMessage.
+func sanitizeHeader(value string) string {
+	// Replace CR, LF and NUL with a single space so structurally invalid
+	// characters cannot terminate a header line or inject new headers.
+	replacer := strings.NewReplacer("\r", " ", "\n", " ", "\x00", " ")
+	cleaned := replacer.Replace(value)
+	// Collapse runs of whitespace introduced by sanitization.
+	return strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
+}
+
+// sanitizeAddress validates and normalizes an email address before it is used
+// either as an SMTP envelope address (MAIL FROM / RCPT TO) or interpolated
+// into header values. Invalid addresses are rejected to prevent injection of
+// SMTP commands or extra recipients via crafted strings.
+func sanitizeAddress(address string) (string, error) {
+	addr, err := mail.ParseAddress(strings.TrimSpace(address))
+	if err != nil {
+		return "", fmt.Errorf("invalid email address %q: %w", address, err)
+	}
+	// mail.Address.Address never contains CR/LF, but defend in depth.
+	clean := sanitizeHeader(addr.Address)
+	if clean == "" || !strings.Contains(clean, "@") {
+		return "", fmt.Errorf("invalid email address %q", address)
+	}
+	return clean, nil
+}
+
+// sanitizeAddresses validates a slice of recipient addresses and returns the
+// cleaned list, or an error if any entry is invalid.
+func sanitizeAddresses(addresses []string) ([]string, error) {
+	out := make([]string, 0, len(addresses))
+	for _, raw := range addresses {
+		clean, err := sanitizeAddress(raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, clean)
+	}
+	return out, nil
+}
 
 // SMTPSender implements email sending via SMTP
 type SMTPSender struct {
@@ -59,17 +103,37 @@ func (s *SMTPSender) Send(ctx context.Context, msg *Message) error {
 		return fmt.Errorf("no recipients specified")
 	}
 
+	// Validate and sanitize all envelope addresses before they reach the
+	// SMTP transaction or get interpolated into raw header bytes. This is
+	// the primary mitigation for CWE-93 (email/SMTP header injection).
+	cleanTo, err := sanitizeAddresses(msg.To)
+	if err != nil {
+		return fmt.Errorf("validate To: %w", err)
+	}
+	cleanCC, err := sanitizeAddresses(msg.CC)
+	if err != nil {
+		return fmt.Errorf("validate CC: %w", err)
+	}
+	cleanBCC, err := sanitizeAddresses(msg.BCC)
+	if err != nil {
+		return fmt.Errorf("validate BCC: %w", err)
+	}
+	sanitized := *msg
+	sanitized.To = cleanTo
+	sanitized.CC = cleanCC
+	sanitized.BCC = cleanBCC
+
 	// Build email message
-	body, err := s.buildMessage(msg)
+	body, err := s.buildMessage(&sanitized)
 	if err != nil {
 		return fmt.Errorf("build message: %w", err)
 	}
 
 	// All recipients
-	recipients := make([]string, 0, len(msg.To)+len(msg.CC)+len(msg.BCC))
-	recipients = append(recipients, msg.To...)
-	recipients = append(recipients, msg.CC...)
-	recipients = append(recipients, msg.BCC...)
+	recipients := make([]string, 0, len(cleanTo)+len(cleanCC)+len(cleanBCC))
+	recipients = append(recipients, cleanTo...)
+	recipients = append(recipients, cleanCC...)
+	recipients = append(recipients, cleanBCC...)
 
 	// Send email with timeout
 	addr := fmt.Sprintf("%s:%d", s.cfg.SMTPHost, s.cfg.SMTPPort)
@@ -85,19 +149,28 @@ func (s *SMTPSender) Send(ctx context.Context, msg *Message) error {
 	return s.sendPlain(sendCtx, addr, recipients, body)
 }
 
-// buildMessage constructs the email message with proper MIME encoding
+// buildMessage constructs the email message with proper MIME encoding.
+// All values that flow into raw header lines are passed through
+// sanitizeHeader to strip CR/LF and prevent header injection.
 func (s *SMTPSender) buildMessage(msg *Message) (string, error) {
 	var builder strings.Builder
 
-	// Headers
-	builder.WriteString(fmt.Sprintf("From: %s <%s>\r\n", s.cfg.FromName, s.cfg.FromEmail))
+	// Headers — every interpolated value is sanitized to ensure no CR/LF
+	// can break out of its header line.
+	fromName := sanitizeHeader(s.cfg.FromName)
+	fromEmail := sanitizeHeader(s.cfg.FromEmail)
+	builder.WriteString(fmt.Sprintf("From: %s <%s>\r\n", fromName, fromEmail))
 	builder.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(msg.To, ", ")))
 
 	if len(msg.CC) > 0 {
 		builder.WriteString(fmt.Sprintf("CC: %s\r\n", strings.Join(msg.CC, ", ")))
 	}
 
-	builder.WriteString(fmt.Sprintf("Subject: %s\r\n", msg.Subject))
+	// RFC 2047 encode the subject so user-supplied content cannot inject
+	// headers and non-ASCII characters survive. mime.QEncoding rejects
+	// CR/LF inside the encoded-word, so this also defends against
+	// injection if sanitizeHeader were ever bypassed.
+	builder.WriteString(fmt.Sprintf("Subject: %s\r\n", mime.QEncoding.Encode("UTF-8", sanitizeHeader(msg.Subject))))
 	builder.WriteString("MIME-Version: 1.0\r\n")
 
 	// Determine if we need multipart
@@ -151,9 +224,14 @@ func (s *SMTPSender) buildMessage(msg *Message) (string, error) {
 				}
 			}
 
-			builder.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", mimeType, att.Filename))
+			// Sanitize filename and MIME type — both flow into raw
+			// header values and must not contain CR/LF or quotes that
+			// could break out of the quoted-string.
+			safeFilename := sanitizeHeader(strings.ReplaceAll(att.Filename, "\"", ""))
+			safeMime := sanitizeHeader(mimeType)
+			builder.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", safeMime, safeFilename))
 			builder.WriteString("Content-Transfer-Encoding: base64\r\n")
-			builder.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n\r\n", att.Filename))
+			builder.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n\r\n", safeFilename))
 
 			// Encode attachment in base64
 			encoded := base64.StdEncoding.EncodeToString(att.Content)
@@ -208,6 +286,14 @@ func (s *SMTPSender) sendWithTLS(ctx context.Context, addr string, recipients []
 		InsecureSkipVerify: false,
 	}
 
+	// The MAIL FROM address is administrator-controlled config but we still
+	// validate it once per send so a misconfigured value cannot inject SMTP
+	// commands at the protocol level.
+	fromEmail, err := sanitizeAddress(s.cfg.FromEmail)
+	if err != nil {
+		return fmt.Errorf("invalid from email: %w", err)
+	}
+
 	// Connect with timeout
 	dialer := &net.Dialer{
 		Timeout: s.timeout,
@@ -240,11 +326,11 @@ func (s *SMTPSender) sendWithTLS(ctx context.Context, addr string, recipients []
 	}
 
 	// Set sender
-	if err := client.Mail(s.cfg.FromEmail); err != nil {
+	if err := client.Mail(fromEmail); err != nil {
 		return fmt.Errorf("set sender: %w", err)
 	}
 
-	// Set recipients
+	// Set recipients (already sanitized by Send before this is reached)
 	for _, recipient := range recipients {
 		if err := client.Rcpt(recipient); err != nil {
 			return fmt.Errorf("set recipient %s: %w", recipient, err)
@@ -272,6 +358,13 @@ func (s *SMTPSender) sendWithTLS(ctx context.Context, addr string, recipients []
 
 // sendPlain sends email using STARTTLS with timeout support
 func (s *SMTPSender) sendPlain(ctx context.Context, addr string, recipients []string, body string) error {
+	// Validate from address before opening the connection so a bad config
+	// surfaces as an immediate error.
+	fromEmail, err := sanitizeAddress(s.cfg.FromEmail)
+	if err != nil {
+		return fmt.Errorf("invalid from email: %w", err)
+	}
+
 	// Connect with timeout
 	dialer := &net.Dialer{
 		Timeout: s.timeout,
@@ -315,11 +408,11 @@ func (s *SMTPSender) sendPlain(ctx context.Context, addr string, recipients []st
 	}
 
 	// Set sender
-	if err := client.Mail(s.cfg.FromEmail); err != nil {
+	if err := client.Mail(fromEmail); err != nil {
 		return fmt.Errorf("set sender: %w", err)
 	}
 
-	// Set recipients
+	// Set recipients (already sanitized by Send before this is reached)
 	for _, recipient := range recipients {
 		if err := client.Rcpt(recipient); err != nil {
 			return fmt.Errorf("set recipient %s: %w", recipient, err)

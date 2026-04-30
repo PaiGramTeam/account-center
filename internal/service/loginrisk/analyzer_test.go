@@ -142,6 +142,8 @@ func TestAnalyzeLoginRapidNewIPElevatesToHigh(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, SuspicionHigh, got.Level)
 	require.True(t, got.IsNewIP)
+	require.False(t, got.IsNewDevice)
+	require.False(t, got.IsNewLocation)
 	rapidReasonFound := false
 	for _, r := range got.Reasons {
 		if r == "rapid login from new location/device" {
@@ -196,4 +198,35 @@ func TestGetRecentSuspiciousLoginsRespectsDaysAndOrder(t *testing.T) {
 	require.Len(t, logs, 2)
 	require.Equal(t, "1.1.1.1", logs[0].IP) // most recent first
 	require.Equal(t, "2.2.2.2", logs[1].IP)
+}
+
+func TestAnalyzeLoginIgnoresOtherUsersHistory(t *testing.T) {
+	db := setupAnalyzerTestDB(t)
+	a := NewAnalyzer(db)
+
+	// User 2 has rich history with various devices, IPs, locations.
+	require.NoError(t, db.Create(&model.UserDevice{UserID: 2, DeviceID: "u2-dev", DeviceName: "U2-Laptop", LastActiveAt: time.Now()}).Error)
+	insertLoginLog(t, db, 2, "U2-Laptop", "5.5.5.5", "Paris, France", time.Now().Add(-time.Hour))
+
+	// User 1 logs in for the first time. Must be treated as a first login,
+	// not as a "known IP/device/location" because of user 2's data.
+	got, err := a.AnalyzeLogin(1, "u1-dev", "5.5.5.5", "Paris, France")
+	require.NoError(t, err)
+	require.Equal(t, SuspicionNone, got.Level)
+	require.Equal(t, []string{"first login"}, got.Reasons)
+}
+
+func TestGetRecentSuspiciousLoginsFiltersByUserID(t *testing.T) {
+	db := setupAnalyzerTestDB(t)
+	a := NewAnalyzer(db)
+
+	now := time.Now()
+	insertLoginLog(t, db, 1, "Laptop", "1.1.1.1", "A", now.Add(-1*time.Hour))
+	insertLoginLog(t, db, 2, "Laptop", "2.2.2.2", "A", now.Add(-1*time.Hour))
+	insertLoginLog(t, db, 2, "Laptop", "3.3.3.3", "A", now.Add(-2*time.Hour))
+
+	logs, err := a.GetRecentSuspiciousLogins(1, 7)
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+	require.Equal(t, "1.1.1.1", logs[0].IP)
 }

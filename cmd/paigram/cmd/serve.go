@@ -24,13 +24,15 @@ import (
 	"paigram/internal/crypto"
 	"paigram/internal/database"
 	"paigram/internal/email"
-	"paigram/internal/geolocation"
 	"paigram/internal/grpc/server"
 	authhandler "paigram/internal/handler/auth"
 	"paigram/internal/logging"
 	"paigram/internal/middleware"
 	"paigram/internal/observability"
 	"paigram/internal/router"
+	"paigram/internal/service"
+	"paigram/internal/service/geolocation"
+	"paigram/internal/service/loginrisk"
 	"paigram/internal/sessioncache"
 	"paigram/internal/worker"
 )
@@ -241,9 +243,17 @@ func runServer() {
 
 	// Start Asynq worker for background tasks (OAuth token refresh, etc.)
 	if cfg.Redis.Enabled {
-		// Create auth handler for worker
-		geoService := geolocation.NewService()
-		authHandler := authhandler.NewHandler(db, cfg.Auth, cfg.Frontend, emailService, cfg.Security, sessionStore, geoService)
+		// router.New seeds the subgroups on the HTTP startup path, but
+		// the worker can boot before HTTP routing on cold start. Re-init
+		// is idempotent: NewServiceGroup creates a fresh in-memory cache
+		// and the V19 startup warning is sync.Once-guarded.
+		service.ServiceGroupApp.GeolocationServiceGroup = *geolocation.NewServiceGroup()
+		service.ServiceGroupApp.LoginRiskServiceGroup = *loginrisk.NewServiceGroup(db)
+		authHandler := authhandler.NewHandler(
+			db, cfg.Auth, cfg.Frontend, emailService, cfg.Security, sessionStore,
+			&service.ServiceGroupApp.GeolocationServiceGroup,
+			&service.ServiceGroupApp.LoginRiskServiceGroup,
+		)
 
 		asynqServer, asynqScheduler, err = worker.StartAsynqServer(cfg, redisClient, db, authHandler)
 		if err != nil {

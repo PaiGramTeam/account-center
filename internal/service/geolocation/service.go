@@ -40,12 +40,12 @@ type Service struct {
 	cache      map[string]*Location
 	cacheMutex sync.RWMutex
 	httpClient *http.Client
+	apiBaseURL string
 }
 
 // ipAPIWarningOnce guarantees the V19 plain-HTTP warning is logged
 // once per process, no matter how many times NewService is invoked
-// (the constructor runs in serve.go for the worker handler and again
-// in router.New for HTTP handlers).
+// (the constructor may be invoked from multiple call sites at startup).
 var ipAPIWarningOnce sync.Once
 
 // NewService creates a new geolocation service.
@@ -56,8 +56,7 @@ var ipAPIWarningOnce sync.Once
 // originating from a trusted location. For this pre-production cut we
 // keep ip-api.com (option c from the V19 review) and emit a one-shot
 // startup warning so operators can plan a provider migration. Replace
-// the upstream URL in fetchFromAPI with an HTTPS-supported provider
-// (ipinfo.io, ipapi.co, paid pro.ip-api.com) when wiring up
+// the upstream URL via SetAPIBaseURL/SetHTTPClient when wiring up
 // configurable providers.
 func NewService() *Service {
 	ipAPIWarningOnce.Do(func() {
@@ -70,18 +69,36 @@ func NewService() *Service {
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		apiBaseURL: "http://ip-api.com",
+	}
+}
+
+// SetHTTPClient swaps the underlying HTTP client. Intended for tests
+// that point fetchFromAPI at a httptest server. Not safe to call
+// concurrently with Lookup; call once during construction/startup.
+func (s *Service) SetHTTPClient(c *http.Client) {
+	if c != nil {
+		s.httpClient = c
+	}
+}
+
+// SetAPIBaseURL overrides the upstream base URL. Intended for tests
+// and future configurable provider support. Must NOT include a path
+// or trailing slash. Not safe to call concurrently with Lookup; call
+// once during construction/startup.
+func (s *Service) SetAPIBaseURL(base string) {
+	if base != "" {
+		s.apiBaseURL = base
 	}
 }
 
 // Lookup performs IP geolocation lookup with caching
 func (s *Service) Lookup(ip string) (*Location, error) {
-	// Check if it's a valid IP
 	parsedIP := net.ParseIP(ip)
 	if parsedIP == nil {
 		return nil, fmt.Errorf("invalid IP address: %s", ip)
 	}
 
-	// Check for local/private IPs
 	if isPrivateIP(parsedIP) {
 		return &Location{
 			City:    "Local",
@@ -89,7 +106,6 @@ func (s *Service) Lookup(ip string) (*Location, error) {
 		}, nil
 	}
 
-	// Check cache first
 	s.cacheMutex.RLock()
 	if loc, exists := s.cache[ip]; exists {
 		s.cacheMutex.RUnlock()
@@ -97,13 +113,11 @@ func (s *Service) Lookup(ip string) (*Location, error) {
 	}
 	s.cacheMutex.RUnlock()
 
-	// Fetch from API
 	loc, err := s.fetchFromAPI(ip)
 	if err != nil {
 		return nil, err
 	}
 
-	// Cache the result
 	s.cacheMutex.Lock()
 	s.cache[ip] = loc
 	s.cacheMutex.Unlock()
@@ -123,8 +137,7 @@ func (s *Service) fetchFromAPI(ip string) (*Location, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Use ip-api.com free tier (no API key required, 45 req/min limit)
-	url := fmt.Sprintf("http://ip-api.com/json/%s?fields=status,message,country,countryCode,region,regionName,city,timezone,lat,lon,isp", ip)
+	url := fmt.Sprintf("%s/json/%s?fields=status,message,country,countryCode,region,regionName,city,timezone,lat,lon,isp", s.apiBaseURL, ip)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
@@ -182,7 +195,6 @@ func isPrivateIP(ip net.IP) bool {
 		return true
 	}
 
-	// Check for private IP ranges
 	privateRanges := []string{
 		"10.0.0.0/8",
 		"172.16.0.0/12",

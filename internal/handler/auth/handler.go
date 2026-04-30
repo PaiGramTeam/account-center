@@ -8,23 +8,23 @@ import (
 
 	"paigram/internal/config"
 	"paigram/internal/email"
-	"paigram/internal/geolocation"
 	"paigram/internal/middleware"
-	"paigram/internal/security"
+	"paigram/internal/service/geolocation"
+	"paigram/internal/service/loginrisk"
 	"paigram/internal/sessioncache"
 )
 
 // Handler coordinates authentication-related endpoints (email + OAuth).
 type Handler struct {
-	db               *gorm.DB
-	cfg              config.AuthConfig
-	frontendCfg      config.FrontendConfig
-	emailService     *email.Service
-	securityCfg      config.SecurityConfig
-	sessionCache     sessioncache.Store
-	geoService       *geolocation.Service
-	securityAnalyzer *security.Analyzer
-	captchaVerifier  captchaVerifier
+	db                *gorm.DB
+	cfg               config.AuthConfig
+	frontendCfg       config.FrontendConfig
+	emailService      *email.Service
+	securityCfg       config.SecurityConfig
+	sessionCache      sessioncache.Store
+	geoService        *geolocation.Service
+	loginRiskAnalyzer *loginrisk.Analyzer
+	captchaVerifier   captchaVerifier
 	// SECURITY: In-memory fallback for 2FA rate limiting when Redis is unavailable
 	// WARNING: Not suitable for multi-instance deployments (no cross-instance sync)
 	memory2FALimiter *memory2FARateLimiter
@@ -42,25 +42,28 @@ type Handler struct {
 }
 
 // NewHandler constructs an auth Handler.
-func NewHandler(db *gorm.DB, cfg config.AuthConfig, frontendCfg config.FrontendConfig, emailService *email.Service, securityCfg config.SecurityConfig, cache sessioncache.Store, geoService *geolocation.Service) *Handler {
+func NewHandler(db *gorm.DB, cfg config.AuthConfig, frontendCfg config.FrontendConfig, emailService *email.Service, securityCfg config.SecurityConfig, cache sessioncache.Store, geoGroup *geolocation.ServiceGroup, loginRiskGroup *loginrisk.ServiceGroup) *Handler {
 	if cache == nil {
 		cache = sessioncache.NewNoopStore()
 	}
-	if geoService == nil {
-		geoService = geolocation.NewService()
+	if geoGroup == nil {
+		geoGroup = geolocation.NewServiceGroup()
+	}
+	if loginRiskGroup == nil {
+		loginRiskGroup = loginrisk.NewServiceGroup(db)
 	}
 	return &Handler{
-		db:               db,
-		cfg:              cfg,
-		frontendCfg:      frontendCfg,
-		emailService:     emailService,
-		securityCfg:      securityCfg,
-		sessionCache:     cache,
-		geoService:       geoService,
-		securityAnalyzer: security.NewAnalyzer(db),
-		captchaVerifier:  newCaptchaVerifier(cfg.Captcha.Turnstile),
-		memory2FALimiter: newMemory2FARateLimiter(), // Always create in-memory fallback
-		oidcVerifiers:    newOIDCVerifierCache(),
+		db:                db,
+		cfg:               cfg,
+		frontendCfg:       frontendCfg,
+		emailService:      emailService,
+		securityCfg:       securityCfg,
+		sessionCache:      cache,
+		geoService:        &geoGroup.Service,
+		loginRiskAnalyzer: &loginRiskGroup.Analyzer,
+		captchaVerifier:   newCaptchaVerifier(cfg.Captcha.Turnstile),
+		memory2FALimiter:  newMemory2FARateLimiter(), // Always create in-memory fallback
+		oidcVerifiers:     newOIDCVerifierCache(),
 	}
 }
 

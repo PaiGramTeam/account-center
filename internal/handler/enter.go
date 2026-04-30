@@ -20,6 +20,8 @@ import (
 	serviceAudit "paigram/internal/service/audit"
 	serviceAuthority "paigram/internal/service/authority"
 	serviceCasbin "paigram/internal/service/casbin"
+	serviceGeolocation "paigram/internal/service/geolocation"
+	serviceLoginRisk "paigram/internal/service/loginrisk"
 	serviceMe "paigram/internal/service/me"
 	servicePlatform "paigram/internal/service/platform"
 	servicePlatformBinding "paigram/internal/service/platformbinding"
@@ -68,6 +70,8 @@ func InitializeApiGroups(db *gorm.DB, cache sessioncache.Store, authCfg config.A
 	}
 	service.ServiceGroupApp.PlatformServiceGroup.PlatformService.SetGenericSummaryProxy(servicePlatform.NewGRPCGenericSummaryProxy(nil))
 	service.ServiceGroupApp.PlatformBindingGroup = *servicePlatformBinding.NewServiceGroup(db, &service.ServiceGroupApp.PlatformServiceGroup.PlatformService)
+	service.ServiceGroupApp.LoginRiskServiceGroup = *serviceLoginRisk.NewServiceGroup(db)
+	service.ServiceGroupApp.GeolocationServiceGroup = *serviceGeolocation.NewServiceGroup()
 
 	// Initialize API handlers (passing db temporarily for non-refactored methods)
 	ApiGroupApp.CasbinApiGroup = *handlerCasbin.NewApiGroup(&service.ServiceGroupApp.CasbinServiceGroup)

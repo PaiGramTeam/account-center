@@ -10,12 +10,12 @@ import (
 
 	"paigram/internal/config"
 	"paigram/internal/email"
-	"paigram/internal/geolocation"
 	"paigram/internal/handler"
 	authhandler "paigram/internal/handler/auth"
 	"paigram/internal/middleware"
 	"paigram/internal/observability"
 	"paigram/internal/response"
+	"paigram/internal/service"
 	"paigram/internal/sessioncache"
 )
 
@@ -100,14 +100,15 @@ func New(cfg *config.Config, cache sessioncache.Store, db *gorm.DB, rateLimitSto
 	api := engine.Group("/api")
 	v1 := api.Group("/v1")
 
-	// Initialize geolocation service
-	geoService := geolocation.NewService()
-
-	// Initialize handler groups with dependencies
+	// Initialize handler groups with dependencies (also seeds loginrisk + geolocation subgroups).
 	if err := handler.InitializeApiGroups(db, cache, authCfg, cfg.Security); err != nil {
 		return nil, fmt.Errorf("initialize api groups: %w", err)
 	}
-	handler.ApiGroupApp.AuthApiGroup = *authhandler.NewApiGroup(db, authCfg, cfg.Frontend, emailService, cfg.Security, cache, geoService)
+	handler.ApiGroupApp.AuthApiGroup = *authhandler.NewApiGroup(
+		db, authCfg, cfg.Frontend, emailService, cfg.Security, cache,
+		&service.ServiceGroupApp.GeolocationServiceGroup,
+		&service.ServiceGroupApp.LoginRiskServiceGroup,
+	)
 
 	// Public routes - no authentication required
 	authHandler := &handler.ApiGroupApp.AuthApiGroup.Handler

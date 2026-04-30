@@ -15,7 +15,7 @@ import (
 
 	"paigram/internal/email"
 	"paigram/internal/model"
-	"paigram/internal/security"
+	"paigram/internal/service/loginrisk"
 	"paigram/internal/sessioncache"
 	piiutil "paigram/internal/utils/pii"
 )
@@ -129,8 +129,8 @@ func (h *Handler) issueSession(tx *gorm.DB, userID uint64, clientIP, userAgent s
 	}
 
 	// Perform suspicious login detection
-	if h.securityCfg.SuspiciousLoginDetection && h.securityAnalyzer != nil {
-		analysis, err := h.securityAnalyzer.AnalyzeLogin(userID, deviceID, clientIP, location)
+	if h.securityCfg.SuspiciousLoginDetection && h.loginRiskAnalyzer != nil {
+		analysis, err := h.loginRiskAnalyzer.AnalyzeLogin(userID, deviceID, clientIP, location)
 		if err != nil {
 			log.Printf("failed to analyze login: %v", err)
 		} else if analysis.IsSuspicious() {
@@ -196,7 +196,7 @@ func (h *Handler) revokeSession(tx *gorm.DB, session *model.UserSession, reason 
 }
 
 // sendSuspiciousLoginAlert sends an email notification for suspicious login activity
-func (h *Handler) sendSuspiciousLoginAlert(userID uint64, ip, deviceName, deviceType, location string, analysis *security.LoginAnalysis) {
+func (h *Handler) sendSuspiciousLoginAlert(userID uint64, ip, deviceName, deviceType, location string, analysis *loginrisk.LoginAnalysis) {
 	// Get user's primary email
 	var userEmail model.UserEmail
 	if err := h.db.Where("user_id = ? AND is_primary = ?", userID, true).First(&userEmail).Error; err != nil {

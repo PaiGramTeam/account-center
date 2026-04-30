@@ -60,3 +60,15 @@ func TestRedactedPasswordTagReturnsLiterals(t *testing.T) {
 		}
 	}
 }
+
+// TestPasswordTagReturnsLiterals asserts the bool-only helper that is
+// preferred at SummaryLines call sites — it cannot leak a password since
+// it never accepts the value as an argument.
+func TestPasswordTagReturnsLiterals(t *testing.T) {
+	if got := passwordTag(false); got != "<empty>" {
+		t.Errorf("passwordTag(false) = %q, want %q", got, "<empty>")
+	}
+	if got := passwordTag(true); got != "<redacted>" {
+		t.Errorf("passwordTag(true) = %q, want %q", got, "<redacted>")
+	}
+}

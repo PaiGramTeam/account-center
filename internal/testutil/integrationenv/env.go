@@ -142,15 +142,15 @@ func (e Env) MissingRequired() []string {
 }
 
 func (e Env) SummaryLines(sampleName string, requireRedis bool) []string {
-	// Compute redacted password indicators in dedicated helpers so the raw
-	// password fields never reach the Sprintf call sites below. CodeQL's
-	// clear-text-logging analyser tracks data flow from the password
-	// fields into print/log functions; routing through a helper that
-	// returns a constant tag (`<empty>` or `<redacted>`) terminates that
-	// flow at the type/function boundary and prevents accidental leakage
-	// even if a future refactor inlines the format strings.
-	mysqlPasswordTag := redactedPasswordTag(e.MySQLPassword)
-	redisPasswordTag := redactedPasswordTag(e.RedisPassword)
+	// Compute the "is configured" boolean for each secret upstream of the
+	// helper so the raw password value never appears as a function
+	// argument flowing toward a print sink. Static analyzers (e.g.
+	// CodeQL's go/clear-text-logging) that follow data flow from the
+	// password field through arguments cannot find any path from
+	// MySQLPassword/RedisPassword into Sprintf because the only thing
+	// reaching the helper here is a bool.
+	mysqlPasswordTag := passwordTag(strings.TrimSpace(e.MySQLPassword) != "")
+	redisPasswordTag := passwordTag(strings.TrimSpace(e.RedisPassword) != "")
 
 	lines := []string{
 		"repo_root=" + e.RepoRoot,
@@ -304,12 +304,25 @@ func secretValue(value string) string {
 // value itself. This is used by SummaryLines so static analyzers (e.g.
 // CodeQL's go/clear-text-logging) can terminate data-flow tracking at this
 // function and confirm no secret bytes can reach a print/log sink.
+//
+// Deprecated: prefer passwordTag(present bool) which never accepts the
+// password value as an argument.
 func redactedPasswordTag(password string) string {
+	return passwordTag(strings.TrimSpace(password) != "")
+}
+
+// passwordTag returns "<redacted>" if a password is configured and
+// "<empty>" otherwise. It deliberately accepts only a boolean so that the
+// raw password value never enters this call chain — this prevents both
+// accidental leakage and false-positive flagging by static analyzers
+// (e.g. CodeQL go/clear-text-logging, CWE-312) that follow string-typed
+// arguments.
+func passwordTag(present bool) string {
 	const (
 		tagEmpty    = "<empty>"
 		tagRedacted = "<redacted>"
 	)
-	if strings.TrimSpace(password) == "" {
+	if !present {
 		return tagEmpty
 	}
 	return tagRedacted

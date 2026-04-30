@@ -74,7 +74,8 @@ func NewService() *Service {
 }
 
 // SetHTTPClient swaps the underlying HTTP client. Intended for tests
-// that point fetchFromAPI at a httptest server.
+// that point fetchFromAPI at a httptest server. Not safe to call
+// concurrently with Lookup; call once during construction/startup.
 func (s *Service) SetHTTPClient(c *http.Client) {
 	if c != nil {
 		s.httpClient = c
@@ -82,7 +83,9 @@ func (s *Service) SetHTTPClient(c *http.Client) {
 }
 
 // SetAPIBaseURL overrides the upstream base URL. Intended for tests
-// and future configurable provider support. Must NOT include a path.
+// and future configurable provider support. Must NOT include a path
+// or trailing slash. Not safe to call concurrently with Lookup; call
+// once during construction/startup.
 func (s *Service) SetAPIBaseURL(base string) {
 	if base != "" {
 		s.apiBaseURL = base

@@ -74,3 +74,16 @@ func TestPasswordTagReturnsLiterals(t *testing.T) {
 		t.Errorf("passwordTag(true) = %q, want %q", got, "<redacted>")
 	}
 }
+
+// TestCredentialTagReturnsLiterals is the rename-respecting equivalent of
+// TestPasswordTagReturnsLiterals. The renamed helper is what SummaryLines
+// now calls; the test pins the same invariant that only literal constants
+// are ever returned.
+func TestCredentialTagReturnsLiterals(t *testing.T) {
+	if got := credentialTag(false); got != "<empty>" {
+		t.Errorf("credentialTag(false) = %q, want %q", got, "<empty>")
+	}
+	if got := credentialTag(true); got != "<redacted>" {
+		t.Errorf("credentialTag(true) = %q, want %q", got, "<redacted>")
+	}
+}

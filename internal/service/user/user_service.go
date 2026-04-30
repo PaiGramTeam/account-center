@@ -31,6 +31,38 @@ type ListUsersResult struct {
 	Total int64
 }
 
+// allowedListUsersOrderClauses maps validated (sort_by, order) pairs to
+// constant SQL fragments. Keeping the values as compile-time constants is
+// what guarantees that user input never participates in the rendered ORDER
+// BY clause and is what tools like CodeQL look for to clear SQL-injection
+// taint.
+var allowedListUsersOrderClauses = map[string]string{
+	"id|asc":             "id ASC",
+	"id|desc":            "id DESC",
+	"created_at|asc":     "created_at ASC",
+	"created_at|desc":    "created_at DESC",
+	"last_login_at|asc":  "last_login_at ASC",
+	"last_login_at|desc": "last_login_at DESC",
+}
+
+// resolveListUsersOrderClause picks the safe ORDER BY fragment for the given
+// user-provided sort field and direction. Unknown or empty values fall back
+// to the default `created_at DESC`.
+func resolveListUsersOrderClause(sortBy, order string) string {
+	sortKey := strings.TrimSpace(sortBy)
+	if sortKey == "" {
+		sortKey = "created_at"
+	}
+	orderKey := strings.ToLower(strings.TrimSpace(order))
+	if orderKey != "asc" && orderKey != "desc" {
+		orderKey = "desc"
+	}
+	if clause, ok := allowedListUsersOrderClauses[sortKey+"|"+orderKey]; ok {
+		return clause
+	}
+	return "created_at DESC"
+}
+
 // ListUsers retrieves users with filtering and pagination.
 func (s *UserService) ListUsers(params ListUsersParams) (*ListUsersResult, error) {
 	// Validate pagination
@@ -44,20 +76,7 @@ func (s *UserService) ListUsers(params ListUsersParams) (*ListUsersResult, error
 		params.PageSize = 100
 	}
 
-	// Validate sort field
-	allowedSortFields := map[string]bool{
-		"id":            true,
-		"created_at":    true,
-		"last_login_at": true,
-	}
-	if !allowedSortFields[params.SortBy] {
-		params.SortBy = "created_at"
-	}
-
-	// Validate order
-	if params.Order != "asc" && params.Order != "desc" {
-		params.Order = "desc"
-	}
+	orderClause := resolveListUsersOrderClause(params.SortBy, params.Order)
 
 	// Build query
 	query := s.db.Model(&model.User{})
@@ -82,7 +101,6 @@ func (s *UserService) ListUsers(params ListUsersParams) (*ListUsersResult, error
 
 	// Apply pagination and sorting
 	offset := (params.Page - 1) * params.PageSize
-	orderClause := fmt.Sprintf("%s %s", params.SortBy, params.Order)
 
 	var users []model.User
 	if err := query.Preload("Profile").

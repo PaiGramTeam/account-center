@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -71,4 +72,30 @@ func TestRecordStoresCanonicalAuditMetadata(t *testing.T) {
 	require.Contains(t, metadata, "owner")
 	require.Equal(t, "req-audit-1", metadata["request_id"])
 	require.Equal(t, "upstream_unavailable", metadata["reason"])
+}
+
+// TestNullUint64ClampsAboveMaxInt64 guards the CWE-197 mitigation: when a
+// uint64 exceeds math.MaxInt64 we must not silently wrap to a negative
+// int64. We clamp to MaxInt64 instead so audit rows never hold a corrupted
+// numeric value.
+func TestNullUint64ClampsAboveMaxInt64(t *testing.T) {
+	cases := []struct {
+		name string
+		in   uint64
+		want sql.NullInt64
+	}{
+		{"zero", 0, sql.NullInt64{Int64: 0, Valid: true}},
+		{"small", 42, sql.NullInt64{Int64: 42, Valid: true}},
+		{"max int64 boundary", math.MaxInt64, sql.NullInt64{Int64: math.MaxInt64, Valid: true}},
+		{"above max int64 clamps", math.MaxInt64 + 1, sql.NullInt64{Int64: math.MaxInt64, Valid: true}},
+		{"max uint64 clamps", math.MaxUint64, sql.NullInt64{Int64: math.MaxInt64, Valid: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := nullUint64(tc.in)
+			require.Equal(t, tc.want, got)
+			require.GreaterOrEqual(t, got.Int64, int64(0),
+				"nullUint64 must never produce a negative int64 (CWE-197)")
+		})
+	}
 }
